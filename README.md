@@ -1,2 +1,2 @@
-# InternetObject-Go
+# InternetObject-go
 Official Internet Object parser in Golang
