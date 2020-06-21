@@ -22,6 +22,13 @@ func NewToken(
 	row int, col int) *Token {
 
 	t := new(Token)
+	t.Text = text
+	t.val = val
+	t.Type = tokenType
+	t.Start = start
+	t.End = end
+	t.Row = row
+	t.Col = col
 
 	return t
 
