@@ -22,3 +22,6 @@ var /* const */ ReRawString = regexp.MustCompile(`^'((?:''|[^'])*)'$`)
 
 // ReNumber ensures that the spefied string is an IO number
 var /* const */ ReNumber = regexp.MustCompile(`^([-+]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$`)
+
+// ReCheckFloat checks the 
+var /* const */ ReCheckFloat = regexp.MustCompile(`[\.eE]`)
