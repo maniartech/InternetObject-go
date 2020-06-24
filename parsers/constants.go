@@ -21,6 +21,9 @@ const CloseSquare = ']'
 // Tilde represents the tilde ~ character
 const Tilde = '~'
 
+// Hyphen represents the - char
+const Hyphen = '-'
+
 // Datasep represents the --- char sequence
 const Datasep = "---"
 
@@ -44,5 +47,17 @@ const Separators = "{:}[,]"
 // TypeSeparator represents the separator type
 const TypeSeparator = "sep"
 
+// TypeDatasep represents the dataseparator type
+const TypeDatasep = "datasep"
+
 // TypeString represents the separator type
 const TypeString = "string"
+
+// TypeNumber represents the number type
+const TypeNumber = "number"
+
+// TypeBool represents the bool type
+const TypeBool = "bool"
+
+// TypeNull represents the null type
+const TypeNull = "null"
