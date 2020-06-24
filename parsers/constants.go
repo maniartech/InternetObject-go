@@ -39,6 +39,12 @@ const CarrigeReturn = '\r'
 // Hash represent the hash # character
 const Hash = '#'
 
+// DoubleQuote represent the DoubleQuote " character
+const DoubleQuote = '"'
+
+// Quote represent the Quote ' character
+const Quote = '\''
+
 // Separators represents string of separators
 const Separators = "{:}[,]"
 
