@@ -5,7 +5,7 @@ package parsers
  */
 type Token struct {
 	Text  string
-	val   interface{}
+	Val   interface{}
 	Type  string
 	Start int
 	End   int
@@ -23,7 +23,7 @@ func NewToken(
 
 	t := new(Token)
 	t.Text = text
-	t.val = val
+	t.Val = val
 	t.Type = tokenType
 	t.Start = start
 	t.End = end
