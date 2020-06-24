@@ -1,7 +1,7 @@
 package parsers
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -62,13 +62,23 @@ func (l *lexer) Read() *Token {
 
 	var token *Token = nil
 
+	// Validators
+	datasep := false
+	if l.ch == Hyphen {
+		datasep = isDatasep(l)
+	}
+
+	// Scanners
 	// Is separator
 	if isSeparator(l.ch) {
 		token = getToken(l, TypeSeparator, l.index, l.index)
 		l.advance(1)
-
+	} else if datasep {
+		token = getToken(l, TypeDatasep, l.index, l.index+2)
+		l.advance(3)
 	} else {
 		token = l.scan(TypeString, sepScanner, false)
+		makeSenseIt(token)
 	}
 	if token != nil {
 		l.tokens = append(l.tokens, token)
@@ -83,7 +93,6 @@ func (l *lexer) advance(times int) bool {
 		l.index++
 		l.col++
 		l.ch = l.text[l.index]
-		fmt.Printf(">>> %s %d\n", string(l.ch), l.col)
 
 		if l.ch == NewLine {
 			l.col = 1
@@ -142,8 +151,6 @@ func (l *lexer) scan(tokenType string, scanner scanner, confined bool) *Token {
 		return nil
 	}
 
-	print("---", token, l.col)
-
 	return NewToken(token, token, tokenType, start, start+tokenLen-1, l.row, l.col)
 }
 
@@ -163,7 +170,47 @@ func sepScanner(l *lexer, start, end int) bool {
 	if l.ch == Hash {
 		return false
 	}
+
+	if l.ch == Hyphen {
+		return !isDatasep(l)
+	}
 	return true
+}
+
+func makeSenseIt(token *Token) {
+	text := token.Text
+	if text == "T" || text == "true" {
+		token.Val = true
+		token.Type = TypeBool
+	}
+
+	if text == "F" || text == "false" {
+		token.Val = false
+		token.Type = TypeBool
+	}
+
+	if text == "N" || text == "null" {
+		token.Val = nil
+		token.Type = TypeNull
+	}
+
+	if ReNumber.MatchString(text) {
+		val, e := strconv.ParseFloat(text, 64)
+		if e == nil {
+			token.Val = val
+			token.Type = TypeNumber
+		}
+	}
+}
+
+func isDatasep(l *lexer) bool {
+	start := l.index
+	end := l.index + 3
+
+	if l.length < end {
+		return false
+	}
+	return string(l.text[start:end]) == Datasep
 }
 
 func isSeparator(r rune) bool {
