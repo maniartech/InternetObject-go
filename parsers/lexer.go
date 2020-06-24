@@ -1,11 +1,12 @@
 package parsers
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
 
-type scanner func(l *lexer, start, end int) bool
+type scanner func(l *lexer, start, end int) (bool, error)
 
 /**
  * The lexer represents a class that lexical operations.
@@ -45,22 +46,29 @@ func NewLexer(text string) *lexer {
 /**
  * ReadAll reads all the tokens.
  */
-func (l *lexer) ReadAll() {
+func (l *lexer) ReadAll() error {
 	for l.done != true {
-		l.Read()
+		_, err := l.Read()
+
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 /**
  * Read and parse the next token.
  */
-func (l *lexer) Read() *Token {
-
-	if l.done {
-		return nil
-	}
+func (l *lexer) Read() (*Token, error) {
 
 	var token *Token = nil
+	var err error = nil
+	var advance int
+
+	if l.done {
+		return nil, err
+	}
 
 	// Validators
 	datasep := false
@@ -72,19 +80,32 @@ func (l *lexer) Read() *Token {
 	// Is separator
 	if isSeparator(l.ch) {
 		token = getToken(l, TypeSeparator, l.index, l.index)
-		l.advance(1)
+		advance = 1
+	} else if l.ch == DoubleQuote {
+		token, err = l.scan(TypeString, stringScanner, true)
+		advance = 1
 	} else if datasep {
 		token = getToken(l, TypeDatasep, l.index, l.index+2)
-		l.advance(3)
+		advance = 3
 	} else {
-		token = l.scan(TypeString, sepScanner, false)
-		makeSenseIt(token)
+		token, err = l.scan(TypeString, sepScanner, false)
+		makeSenseOfIt(token)
 	}
+
+	if err != nil {
+		return nil, nil
+	}
+
+	if advance != 0 {
+		l.advance(advance)
+	}
+
 	if token != nil {
 		l.tokens = append(l.tokens, token)
-		return token
+		return token, err
 	}
-	return nil
+
+	return nil, err
 }
 
 func (l *lexer) advance(times int) bool {
@@ -114,7 +135,7 @@ func (l *lexer) advance(times int) bool {
 	return false
 }
 
-func (l *lexer) scan(tokenType string, scanner scanner, confined bool) *Token {
+func (l *lexer) scan(tokenType string, scanner scanner, confined bool) (*Token, error) {
 	start := -1
 
 	if !isWS(l.ch) {
@@ -131,13 +152,17 @@ func (l *lexer) scan(tokenType string, scanner scanner, confined bool) *Token {
 			break
 		}
 
-		if !scanner(l, start, l.index) {
+		continueScan, err := scanner(l, start, l.index)
+		if err != nil {
+			return nil, err
+		}
+		if !continueScan {
 			break
 		}
 	}
 
 	if start == -1 {
-		return nil
+		return nil, nil
 	}
 
 	end := l.index
@@ -148,10 +173,10 @@ func (l *lexer) scan(tokenType string, scanner scanner, confined bool) *Token {
 	tokenLen := len(token)
 
 	if tokenLen == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return NewToken(token, token, tokenType, start, start+tokenLen-1, l.row, l.col)
+	return NewToken(token, token, tokenType, start, start+tokenLen-1, l.row, l.col), nil
 }
 
 func getToken(l *lexer, tokenType string, start, end int) *Token {
@@ -162,22 +187,35 @@ func getToken(l *lexer, tokenType string, start, end int) *Token {
 	return token
 }
 
-func sepScanner(l *lexer, start, end int) bool {
+func sepScanner(l *lexer, start, end int) (bool, error) {
 	if isSeparator(l.ch) {
-		return false
+		return false, nil
 	}
 
 	if l.ch == Hash {
-		return false
+		return false, nil
 	}
 
 	if l.ch == Hyphen {
-		return !isDatasep(l)
+		return !isDatasep(l), nil
 	}
-	return true
+	return true, nil
 }
 
-func makeSenseIt(token *Token) {
+func stringScanner(l *lexer, start, end int) (bool, error) {
+
+	var err error = nil
+
+	if l.ch != DoubleQuote {
+		if l.index == l.length-1 {
+			err = errors.New("syntax-error")
+		}
+		return true, err
+	}
+	return ReRegularString.MatchString(string(l.text[start : l.index+1])), err
+}
+
+func makeSenseOfIt(token *Token) {
 	text := token.Text
 	if text == "T" || text == "true" {
 		token.Val = true
