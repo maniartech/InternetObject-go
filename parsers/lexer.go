@@ -78,11 +78,16 @@ func (l *lexer) Read() (*Token, error) {
 
 	// Scanners
 	// Is separator
-	if isSeparator(l.ch) {
+	if isWS(l.ch) {
+		l.scan("ws", wsScanner, false)
+	} else if isSeparator(l.ch) {
 		token = getToken(l, TypeSeparator, l.index, l.index)
 		advance = 1
 	} else if l.ch == DoubleQuote {
 		token, err = l.scan(TypeString, stringScanner, true)
+		advance = 1
+	} else if l.ch == Quote {
+		token, err = l.scan("raw-string", rawStringScanner, true)
 		advance = 1
 	} else if datasep {
 		token = getToken(l, TypeDatasep, l.index, l.index+2)
@@ -102,10 +107,9 @@ func (l *lexer) Read() (*Token, error) {
 
 	if token != nil {
 		l.tokens = append(l.tokens, token)
-		return token, err
 	}
 
-	return nil, err
+	return token, err
 }
 
 func (l *lexer) advance(times int) bool {
@@ -187,6 +191,10 @@ func getToken(l *lexer, tokenType string, start, end int) *Token {
 	return token
 }
 
+func wsScanner(l *lexer, start, end int) (bool, error) {
+	return isWS(l.ch), nil
+}
+
 func sepScanner(l *lexer, start, end int) (bool, error) {
 	if isSeparator(l.ch) {
 		return false, nil
@@ -200,6 +208,32 @@ func sepScanner(l *lexer, start, end int) (bool, error) {
 		return !isDatasep(l), nil
 	}
 	return true, nil
+}
+
+func rawStringScanner(l *lexer, start, end int) (bool, error) {
+
+	if l.ch != Quote {
+		if l.index == l.length-1 {
+			// incompelte-string
+			return false, errors.New("syntax-error")
+		}
+		return true, nil
+	}
+
+	nextCh, e := getNexCh(l)
+
+	// The current quote is a last char, stop scan.
+	if e != nil {
+		return false, nil
+	}
+
+	// The nextCh is a quote. It is escaping, cotinue scan.
+	if nextCh == Quote {
+		return true, nil
+	}
+
+	text := string(l.text[l.index : l.index+1])
+	return ReRawString.MatchString(text), nil
 }
 
 func stringScanner(l *lexer, start, end int) (bool, error) {
@@ -239,6 +273,14 @@ func makeSenseOfIt(token *Token) {
 			token.Type = TypeNumber
 		}
 	}
+}
+
+func getNexCh(l *lexer) (rune, error) {
+	// TODO: check this
+	if l.index >= l.length-1 {
+		return 0, errors.New("syntax-error")
+	}
+	return l.text[l.index+1], nil
 }
 
 func isDatasep(l *lexer) bool {
