@@ -98,7 +98,7 @@ func (l *lexer) Read() (*Token, error) {
 	}
 
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	if advance != 0 {
