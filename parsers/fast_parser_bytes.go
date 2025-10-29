@@ -604,16 +604,119 @@ func (p *FastParserBytes) parseNull() (int, error) {
 	return -1, fmt.Errorf("invalid null")
 }
 
-// skipWhitespace skips whitespace characters
+// skipWhitespace skips whitespace characters (matches TypeScript isWhitespace spec)
 func (p *FastParserBytes) skipWhitespace() {
 	for p.pos < p.length {
 		ch := p.input[p.pos]
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+
+		// Fast path: ASCII whitespace and control characters (U+0000 to U+0020)
+		if ch <= 0x20 {
 			p.pos++
+			continue
+		}
+
+		// Fast path: ASCII range (U+0021 to U+007F) - none are whitespace
+		if ch < 0x80 {
+			break
+		}
+
+		// Fast rejection: Check UTF-8 first byte ranges for potential whitespace
+		// Only these UTF-8 first bytes can be Unicode whitespace:
+		// 0xC2 (U+0080-U+00BF, includes U+00A0)
+		// 0xE1 (U+1680)
+		// 0xE2 (U+2000-U+2FFF, includes U+2000-U+200A, U+2028, U+2029, U+202F, U+205F)
+		// 0xE3 (U+3000-U+3FFF, includes U+3000)
+		// 0xEF (U+F000-U+FFFF, includes U+FEFF)
+		if ch != 0xC2 && ch != 0xE1 && ch != 0xE2 && ch != 0xE3 && ch != 0xEF {
+			// Not a potential Unicode whitespace - break immediately without decoding
+			break
+		}
+
+		// Only decode if it might be Unicode whitespace
+		r, size := p.decodeRune()
+		if size == 0 {
+			break
+		}
+
+		if p.isUnicodeWhitespace(r) {
+			p.pos += size
 		} else {
 			break
 		}
 	}
+}
+
+// decodeRune decodes a UTF-8 rune at current position
+func (p *FastParserBytes) decodeRune() (rune, int) {
+	if p.pos >= p.length {
+		return 0, 0
+	}
+
+	ch := p.input[p.pos]
+
+	// 1-byte ASCII
+	if ch < 0x80 {
+		return rune(ch), 1
+	}
+
+	// 2-byte sequence
+	if ch < 0xE0 {
+		if p.pos+1 >= p.length {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x1F) << 6) | uint32(p.input[p.pos+1]&0x3F)), 2
+	}
+
+	// 3-byte sequence
+	if ch < 0xF0 {
+		if p.pos+2 >= p.length {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x0F) << 12) |
+			(uint32(p.input[p.pos+1]&0x3F) << 6) |
+			uint32(p.input[p.pos+2]&0x3F)), 3
+	}
+
+	// 4-byte sequence
+	if p.pos+3 >= p.length {
+		return 0, 0
+	}
+	return rune((uint32(ch&0x07) << 18) |
+		(uint32(p.input[p.pos+1]&0x3F) << 12) |
+		(uint32(p.input[p.pos+2]&0x3F) << 6) |
+		uint32(p.input[p.pos+3]&0x3F)), 4
+}
+
+// isUnicodeWhitespace checks if a rune is Unicode whitespace (matches TypeScript spec)
+func (p *FastParserBytes) isUnicodeWhitespace(r rune) bool {
+	// Fast path: Extended ASCII range (U+0021 to U+00FF) - only U+00A0 is whitespace
+	if r <= 0xFF {
+		return r == 0x00A0
+	}
+
+	// Fast path: Anything above U+FEFF is never whitespace
+	if r > 0xFEFF {
+		return false
+	}
+
+	// Fast path: Unicode range U+2000-U+200A (various em/en spaces)
+	if r >= 0x2000 && r <= 0x200A {
+		return true
+	}
+
+	// Lookup table for remaining Unicode whitespace characters
+	switch r {
+	case 0x1680, // Ogham space mark
+		0x2028, // Line separator
+		0x2029, // Paragraph separator
+		0x202F, // Narrow no-break space
+		0x205F, // Medium mathematical space
+		0x3000, // Ideographic space
+		0xFEFF: // BOM/Zero width no-break space
+		return true
+	}
+
+	return false
 }
 
 // GetValue retrieves a value by index

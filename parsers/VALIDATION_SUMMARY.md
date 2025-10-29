@@ -123,7 +123,7 @@ if intVal > maxInt64Div10 || (intVal == maxInt64Div10 && digit > maxMod) {
 ## Test Results
 
 ### Comprehensive Test Suite
-**Total:** 52 validation tests  
+**Total:** 52 validation tests
 **Status:** ✅ **52/52 PASSING (100%)**
 
 ### Test Breakdown
@@ -142,7 +142,7 @@ if intVal > maxInt64Div10 || (intVal == maxInt64Div10 && digit > maxMod) {
 ## Performance Impact
 
 ### Benchmark Results
-**Parser:** FastParserBytes (with all validations enabled)  
+**Parser:** FastParserBytes (with all validations enabled)
 **Document:** Complex JSON (348 bytes, nested objects/arrays)
 
 #### Before Validations
