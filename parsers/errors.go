@@ -21,6 +21,10 @@ const (
 	ErrorInvalidDefinition     ErrorCode = "invalid-definition"
 	ErrorSchemaMissing         ErrorCode = "schema-missing"
 	ErrorDuplicateSection      ErrorCode = "duplicate-section"
+	ErrorExpectedComma         ErrorCode = "expected-comma"
+	ErrorUnexpectedEOF         ErrorCode = "unexpected-eof"
+	ErrorExpectedToken         ErrorCode = "expected-token"
+	ErrorInvalidToken          ErrorCode = "invalid-token"
 )
 
 // IOError represents a base error in Internet Object parsing.

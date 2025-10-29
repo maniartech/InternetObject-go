@@ -198,21 +198,64 @@ func NewDocumentNode(header *SectionNode, sections []*SectionNode) *DocumentNode
 // NewSectionNode creates a new section node.
 func NewSectionNode(child Node, nameToken, schemaNode *Token) *SectionNode {
 	var start, end Position
+	hasPosition := false
 
 	if nameToken != nil {
 		start = nameToken.GetStartPos()
-	} else if schemaNode != nil {
-		start = schemaNode.GetStartPos()
-	} else if child != nil {
-		start = child.GetStartPos()
+		end = nameToken.GetEndPos()
+		hasPosition = true
 	}
 
-	if child != nil {
-		end = child.GetEndPos()
-	} else if schemaNode != nil {
+	if schemaNode != nil {
+		if !hasPosition {
+			start = schemaNode.GetStartPos()
+		}
 		end = schemaNode.GetEndPos()
-	} else if nameToken != nil {
-		end = nameToken.GetEndPos()
+		hasPosition = true
+	}
+
+	// Check if child is a non-nil interface with non-nil value
+	if child != nil {
+		// Use type assertion to check if the underlying value is not nil
+		switch v := child.(type) {
+		case *ObjectNode:
+			if v != nil {
+				if !hasPosition {
+					start = child.GetStartPos()
+				}
+				end = child.GetEndPos()
+				hasPosition = true
+			}
+		case *CollectionNode:
+			if v != nil {
+				if !hasPosition {
+					start = child.GetStartPos()
+				}
+				end = child.GetEndPos()
+				hasPosition = true
+			}
+		case *ErrorNode:
+			if v != nil {
+				if !hasPosition {
+					start = child.GetStartPos()
+				}
+				end = child.GetEndPos()
+				hasPosition = true
+			}
+		default:
+			// For other node types
+			if !hasPosition {
+				start = child.GetStartPos()
+			}
+			end = child.GetEndPos()
+			hasPosition = true
+		}
+	}
+
+	// If no position information available, use default
+	if !hasPosition {
+		start = NewPosition(1, 1, 0)
+		end = NewPosition(1, 1, 0)
 	}
 
 	return &SectionNode{
