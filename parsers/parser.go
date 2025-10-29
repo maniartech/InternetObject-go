@@ -43,7 +43,8 @@ func ParseString(input string) (*DocumentNode, error) {
 // processDocument parses the entire document structure.
 // Returns a DocumentNode with optional header and sections.
 func (p *Parser) processDocument() (*DocumentNode, error) {
-	var sections []*SectionNode
+	// Pre-allocate with reasonable capacity to reduce allocations
+	sections := make([]*SectionNode, 0, 4)
 	var header *SectionNode
 	first := true
 
@@ -194,7 +195,8 @@ func (p *Parser) parseSectionContent() (Node, error) {
 
 // processCollection parses a collection (multiple objects separated by ~).
 func (p *Parser) processCollection() (*CollectionNode, error) {
-	var children []Node
+	// Pre-allocate for typical collection size
+	children := make([]Node, 0, 8)
 	var lastErr error
 
 	for {
@@ -292,7 +294,8 @@ func (p *Parser) checkForPendingTokens(token *Token, isCollectionContext bool) e
 // parseObject parses an object with explicit or implicit braces.
 // isOpenObject indicates if the object can be without curly braces.
 func (p *Parser) parseObject(isOpenObject bool) (*ObjectNode, error) {
-	var members []*MemberNode
+	// Pre-allocate for typical object size (8 members)
+	members := make([]*MemberNode, 0, 8)
 	var openBracket, closeBracket *Token
 
 	token := p.peek()
@@ -474,7 +477,8 @@ func (p *Parser) parseValue() (Node, error) {
 
 // parseArray parses an array following TypeScript implementation rules.
 func (p *Parser) parseArray() (*ArrayNode, error) {
-	var elements []Node
+	// Pre-allocate for typical array size
+	elements := make([]Node, 0, 16)
 
 	openBracket := p.peek()
 	if openBracket == nil || openBracket.Type != TokenBracketOpen {

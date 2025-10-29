@@ -1,0 +1,23 @@
+goos: windows
+goarch: amd64
+pkg: github.com/maniartech/InternetObject-go/parsers
+cpu: AMD Ryzen 7 5700G with Radeon Graphics         
+BenchmarkIO_vs_JSON_SimpleObject/InternetObject-16         	  539022	      2194 ns/op	    3040 B/op	      54 allocs/op
+BenchmarkIO_vs_JSON_SimpleObject/JSON-16                   	 1642797	       734.2 ns/op	     608 B/op	      13 allocs/op
+BenchmarkIO_vs_JSON_ComplexDocument/InternetObject-16      	   72283	     16560 ns/op	   23288 B/op	     418 allocs/op
+BenchmarkIO_vs_JSON_ComplexDocument/JSON-16                	  217982	      5639 ns/op	    3928 B/op	      89 allocs/op
+BenchmarkIO_vs_JSON_NestedStructures/InternetObject-16     	  114783	     11731 ns/op	   16208 B/op	     264 allocs/op
+BenchmarkIO_vs_JSON_NestedStructures/JSON-16               	  277008	      4086 ns/op	    2760 B/op	      66 allocs/op
+BenchmarkIO_vs_JSON_LargeArray/InternetObject-16           	   82533	     15807 ns/op	   24048 B/op	     366 allocs/op
+BenchmarkIO_vs_JSON_LargeArray/JSON-16                     	  217900	      4830 ns/op	    3272 B/op	     103 allocs/op
+BenchmarkIO_vs_JSON_Tokenizer/InternetObject_Tokenizer-16  	   91318	     13713 ns/op	   16648 B/op	     337 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/JSON_SimpleObject_Size-16         	1000000000	         0.0000004 ns/op	        47.00 bytes	       0 B/op	       0 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/IO_Native_SimpleObject_Size-16    	1000000000	         0.0000004 ns/op	        41.00 bytes	       0 B/op	       0 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/JSON_ComplexDocument_Size-16      	1000000000	         0.0000003 ns/op	       453.0 bytes	       0 B/op	       0 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/IO_Native_ComplexDocument_Size-16 	1000000000	         0.0000004 ns/op	       239.0 bytes	       0 B/op	       0 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/JSON_NestedStructures_Size-16     	1000000000	         0.0000004 ns/op	       261.0 bytes	       0 B/op	       0 allocs/op
+BenchmarkIO_vs_JSON_SizeComparison/IO_Native_NestedStructures_Size-16         	1000000000	         0.0000003 ns/op	       186.0 bytes	       0 B/op	       0 allocs/op
+BenchmarkParsing_Sequential_ComplexDocument-16                                	   27829	     36611 ns/op	   43840 B/op	     822 allocs/op
+BenchmarkParsing_Parallel_ComplexDocument-16                                  	   32626	     37016 ns/op	   43840 B/op	     822 allocs/op
+PASS
+ok  	github.com/maniartech/InternetObject-go/parsers	15.828s
