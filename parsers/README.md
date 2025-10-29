@@ -24,14 +24,28 @@ High-performance, thread-safe Internet Object parser implementation in Go. This 
 ### Performance Requirements
 - **Parsing Speed**: Process at least 100 MB/s on modern hardware
 - **Memory Efficiency**: Maximum 2x overhead of input size during parsing
-- **Zero Allocations**: Minimize allocations in hot paths using object pooling
+- **Zero Allocations**: All critical paths must achieve zero allocations
 - **Parallel Processing**: Support concurrent parsing of independent documents
+- **Benchmarking**: Comprehensive benchmarks for all critical paths with allocation tracking
 
 ### Reliability Requirements
 - **Error Recovery**: Graceful handling of malformed input
 - **Position Tracking**: Precise line/column information for all errors
 - **Validation**: Comprehensive input validation at all levels
-- **Test Coverage**: Minimum 90% code coverage
+- **Test Coverage**: Near 100% code coverage (target: 95%+)
+
+### Testing Requirements
+- **White Box Testing**: Unit tests in same file as implementation (e.g., `tokenizer.go` tests in `tokenizer_test.go` with `package parsers`)
+- **Black Box Testing**: Integration/API tests in separate package (e.g., `parsers_test` package in `*_test.go` files)
+- **Coverage Goals**:
+  - Overall: 95%+ statement coverage
+  - Critical paths: 100% coverage
+  - Error handling: 100% coverage
+  - Edge cases: Comprehensive coverage
+- **Test Organization**:
+  - Unit tests: `<filename>_test.go` with `package parsers` (white box)
+  - Integration tests: `<feature>_integration_test.go` with `package parsers_test` (black box)
+  - Benchmarks: `<filename>_bench_test.go` with allocation verification
 
 ### Thread Safety Requirements
 - **Immutable AST**: AST nodes are immutable after creation
@@ -43,7 +57,7 @@ High-performance, thread-safe Internet Object parser implementation in Go. This 
 - **Documentation**: Godoc for all exported types and functions
 - **Linting**: Pass `golangci-lint` with strict settings
 - **Formatting**: Standard `gofmt` formatting
-- **Benchmarks**: Comprehensive benchmarks for all critical paths
+- **Zero Allocations**: Critical paths must be verified with `go test -bench . -benchmem`
 
 ## Architecture
 
