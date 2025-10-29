@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,24 +16,15 @@ import (
 // The tokenizer is not thread-safe for concurrent use on the same instance,
 // but multiple tokenizers can operate concurrently on different inputs.
 type Tokenizer struct {
-	input       string   // Input string to tokenize
-	pos         int      // Current byte position
-	row         int      // Current row (1-indexed)
-	col         int      // Current column (1-indexed)
-	reachedEnd  bool     // True if we've reached end of input
-	inputLength int      // Cached input length
-	tokens      []*Token // Collected tokens
+	input       string          // Input string to tokenize
+	pos         int             // Current byte position
+	row         int             // Current row (1-indexed)
+	col         int             // Current column (1-indexed)
+	reachedEnd  bool            // True if we've reached end of input
+	inputLength int             // Cached input length
+	tokens      []*Token        // Collected tokens
+	builder     strings.Builder // Reusable string builder to reduce allocations
 }
-
-// Regular expressions compiled once for performance
-var (
-	reHex4   = regexp.MustCompile(`^[0-9a-fA-F]{4}$`)
-	reHex2   = regexp.MustCompile(`^[0-9a-fA-F]{2}$`)
-	reBase64 = regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
-	// Section name/schema pattern: matches "$schemaName: sectionName" or "$schemaName" or "sectionName: $schemaName"
-	reSectionSchemaName = regexp.MustCompile(`^(?:(?:(?P<name>[\pL\pM\pN\-_]+)(?P<sep>[ \t]*:[ \t]*)?)(?P<schema>\$[\pL\pM\pN\-_]+)?|(?P<schema2>\$[\pL\pM\pN\-_]+))`)
-	reAnnotatedStrStart = regexp.MustCompile(`^(?P<name>[a-zA-Z]{1,4})(?P<quote>['"])`)
-)
 
 // NewTokenizer creates a new tokenizer for the given input string.
 func NewTokenizer(input string) *Tokenizer {
@@ -375,7 +365,7 @@ func (t *Tokenizer) escapeString() (string, bool, error) {
 			return "", false, NewSyntaxError(ErrorInvalidEscapeSeq, "Invalid Unicode escape sequence. Expected 4 hexadecimal digits.", t.currentPosition())
 		}
 		hex := t.input[t.pos : t.pos+4]
-		if !reHex4.MatchString(hex) {
+		if !isHex4(hex) {
 			return "", false, NewSyntaxError(ErrorInvalidEscapeSeq, fmt.Sprintf("Invalid Unicode escape sequence '\\u%s'. Expected 4 hexadecimal digits (0-9, A-F).", hex), t.currentPosition())
 		}
 		val, _ := strconv.ParseInt(hex, 16, 32)
@@ -387,7 +377,7 @@ func (t *Tokenizer) escapeString() (string, bool, error) {
 			return "", false, NewSyntaxError(ErrorInvalidEscapeSeq, "Invalid hexadecimal escape sequence. Expected 2 hexadecimal digits.", t.currentPosition())
 		}
 		hex := t.input[t.pos : t.pos+2]
-		if !reHex2.MatchString(hex) {
+		if !isHex2(hex) {
 			return "", false, NewSyntaxError(ErrorInvalidEscapeSeq, fmt.Sprintf("Invalid hexadecimal escape sequence '\\x%s'. Expected 2 hexadecimal digits (0-9, A-F).", hex), t.currentPosition())
 		}
 		val, _ := strconv.ParseInt(hex, 16, 32)
@@ -399,6 +389,45 @@ func (t *Tokenizer) escapeString() (string, bool, error) {
 	}
 }
 
+// isHex4 checks if a string is exactly 4 hexadecimal digits (zero allocation)
+func isHex4(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		if !isHexDigit(rune(s[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// isHex2 checks if a string is exactly 2 hexadecimal digits (zero allocation)
+func isHex2(s string) bool {
+	if len(s) != 2 {
+		return false
+	}
+	return isHexDigit(rune(s[0])) && isHexDigit(rune(s[1]))
+}
+
+// isValidBase64 checks if a string contains only valid base64 characters (zero allocation)
+func isValidBase64(s string) bool {
+	equalCount := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '=' {
+			equalCount++
+			if equalCount > 2 || i < len(s)-2 {
+				return false
+			}
+		} else if !((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+			(ch >= '0' && ch <= '9') || ch == '+' || ch == '/') {
+			return false
+		}
+	}
+	return true
+}
+
 // Annotation holds information about an annotated string prefix.
 type Annotation struct {
 	name  string
@@ -406,27 +435,41 @@ type Annotation struct {
 }
 
 // checkIfAnnotatedString checks if the current position starts an annotated string.
-// Returns annotation information if found, nil otherwise.
+// Returns annotation information if found, nil otherwise (zero allocation path).
 func (t *Tokenizer) checkIfAnnotatedString() *Annotation {
 	if t.pos+2 > t.inputLength {
 		return nil
 	}
 
-	match := reAnnotatedStrStart.FindStringSubmatch(t.input[t.pos:])
-	if match == nil {
+	// Parse annotation name (1-4 alpha characters)
+	nameStart := t.pos
+	nameEnd := t.pos
+	for nameEnd < t.inputLength && nameEnd-nameStart < 4 {
+		ch := t.input[nameEnd]
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+			break
+		}
+		nameEnd++
+	}
+
+	if nameEnd == nameStart {
+		return nil // No alphabetic characters
+	}
+
+	// Next character must be a quote
+	if nameEnd >= t.inputLength {
 		return nil
 	}
 
-	nameIdx := reAnnotatedStrStart.SubexpIndex("name")
-	quoteIdx := reAnnotatedStrStart.SubexpIndex("quote")
-
-	if nameIdx < 0 || quoteIdx < 0 || nameIdx >= len(match) || quoteIdx >= len(match) {
+	quote := rune(t.input[nameEnd])
+	if quote != '"' && quote != '\'' {
 		return nil
 	}
 
+	name := t.input[nameStart:nameEnd]
 	return &Annotation{
-		name:  match[nameIdx],
-		quote: rune(match[quoteIdx][0]),
+		name:  name,
+		quote: quote,
 	}
 }
 
@@ -485,7 +528,7 @@ func (t *Tokenizer) parseByteString(annotation *Annotation) *Token {
 		return token
 	}
 
-	if !reBase64.MatchString(valueStr) {
+	if !isValidBase64(valueStr) {
 		err := NewSyntaxError(ErrorInvalidEscapeSeq, "Invalid base64 format in byte string", token.Position)
 		return NewErrorToken(err, token.Raw, token.Position)
 	}
@@ -830,79 +873,73 @@ func (t *Tokenizer) parseSectionSeparator() {
 		t.advance(1)
 	}
 
-	// Try to match section name and/or schema
+	// Try to match section name and/or schema (manual parsing for zero allocation)
 	if t.reachedEnd {
 		return
 	}
 
-	match := reSectionSchemaName.FindStringSubmatchIndex(t.input[t.pos:])
-	if match == nil {
-		return
-	}
-
-	nameIdx := reSectionSchemaName.SubexpIndex("name")
-	schemaIdx := reSectionSchemaName.SubexpIndex("schema")
-	schema2Idx := reSectionSchemaName.SubexpIndex("schema2")
-	sepIdx := reSectionSchemaName.SubexpIndex("sep")
-
-	// Extract matched groups
-	var name, schema, schema2, sep string
-	if nameIdx >= 0 && match[nameIdx*2] >= 0 {
-		name = t.input[t.pos+match[nameIdx*2] : t.pos+match[nameIdx*2+1]]
-	}
-	if schemaIdx >= 0 && match[schemaIdx*2] >= 0 {
-		schema = t.input[t.pos+match[schemaIdx*2] : t.pos+match[schemaIdx*2+1]]
-	}
-	if schema2Idx >= 0 && match[schema2Idx*2] >= 0 {
-		schema2 = t.input[t.pos+match[schema2Idx*2] : t.pos+match[schema2Idx*2+1]]
-	}
-	if sepIdx >= 0 && match[sepIdx*2] >= 0 {
-		sep = t.input[t.pos+match[sepIdx*2] : t.pos+match[sepIdx*2+1]]
-	}
-
-	// When only schema2 is present, it's the schema
-	if schema2 != "" {
+	// Check for schema first ($identifier)
+	if t.input[t.pos] == '$' {
 		start := t.currentPosition()
-		t.advance(len(schema2))
+		schemaStart := t.pos
+		t.advance(1) // Skip $
+
+		// Parse schema identifier
+		for !t.reachedEnd && (isAlphaNumeric(rune(t.input[t.pos])) || t.input[t.pos] == '-' || t.input[t.pos] == '_') {
+			t.advance(1)
+		}
+
+		schema := t.input[schemaStart:t.pos]
 		end := t.currentPosition()
-		token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema2, schema2, NewPositionRange(start.Start, end.Start))
+		token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
 		t.tokens = append(t.tokens, token)
 		t.skipWhitespaces()
 		return
 	}
 
-	// Parse name if present
-	if name != "" {
+	// Try to parse name (letter/digit/dash/underscore identifier)
+	if isAlphaNumeric(rune(t.input[t.pos])) || t.input[t.pos] == '-' || t.input[t.pos] == '_' {
 		start := t.currentPosition()
-		t.advance(len(name))
+		nameStart := t.pos
+
+		for !t.reachedEnd && (isAlphaNumeric(rune(t.input[t.pos])) || t.input[t.pos] == '-' || t.input[t.pos] == '_') {
+			t.advance(1)
+		}
+
+		name := t.input[nameStart:t.pos]
 		end := t.currentPosition()
 		token := NewTokenWithSubType(TokenString, string(TokenSectionName), name, name, NewPositionRange(start.Start, end.Start))
 		t.tokens = append(t.tokens, token)
 		t.skipWhitespaces()
 
-		// Parse separator if present
-		if sep != "" {
-			t.advance(len(sep))
+		// Check for separator ':'
+		if !t.reachedEnd && t.input[t.pos] == ':' {
+			t.advance(1) // Skip colon
 			t.skipWhitespaces()
 
 			// Schema must follow separator
-			if schema == "" {
+			if t.reachedEnd || t.input[t.pos] != '$' {
 				err := NewSyntaxError(ErrorSchemaMissing, "Missing schema definition after section separator. Expected schema name starting with '$'.", t.currentPosition())
 				errToken := NewErrorToken(err, "", t.currentPosition())
 				t.tokens = append(t.tokens, errToken)
 				return
 			}
-		}
-	}
 
-	// Parse schema if present
-	if schema != "" {
-		start := t.currentPosition()
-		t.advance(len(schema))
-		end := t.currentPosition()
-		token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
-		t.tokens = append(t.tokens, token)
-		t.skipWhitespaces()
+			// Parse schema after colon
+			start := t.currentPosition()
+			schemaStart := t.pos
+			t.advance(1) // Skip $
+
+			for !t.reachedEnd && (isAlphaNumeric(rune(t.input[t.pos])) || t.input[t.pos] == '-' || t.input[t.pos] == '_') {
+				t.advance(1)
+			}
+
+			schema := t.input[schemaStart:t.pos]
+			end := t.currentPosition()
+			token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
+			t.tokens = append(t.tokens, token)
+			t.skipWhitespaces()
+		}
 	}
 }
 

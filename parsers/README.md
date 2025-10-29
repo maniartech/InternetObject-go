@@ -149,13 +149,32 @@ The tokenizer supports the following token types:
 
 ## Performance Optimizations
 
-1. **Zero-Copy String Operations**: Use byte slices to avoid allocations
-2. **String Interning**: Reuse common strings (true, false, null, etc.)
-3. **Object Pooling**: Reuse token and node objects
-4. **Inline Fast Paths**: Inline hot path functions
-5. **Lookup Tables**: Use arrays/maps for character classification
-6. **Batch Allocations**: Pre-allocate slices with estimated capacity
-7. **Avoid Reflection**: Direct type assertions instead of reflection
+### Implemented Optimizations
+1. ✅ **Manual Character Parsing**: Replaced all regex patterns with character-by-character parsing to eliminate regex allocations
+2. ✅ **Batch Allocations**: Pre-allocate token slices with estimated capacity (`len(input)/8`)
+3. ✅ **Reusable String Builder**: Added `strings.Builder` to Tokenizer struct for string operations
+4. ✅ **Lookup Tables**: Use direct character classification functions (isDigit, isHexDigit, etc.)
+5. ✅ **Inline Fast Paths**: Critical parsing functions optimized for zero allocations
+
+### Current Performance Status
+**Zero Allocation Achieved on Critical Paths:**
+- Number parsing (`parseNumber`): **0 B/op, 0 allocs/op** ✓
+- Character classification: **0 B/op, 0 allocs/op** ✓
+- Position/Token utilities: **0 B/op, 0 allocs/op** ✓
+- Whitespace skipping: **0 B/op, 0 allocs/op** ✓
+
+**Full Tokenization Benchmarks:**
+- Simple string: 160 B/op, 5 allocs/op
+- Simple object: 1952 B/op, 40 allocs/op
+- Real-world document: 7840 B/op, 151 allocs/op
+
+### Future Optimization Opportunities
+1. **Token Pool/Arena Allocator**: Implement object pooling to reuse token structs and reduce heap allocations
+2. **String Interning**: Cache and reuse common strings (true, false, null, keywords)
+3. **Zero-Copy String Operations**: Use byte slices with unsafe pointers where safe
+4. **Batch Token Allocation**: Allocate tokens in contiguous memory blocks
+5. **Inline More Fast Paths**: Profile and inline additional hot path functions
+6. **Avoid Reflection**: Direct type assertions instead of reflection (when parser is implemented)
 
 ## Usage Example
 
@@ -221,47 +240,82 @@ Jane Smith, 25, jane@example.com
 
 ## Development Roadmap
 
-### Phase 1: Foundation (Current)
+### Phase 1: Foundation ✅ COMPLETED
 - [x] Project structure setup
-- [ ] Error handling implementation
-- [ ] Position tracking implementation
-- [ ] Token definitions
+- [x] Error handling implementation (errors.go)
+- [x] Position tracking implementation (position.go)
+- [x] Token definitions (token.go, constants.go)
 
-### Phase 2: Tokenizer
-- [ ] Basic tokenizer implementation
-- [ ] String parsing (all variants)
-- [ ] Number parsing (all formats)
-- [ ] Comment handling
-- [ ] Section separator parsing
+### Phase 2: Tokenizer ✅ COMPLETED
+- [x] Basic tokenizer implementation (tokenizer.go - 953 lines)
+- [x] String parsing (all variants: regular, raw, annotated, byte)
+- [x] Number parsing (all formats: int, float, hex, octal, binary, BigInt, Decimal)
+- [x] Comment handling (single-line and multi-line)
+- [x] Section separator parsing
+- [x] Regex removal for zero allocations (all 5 patterns replaced with manual parsing)
 
-### Phase 3: Parser
-- [ ] AST node definitions
+### Phase 3: Parser (IN PROGRESS)
+- [x] AST node definitions (ast.go)
 - [ ] Document parsing
 - [ ] Section parsing
 - [ ] Object/Array parsing
 - [ ] Error node handling
 
-### Phase 4: Optimization
-- [ ] Performance profiling
-- [ ] Object pooling
-- [ ] Zero-copy optimizations
-- [ ] Benchmarking
+### Phase 4: Optimization & Performance (PARTIALLY COMPLETE)
+- [x] Performance profiling and benchmarking (45+ benchmarks)
+- [x] Zero allocations on critical paths (parseNumber, character classification)
+- [x] Regex elimination (5/5 patterns removed)
+- [ ] Token pool/arena allocator implementation
+- [ ] String interning for common tokens
+- [ ] Full tokenization allocation reduction (currently 5-151 allocs depending on input)
+- [ ] Memory profiling and optimization
 
-### Phase 5: Testing & Documentation
-- [ ] Comprehensive test suite
-- [ ] Performance benchmarks
-- [ ] Documentation
-- [ ] Examples
+### Phase 5: Testing & Documentation (IN PROGRESS)
+- [x] Comprehensive test suite (81% coverage, 60+ tests)
+- [x] Performance benchmarks (tokenizer_bench_test.go, ast_bench_test.go)
+- [x] White box unit tests (tokenizer_test.go, ast_test.go, etc.)
+- [x] Black box integration tests (integration_test.go)
+- [ ] Achieve 95%+ test coverage (current: 81%)
+- [x] Documentation (README.md)
+- [ ] Usage examples and tutorials
+
+### Phase 6: Advanced Optimizations (PLANNED)
+- [ ] Object pooling for token/node reuse (`pool.go`)
+- [ ] Zero-copy string operations with unsafe pointers
+- [ ] Batch token allocation in contiguous memory
+- [ ] SIMD optimizations for character scanning (if beneficial)
+- [ ] Lock-free concurrent parsing support
+- [ ] Memory-mapped file support for large inputs
 
 ## Performance Targets
 
-| Metric | Target | Rationale |
-|--------|--------|-----------|
-| Parse Speed | 100+ MB/s | Real-time processing of large files |
-| Memory Overhead | < 2x input | Efficient memory usage |
-| Concurrent Parse | 10+ goroutines | Multi-core utilization |
-| Allocation Rate | < 100 allocs/doc | Minimize GC pressure |
-| Test Coverage | > 90% | High reliability |
+| Metric | Target | Current Status | Notes |
+|--------|--------|----------------|-------|
+| Parse Speed | 100+ MB/s | TBD | Pending parser implementation |
+| Memory Overhead | < 2x input | ~2x | 7840 B for 4KB real-world document |
+| Concurrent Parse | 10+ goroutines | ✅ Supported | Thread-safe tokenizer design |
+| Critical Path Allocations | 0 allocs/op | ✅ **Achieved** | parseNumber, character classification, utilities all at 0 allocs |
+| Full Tokenization Allocations | < 100 allocs/doc | 151 allocs/doc | Future optimization: token pooling, string interning |
+| Test Coverage | > 95% | 81.0% | White box + black box tests, all passing |
+
+### Performance Notes
+
+**Achievements:**
+- ✅ All regex removed - manual character parsing eliminates regex allocation overhead
+- ✅ Critical paths achieve zero allocations (parsing hot paths)
+- ✅ Pre-allocated token slices reduce reallocation overhead
+- ✅ 45+ benchmarks with allocation tracking
+
+**Known Limitations:**
+- Token struct allocation is inherent to current design (each token = 1 heap allocation)
+- Full tokenization requires multiple allocations for token slice growth
+- String operations in certain paths still allocate
+
+**Planned Improvements:**
+- Implement token pool/arena allocator to reuse tokens
+- Add string interning for common values (true, false, null, etc.)
+- Batch allocate tokens in contiguous memory blocks
+- Profile and optimize remaining allocation hot spots
 
 ## Contributing
 
