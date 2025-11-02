@@ -104,7 +104,7 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 			}
 
 			if tt.checkFunc != nil {
-				tt.checkFunc(t, token)
+				tt.checkFunc(t, &token)
 			}
 		})
 	}

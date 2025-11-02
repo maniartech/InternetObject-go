@@ -7,13 +7,13 @@ import (
 // Parser converts a stream of tokens into an Abstract Syntax Tree (AST).
 // It implements a recursive descent parser that handles Internet Object documents.
 type Parser struct {
-	tokens       []*Token        // Tokens produced by the tokenizer
+	tokens       []Token         // Tokens produced by the tokenizer
 	current      int             // Current token index
 	sectionNames map[string]bool // Track section names to detect duplicates
 }
 
 // NewParser creates a new parser from a token stream.
-func NewParser(tokens []*Token) *Parser {
+func NewParser(tokens []Token) *Parser {
 	return &Parser{
 		tokens:       tokens,
 		current:      0,
@@ -598,9 +598,6 @@ func (p *Parser) matchNext(types []TokenType) bool {
 		return false
 	}
 	nextToken := p.tokens[p.current+1]
-	if nextToken == nil {
-		return false
-	}
 	for _, t := range types {
 		if nextToken.Type == t {
 			return true
@@ -615,9 +612,6 @@ func (p *Parser) matchPrev(types []TokenType) bool {
 		return false
 	}
 	prevToken := p.tokens[p.current-1]
-	if prevToken == nil {
-		return false
-	}
 	for _, t := range types {
 		if prevToken.Type == t {
 			return true
@@ -642,7 +636,7 @@ func (p *Parser) peek() *Token {
 	if p.current >= len(p.tokens) {
 		return nil
 	}
-	return p.tokens[p.current]
+	return &p.tokens[p.current]
 }
 
 // advance moves to the next token.

@@ -22,12 +22,17 @@ type Tokenizer struct {
 	col         int             // Current column (1-indexed)
 	reachedEnd  bool            // True if we've reached end of input
 	inputLength int             // Cached input length
-	tokens      []*Token        // Collected tokens
+	tokens      []Token         // Collected tokens (value-based for zero-alloc)
 	builder     strings.Builder // Reusable string builder to reduce allocations
 }
 
 // NewTokenizer creates a new tokenizer for the given input string.
 func NewTokenizer(input string) *Tokenizer {
+	// Better capacity estimation: avg 5-6 chars per token
+	capacity := len(input) / 5
+	if capacity < 16 {
+		capacity = 16
+	}
 	return &Tokenizer{
 		input:       input,
 		pos:         0,
@@ -35,13 +40,13 @@ func NewTokenizer(input string) *Tokenizer {
 		col:         1,
 		reachedEnd:  false,
 		inputLength: len(input),
-		tokens:      make([]*Token, 0, len(input)/8), // Pre-allocate estimated capacity
+		tokens:      make([]Token, 0, capacity),
 	}
 }
 
 // Tokenize processes the entire input and returns all tokens.
 // Returns an error if tokenization fails unrecoverably.
-func (t *Tokenizer) Tokenize() ([]*Token, error) {
+func (t *Tokenizer) Tokenize() ([]Token, error) {
 	for !t.reachedEnd {
 		if !t.tokenizeNext() {
 			break
@@ -75,14 +80,14 @@ func (t *Tokenizer) tokenizeNext() bool {
 	// Regular strings
 	if ch == SymbolDoubleQuote || ch == SymbolSingleQuote {
 		token := t.parseRegularString(ch)
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 		return true
 	}
 
 	// Special symbols
 	if isSpecialSymbol(ch) {
 		token := t.parseSpecialSymbol(ch)
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 		return true
 	}
 
@@ -104,18 +109,18 @@ func (t *Tokenizer) tokenizeNext() bool {
 				if nextToken != nil {
 					// Merge tokens
 					merged := t.mergeTokens(token, nextToken, spaces)
-					t.tokens = append(t.tokens, merged)
+					t.tokens = append(t.tokens, *merged)
 					return true
 				}
 			}
-			t.tokens = append(t.tokens, token)
+			t.tokens = append(t.tokens, *token)
 			return true
 		}
 
 		// Not a number, try literal or open string
 		token = t.parseLiteralOrOpenString()
 		if token != nil {
-			t.tokens = append(t.tokens, token)
+			t.tokens = append(t.tokens, *token)
 		}
 		return true
 	}
@@ -139,14 +144,14 @@ func (t *Tokenizer) tokenizeNext() bool {
 			token = NewErrorToken(err, annotation.name+string(annotation.quote), start)
 			t.skipToNextTokenBoundary()
 		}
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 		return true
 	}
 
 	// Regular literal or open string
 	token := t.parseLiteralOrOpenString()
 	if token != nil {
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 	}
 	return true
 }
@@ -866,7 +871,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 	t.advance(3)
 	end := t.currentPosition()
 	sepToken := NewToken(TokenSectionSep, SectionSeparator, SectionSeparator, NewPositionRange(start.Start, end.Start))
-	t.tokens = append(t.tokens, sepToken)
+	t.tokens = append(t.tokens, *sepToken)
 
 	// Skip horizontal whitespace
 	for !t.reachedEnd && isHorizontalWhitespace(rune(t.input[t.pos])) {
@@ -892,7 +897,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 		schema := t.input[schemaStart:t.pos]
 		end := t.currentPosition()
 		token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 		t.skipWhitespaces()
 		return
 	}
@@ -909,7 +914,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 		name := t.input[nameStart:t.pos]
 		end := t.currentPosition()
 		token := NewTokenWithSubType(TokenString, string(TokenSectionName), name, name, NewPositionRange(start.Start, end.Start))
-		t.tokens = append(t.tokens, token)
+		t.tokens = append(t.tokens, *token)
 		t.skipWhitespaces()
 
 		// Check for separator ':'
@@ -921,7 +926,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 			if t.reachedEnd || t.input[t.pos] != '$' {
 				err := NewSyntaxError(ErrorSchemaMissing, "Missing schema definition after section separator. Expected schema name starting with '$'.", t.currentPosition())
 				errToken := NewErrorToken(err, "", t.currentPosition())
-				t.tokens = append(t.tokens, errToken)
+				t.tokens = append(t.tokens, *errToken)
 				return
 			}
 
@@ -937,7 +942,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 			schema := t.input[schemaStart:t.pos]
 			end := t.currentPosition()
 			token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
-			t.tokens = append(t.tokens, token)
+			t.tokens = append(t.tokens, *token)
 			t.skipWhitespaces()
 		}
 	}
