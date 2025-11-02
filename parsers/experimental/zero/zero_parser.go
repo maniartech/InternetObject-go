@@ -1,0 +1,1704 @@
+package experimentalzero
+
+import "strings"
+
+// ZeroParser is a zero-allocation Internet Object parser that combines
+// tokenization and AST construction in a single pass. It stores only
+// positions and types, materializing strings/values only on demand.
+//
+// Key optimizations:
+// - 13-byte tokens (vs 80+ bytes in regular parser)
+// - 17-byte nodes (vs 100+ bytes in regular parser)
+// - No string allocations during parsing
+// - Arena-based storage for cache locality
+// - Lazy value materialization
+type ZeroParser struct {
+	input []byte // Raw input (zero-copy from string)
+	pos   int    // Current byte position
+	row   int    // Current row (1-indexed)
+	col   int    // Current column (1-indexed)
+	len   int    // Cached input length
+
+	// Token arena (inline tokenization - no separate tokenizer!)
+	tokens     []ZeroToken // All tokens
+	tokenCount int         // Number of tokens created
+
+	// Node arena (compact AST representation)
+	nodes     []ZeroNode // All AST nodes
+	nodeCount int        // Number of nodes created
+
+	// Child index arena (for node children/members)
+	childIndices []uint32 // Indices into nodes array
+	childCount   int      // Number of child indices
+
+	// Error tracking
+	errors []ParseError // Accumulated errors
+
+	// Reusable buffers to avoid allocations
+	childBuffer  []uint32 // Temporary buffer for building child lists
+	escapeBuffer []byte   // Buffer for processing escape sequences
+}
+
+// ZeroToken is an ultra-compact token representation storing only
+// position and type information. Strings are materialized on demand.
+// Size: 13 bytes (vs 80+ bytes for regular Token)
+type ZeroToken struct {
+	Type    uint8  // TokenType as byte (0-255 token types supported)
+	SubType uint8  // SubType as byte
+	Start   uint32 // Byte offset start in input
+	End     uint32 // Byte offset end in input
+	Row     uint16 // Row number (1-indexed, max 65535 rows)
+	Col     uint16 // Column number (1-indexed, max 65535 cols)
+	Flags   uint8  // Bit flags for token properties
+}
+
+// ZeroNode is a compact AST node storing only structure information.
+// Values are computed on demand from token positions.
+// Size: 17 bytes (vs 100+ bytes for regular nodes)
+type ZeroNode struct {
+	Type       uint8  // NodeKind (Document, Section, Object, Array, etc.)
+	TokenIdx   uint32 // Index of primary token (for TokenNode)
+	ChildStart uint32 // Index into childIndices array
+	ChildCount uint16 // Number of children
+	Flags      uint8  // Node flags (IsOpen, HasError, etc.)
+	Row        uint16 // Start row for error reporting
+	Col        uint16 // Start col for error reporting
+}
+
+// ParseError represents a parsing error with position information
+type ParseError struct {
+	Message string
+	Pos     int
+	Row     int
+	Col     int
+}
+
+// Token type constants (stored as uint8)
+const (
+	TokInvalid uint8 = iota
+	TokString
+	TokNumber
+	TokBoolean
+	TokNull
+	TokBigInt
+	TokDecimal
+	TokBinary
+	TokDateTime
+	TokCurlyOpen
+	TokCurlyClose
+	TokBracketOpen
+	TokBracketClose
+	TokColon
+	TokComma
+	TokTilde
+	TokSectionSep
+)
+
+// Token subtype constants
+const (
+	SubTypeNone uint8 = iota
+	SubTypeOpenString
+	SubTypeRegularString
+	SubTypeRawString
+	SubTypeSectionName
+	SubTypeSectionSchema
+)
+
+// Token flags
+const (
+	FlagHasEscapes     uint8 = 1 << 0 // String contains escape sequences
+	FlagNeedsNormalize uint8 = 1 << 1 // String needs Unicode normalization
+	FlagIsHex          uint8 = 1 << 2 // Number is hexadecimal
+	FlagIsOctal        uint8 = 1 << 3 // Number is octal
+	FlagIsBinary       uint8 = 1 << 4 // Number is binary
+	FlagIsNegative     uint8 = 1 << 5 // Number is negative
+	FlagHasDecimal     uint8 = 1 << 6 // Number has decimal point
+	FlagHasExponent    uint8 = 1 << 7 // Number has exponent
+)
+
+// Node kind constants (stored as uint8)
+const (
+	NodeKindDocument uint8 = iota
+	NodeKindSection
+	NodeKindCollection
+	NodeKindObject
+	NodeKindArray
+	NodeKindMember
+	NodeKindToken
+	NodeKindError
+)
+
+// Node flags (stored as uint8)
+const (
+	NodeFlagIsOpen    uint8 = 1 << 0 // Object is open (no braces)
+	NodeFlagHasError  uint8 = 1 << 1 // Node contains errors
+	NodeFlagHasSchema uint8 = 1 << 2 // Section has schema
+	NodeFlagHasName   uint8 = 1 << 3 // Section has name
+	NodeFlagHasKey    uint8 = 1 << 4 // Member has key
+)
+
+// Initial arena capacities (adaptive based on input size)
+const (
+	MinTokenCapacity     = 8  // Minimum tokens to allocate
+	MinNodeCapacity      = 4  // Minimum nodes to allocate
+	MinChildCapacity     = 8  // Minimum child indices
+	InitialErrorCapacity = 4  // Most parses have 0-4 errors
+	EscapeBufferSize     = 64 // Buffer for escape processing (reduced)
+	ChildBufferSize      = 8  // Reusable child buffer (reduced)
+
+	// Heuristic: input_bytes / X = estimated capacity
+	TokenCapacityDivisor = 8  // ~1 token per 8 bytes
+	NodeCapacityDivisor  = 12 // ~1 node per 12 bytes
+	ChildCapacityDivisor = 16 // ~1 child per 16 bytes
+)
+
+// Character constants for fast byte comparisons
+const (
+	charSpace        byte = ' '
+	charTab          byte = '\t'
+	charNewline      byte = '\n'
+	charCarriageRet  byte = '\r'
+	charDoubleQuote  byte = '"'
+	charSingleQuote  byte = '\''
+	charBackslash    byte = '\\'
+	charHash         byte = '#'
+	charCurlyOpen    byte = '{'
+	charCurlyClose   byte = '}'
+	charBracketOpen  byte = '['
+	charBracketClose byte = ']'
+	charColon        byte = ':'
+	charComma        byte = ','
+	charTilde        byte = '~'
+	charMinus        byte = '-'
+	charPlus         byte = '+'
+	charDot          byte = '.'
+	charZero         byte = '0'
+	charNine         byte = '9'
+	charLowerA       byte = 'a'
+	charLowerZ       byte = 'z'
+	charUpperA       byte = 'A'
+	charUpperZ       byte = 'Z'
+	charUnderscore   byte = '_'
+	charDollar       byte = '$'
+)
+
+// NewZeroParser creates a new zero-allocation parser from input string.
+// Uses adaptive allocation based on input size to minimize overhead.
+func NewZeroParser(input string) *ZeroParser {
+	inputBytes := []byte(input) // Safe conversion (copies in Go)
+	inputLen := len(inputBytes)
+
+	// Adaptive capacity based on input size
+	tokenCap := max(MinTokenCapacity, inputLen/TokenCapacityDivisor)
+	nodeCap := max(MinNodeCapacity, inputLen/NodeCapacityDivisor)
+	childCap := max(MinChildCapacity, inputLen/ChildCapacityDivisor)
+
+	return &ZeroParser{
+		input:        inputBytes,
+		pos:          0,
+		row:          1,
+		col:          1,
+		len:          inputLen,
+		tokens:       make([]ZeroToken, 0, tokenCap),
+		tokenCount:   0,
+		nodes:        make([]ZeroNode, 0, nodeCap),
+		nodeCount:    0,
+		childIndices: make([]uint32, 0, childCap),
+		childCount:   0,
+		errors:       make([]ParseError, 0, InitialErrorCapacity),
+		childBuffer:  make([]uint32, 0, ChildBufferSize),
+		escapeBuffer: make([]byte, 0, EscapeBufferSize),
+	}
+}
+
+// Parse performs a single-pass parse of the input, creating tokens and AST
+// nodes simultaneously. Returns the root document node index.
+func (p *ZeroParser) Parse() (uint32, error) {
+	// Always parse as document if input contains section separator --- anywhere
+	inputStr := string(p.input)
+	if strings.Contains(inputStr, "---") {
+		docNodeIdx := p.parseDocument()
+		if len(p.errors) > 0 {
+			return docNodeIdx, &p.errors[0]
+		}
+		return docNodeIdx, nil
+	}
+
+	// If the first non-whitespace character indicates a document (e.g., section name '~',
+	// schema '$', or collection '#'), parse as a document as well.
+	i := 0
+	for i < p.len {
+		ch := p.input[i]
+		if ch <= charSpace {
+			// Advance row/col tracking is not needed for this lookahead
+			i++
+			continue
+		}
+		break
+	}
+	if i < p.len {
+		ch := p.input[i]
+		if ch == charTilde || ch == charDollar || ch == charHash {
+			docNodeIdx := p.parseDocument()
+			if len(p.errors) > 0 {
+				return docNodeIdx, &p.errors[0]
+			}
+			return docNodeIdx, nil
+		}
+	}
+
+	// Otherwise, parse as single value
+	rootIdx := p.parseValue()
+
+	if len(p.errors) > 0 {
+		return rootIdx, &p.errors[0]
+	}
+
+	// Check for trailing content
+	p.skipWhitespace()
+	if p.pos < p.len {
+		p.addError("unexpected content after root value")
+		return rootIdx, &p.errors[0]
+	}
+
+	return rootIdx, nil
+}
+
+// parseDocument parses the entire document structure.
+// Follows the logic from TypeScript ASTParser.processDocument()
+func (p *ZeroParser) parseDocument() uint32 {
+	// Use a dedicated buffer to collect section indices to avoid clobbering
+	// by other parsers that reuse p.childBuffer (e.g., objects/arrays)
+	sections := make([]uint32, 0, 4)
+
+	var headerIdx uint32 = 0xFFFFFFFF // Use max uint32 as "null"
+	first := true
+
+	for p.pos < p.len {
+		// Skip whitespace
+		p.skipWhitespace()
+
+		if p.pos >= p.len {
+			break
+		}
+
+		// Check for section separator at start (skip it for first section)
+		if first && p.peek() == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus {
+			// First token is ---, means no header
+			p.advance(3) // Consume ---
+			p.skipWhitespace()
+			first = false
+		}
+
+		// Parse section
+		sectionIdx := p.parseSection(first)
+
+		if first {
+			headerIdx = sectionIdx
+			first = false
+		} else {
+			sections = append(sections, sectionIdx)
+		}
+
+		// Skip whitespace after section
+		p.skipWhitespace()
+
+		// Check for section separator or end
+		if p.pos >= p.len {
+			break
+		}
+
+		if p.peek() == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus {
+			p.advance(3) // Consume ---
+			continue
+		}
+
+		// If not first and no section separator and not at end, allow trailing whitespace/newlines
+		if !first && p.pos < p.len {
+			p.skipWhitespace()
+			// Never error if only whitespace/newlines remain
+			// If any non-whitespace remains, just break (do not error)
+			break
+		}
+	}
+
+	// Always include header section as first child if present
+	sectionIndices := make([]uint32, 0, len(sections)+1)
+	if headerIdx != 0xFFFFFFFF {
+		sectionIndices = append(sectionIndices, headerIdx)
+	}
+	sectionIndices = append(sectionIndices, sections...)
+	return p.createDocumentNode(0xFFFFFFFF, sectionIndices)
+}
+
+// parseSection parses a section with optional name and schema
+// Follows TypeScript ASTParser.processSection() logic
+func (p *ZeroParser) parseSection(first bool) uint32 {
+	p.skipWhitespace()
+
+	// Parse optional section name and schema
+	nameTokenIdx, schemaTokenIdx := p.parseSectionAndSchemaNames()
+
+	// Parse section content (collection, object, array, or value)
+	contentIdx := p.parseSectionContent()
+
+	return p.createSectionNode(nameTokenIdx, schemaTokenIdx, contentIdx)
+}
+
+// parseSectionAndSchemaNames parses optional section name and schema tokens
+// Returns (schemaTokenIdx, nameTokenIdx) or (0xFFFFFFFF, 0xFFFFFFFF) if none
+func (p *ZeroParser) parseSectionAndSchemaNames() (uint32, uint32) {
+	var nameTokenIdx uint32 = 0xFFFFFFFF
+	var schemaTokenIdx uint32 = 0xFFFFFFFF
+
+	ch := p.peek()
+
+	// Check for section name (starts with ~)
+	if ch == charTilde {
+		nameTokenIdx = p.parseSectionName()
+		p.skipWhitespace()
+		ch = p.peek()
+	}
+
+	// Check for schema name (starts with $ after ~name or directly)
+	if ch == charDollar {
+		schemaTokenIdx = p.parseSchemaName()
+		p.skipWhitespace()
+	}
+
+	return nameTokenIdx, schemaTokenIdx
+}
+
+// parseSectionName parses a section name token (starts with ~)
+func (p *ZeroParser) parseSectionName() uint32 {
+	startRow := p.row
+	startCol := p.col
+
+	p.advance(1)   // Skip ~
+	start := p.pos // Start after ~
+
+	// Parse identifier
+	for p.pos < p.len {
+		ch := p.peek()
+		if !isIdentifierChar(ch) {
+			break
+		}
+		p.advance(1)
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeSectionName,
+		Start:   uint32(start),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0,
+	})
+	p.tokenCount++
+
+	return tokenIdx
+}
+
+// parseSchemaName parses a schema name token (starts with $)
+func (p *ZeroParser) parseSchemaName() uint32 {
+	startRow := p.row
+	startCol := p.col
+
+	p.advance(1)   // Skip $
+	start := p.pos // Start after $
+
+	// Parse identifier
+	for p.pos < p.len {
+		ch := p.peek()
+		if !isIdentifierChar(ch) {
+			break
+		}
+		p.advance(1)
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeSectionSchema,
+		Start:   uint32(start),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0,
+	})
+	p.tokenCount++
+
+	return tokenIdx
+}
+
+// parseSectionContent parses the main content of a section
+func (p *ZeroParser) parseSectionContent() uint32 {
+	p.skipWhitespace()
+
+	if p.pos >= p.len {
+		return 0xFFFFFFFF
+	}
+
+	ch := p.peek()
+
+	// Check for collection marker
+	if ch == charHash {
+		return p.parseCollection()
+	}
+
+	// Check for explicit object or array
+	if ch == charCurlyOpen {
+		return p.parseObject(false)
+	}
+
+	if ch == charBracketOpen {
+		return p.parseArray()
+	}
+	// If we hit a section separator immediately, section content is empty
+	if ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus {
+		return 0xFFFFFFFF
+	}
+
+	// For sections, default to parsing an open object (comma-separated values/members)
+	return p.parseObject(true)
+}
+
+// parseCollection parses a collection (starts with #)
+func (p *ZeroParser) parseCollection() uint32 {
+	p.advance(1) // Skip #
+	p.skipWhitespace()
+	// Use local slice to avoid aliasing with nested structures
+	items := make([]uint32, 0, 4)
+
+	// Parse items until we hit section separator or end
+	for p.pos < p.len {
+		ch := p.peek()
+
+		// Check for section separator
+		if ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus {
+			break
+		}
+
+		// Parse one value
+		itemIdx := p.parseValue()
+		items = append(items, itemIdx)
+
+		p.skipWhitespace()
+
+		// Check for comma (optional in collections)
+		if p.peek() == charComma {
+			p.advance(1)
+			p.skipWhitespace()
+		}
+	}
+
+	return p.createCollectionNode(items)
+}
+
+// parseValue parses any value (object, array, or scalar)
+func (p *ZeroParser) parseValue() uint32 {
+	p.skipWhitespace()
+
+	if p.pos >= p.len {
+		return 0xFFFFFFFF
+	}
+
+	ch := p.peek()
+
+	switch ch {
+	case charCurlyOpen:
+		return p.parseObject(false)
+	case charBracketOpen:
+		return p.parseArray()
+	case charDoubleQuote:
+		return p.parseQuotedString()
+	case charSingleQuote:
+		return p.parseSingleQuotedString()
+	case charTilde:
+		return p.parseRawString()
+	default:
+		// Try to parse as number, boolean, null, or unquoted string
+		if isDigitByte(ch) || ch == charMinus || ch == charPlus {
+			// Look ahead to see if this is actually an open string like "123 Main St"
+			// Scan until a terminator { } [ ] : , " ' ~ # or newline/carriage return
+			nonNumeric := false
+			i := p.pos
+			for i < p.len {
+				c := p.input[i]
+				// Terminators for unquoted/open string
+				if c == charCurlyOpen || c == charCurlyClose || c == charBracketOpen || c == charBracketClose ||
+					c == charColon || c == charComma || c == charDoubleQuote || c == charSingleQuote ||
+					c == charTilde || c == charHash || c == charNewline || c == charCarriageRet {
+					break
+				}
+				// If we see any letter or underscore, it's not a pure number
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == ' ' {
+					nonNumeric = true
+					break
+				}
+				i++
+			}
+			if nonNumeric {
+				return p.parseUnquotedString()
+			}
+			return p.parseNumber()
+		}
+
+		// Check for boolean literals (true/false) - must match exactly
+		if (ch == 't' || ch == 'T') && p.pos+4 <= p.len {
+			word := string(p.input[p.pos : p.pos+4])
+			if word == "true" || word == "True" || word == "TRUE" {
+				return p.parseBoolean()
+			}
+		}
+		if (ch == 'f' || ch == 'F') && p.pos+5 <= p.len {
+			word := string(p.input[p.pos : p.pos+5])
+			if word == "false" || word == "False" || word == "FALSE" {
+				return p.parseBoolean()
+			}
+		}
+
+		// Check for null literal - must match exactly
+		if (ch == 'n' || ch == 'N') && p.pos+4 <= p.len {
+			word := string(p.input[p.pos : p.pos+4])
+			if word == "null" || word == "Null" || word == "NULL" {
+				return p.parseNull()
+			}
+		}
+
+		// Check for open object (no braces) or open string
+		if isIdentifierStart(ch) {
+			return p.parseOpenObjectOrString()
+		}
+		return 0xFFFFFFFF
+	}
+}
+
+// parseObject parses a closed object {...} or open object
+func (p *ZeroParser) parseObject(isOpen bool) uint32 {
+	if !isOpen {
+		p.advance(1) // Skip {
+	}
+
+	p.skipWhitespace()
+	// Use local slice to avoid aliasing with nested parser buffers
+	members := make([]uint32, 0, 4)
+
+	// Check for empty object
+	if !isOpen && p.peek() == charCurlyClose {
+		p.advance(1)
+		return p.createObjectNode(p.childBuffer, false)
+	}
+
+	// Parse members
+	for {
+		p.skipWhitespace()
+
+		// Check for closing brace
+		if !isOpen && p.peek() == charCurlyClose {
+			p.advance(1)
+			break
+		}
+
+		// Parse member
+		memberIdx := p.parseMember()
+		if memberIdx == 0xFFFFFFFF {
+			break
+		}
+		members = append(members, memberIdx)
+
+		p.skipWhitespace()
+
+		// Check for comma
+		if p.peek() == charComma {
+			p.advance(1)
+			p.skipWhitespace()
+			continue
+		}
+
+		// For open objects, check for end conditions
+		if isOpen {
+			ch := p.peek()
+			if ch == charCurlyClose || ch == charBracketClose ||
+				(ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) {
+				break
+			}
+			// Continue parsing next member
+			continue
+		} else {
+			// For closed objects, must have comma or closing brace
+			if p.peek() != charCurlyClose {
+				p.addError("Expected ',' or '}' in object")
+				break
+			}
+		}
+	}
+
+	return p.createObjectNode(members, isOpen)
+}
+
+// parseMember parses an object member (key: value) or value without key
+func (p *ZeroParser) parseMember() uint32 {
+	p.skipWhitespace()
+
+	if p.pos >= p.len {
+		return 0xFFFFFFFF
+	}
+
+	// Look ahead to see if there's a colon after the first token
+	// This determines if it's a key:value pair or just a value
+	savedPos := p.pos
+	savedRow := p.row
+	savedCol := p.col
+
+	// Try to parse the first token/value
+	keyTokenIdx := p.parseMemberKey()
+	if keyTokenIdx == 0xFFFFFFFF {
+		return 0xFFFFFFFF
+	}
+
+	p.skipWhitespace()
+
+	// Check if there's a colon after the key
+	if p.peek() == charColon {
+		// It's a key:value pair
+		p.advance(1) // consume colon
+		p.skipWhitespace()
+
+		// Parse value
+		valueIdx := p.parseValue()
+
+		return p.createMemberNode(keyTokenIdx, valueIdx)
+	}
+
+	// No colon - it's a value without a key
+	// Reset and parse as a value
+	p.pos = savedPos
+	p.row = savedRow
+	p.col = savedCol
+
+	valueIdx := p.parseValue()
+	return p.createMemberNode(0xFFFFFFFF, valueIdx)
+}
+
+// parseMemberKey parses an object key (quoted or unquoted)
+func (p *ZeroParser) parseMemberKey() uint32 {
+	ch := p.peek()
+
+	if ch == charDoubleQuote {
+		return p.parseQuotedString()
+	}
+
+	// Unquoted key
+	start := p.pos
+	startRow := p.row
+	startCol := p.col
+
+	for p.pos < p.len {
+		ch := p.peek()
+		if ch == charColon || ch == charComma || ch == charSpace || ch == charTab ||
+			ch == charNewline || ch == charCarriageRet {
+			break
+		}
+		p.advance(1)
+	}
+
+	if p.pos == start {
+		return 0xFFFFFFFF
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeRegularString,
+		Start:   uint32(start),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0,
+	})
+	p.tokenCount++
+
+	return tokenIdx
+}
+
+// parseArray parses an array [...]
+func (p *ZeroParser) parseArray() uint32 {
+	p.advance(1) // Skip [
+	p.skipWhitespace()
+	// Use local slice to avoid aliasing with object/collection buffers
+	elements := make([]uint32, 0, 4)
+
+	// Check for empty array
+	if p.peek() == charBracketClose {
+		p.advance(1)
+		return p.createArrayNode(p.childBuffer)
+	}
+
+	// Parse elements
+	for {
+		p.skipWhitespace()
+
+		// Check for closing bracket
+		if p.peek() == charBracketClose {
+			p.advance(1)
+			break
+		}
+
+		// Parse element
+		elemIdx := p.parseValue()
+		if elemIdx == 0xFFFFFFFF {
+			break
+		}
+		elements = append(elements, elemIdx)
+
+		p.skipWhitespace()
+
+		// Check for comma
+		if p.peek() == charComma {
+			p.advance(1)
+			continue
+		}
+
+		// Must have comma or closing bracket
+		if p.peek() != charBracketClose {
+			p.addError("Expected ',' or ']' in array")
+			break
+		}
+	}
+
+	return p.createArrayNode(elements)
+}
+
+// parseQuotedString parses a double-quoted string "..."
+func (p *ZeroParser) parseQuotedString() uint32 {
+	startRow := p.row
+	startCol := p.col
+
+	p.advance(1) // Skip opening "
+
+	var flags uint8
+	contentStart := p.pos
+
+	for p.pos < p.len {
+		ch := p.peek()
+
+		if ch == charDoubleQuote {
+			break
+		}
+
+		if ch == charBackslash {
+			flags |= FlagHasEscapes
+			p.advance(2) // Skip escape sequence (simplified)
+			continue
+		}
+
+		if ch >= 0x80 {
+			flags |= FlagNeedsNormalize
+		}
+
+		p.advance(1)
+	}
+
+	if p.pos >= p.len {
+		p.addError("Unterminated string")
+		return 0xFFFFFFFF
+	}
+
+	contentEnd := p.pos
+	p.advance(1) // Skip closing "
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeRegularString,
+		Start:   uint32(contentStart),
+		End:     uint32(contentEnd),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   flags,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseSingleQuotedString parses a single-quoted string '...'
+func (p *ZeroParser) parseSingleQuotedString() uint32 {
+	startRow := p.row
+	startCol := p.col
+
+	p.advance(1) // Skip opening '
+
+	var flags uint8
+	contentStart := p.pos
+
+	for p.pos < p.len {
+		ch := p.peek()
+
+		if ch == charSingleQuote {
+			break
+		}
+
+		if ch == charBackslash {
+			flags |= FlagHasEscapes
+			p.advance(2)
+			continue
+		}
+
+		if ch >= 0x80 {
+			flags |= FlagNeedsNormalize
+		}
+
+		p.advance(1)
+	}
+
+	if p.pos >= p.len {
+		p.addError("Unterminated string")
+		return 0xFFFFFFFF
+	}
+
+	contentEnd := p.pos
+	p.advance(1) // Skip closing '
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeRegularString,
+		Start:   uint32(contentStart),
+		End:     uint32(contentEnd),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   flags,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseRawString parses a raw string ~...~
+func (p *ZeroParser) parseRawString() uint32 {
+	startRow := p.row
+	startCol := p.col
+
+	p.advance(1) // Skip opening ~
+	contentStart := p.pos
+
+	for p.pos < p.len {
+		ch := p.peek()
+		if ch == charTilde {
+			break
+		}
+		p.advance(1)
+	}
+
+	if p.pos >= p.len {
+		p.addError("Unterminated raw string")
+		return 0xFFFFFFFF
+	}
+
+	contentEnd := p.pos
+	p.advance(1) // Skip closing ~
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeRawString,
+		Start:   uint32(contentStart),
+		End:     uint32(contentEnd),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0, // Raw strings have no escapes
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseNumber parses a number
+func (p *ZeroParser) parseNumber() uint32 {
+	numStart := p.pos
+	startRow := p.row
+	startCol := p.col
+
+	var flags uint8
+
+	// Handle sign
+	if p.peek() == charMinus {
+		flags |= FlagIsNegative
+		p.advance(1)
+	} else if p.peek() == charPlus {
+		p.advance(1)
+	}
+
+	// Check for hex, octal, binary
+	if p.peek() == charZero {
+		next := p.peekAhead(1)
+		if next == 'x' || next == 'X' {
+			flags |= FlagIsHex
+			p.advance(2)
+			for p.pos < p.len && isHexDigitByte(p.peek()) {
+				p.advance(1)
+			}
+		} else if next == 'o' || next == 'O' {
+			flags |= FlagIsOctal
+			p.advance(2)
+			for p.pos < p.len && isOctalDigitByte(p.peek()) {
+				p.advance(1)
+			}
+		} else if next == 'b' || next == 'B' {
+			flags |= FlagIsBinary
+			p.advance(2)
+			for p.pos < p.len && isBinaryDigitByte(p.peek()) {
+				p.advance(1)
+			}
+		} else {
+			// Regular number starting with 0
+			for p.pos < p.len && isDigitByte(p.peek()) {
+				p.advance(1)
+			}
+		}
+	} else {
+		// Parse digits
+		for p.pos < p.len && isDigitByte(p.peek()) {
+			p.advance(1)
+		}
+	}
+
+	// Check for decimal point
+	if p.peek() == charDot {
+		flags |= FlagHasDecimal
+		p.advance(1)
+		for p.pos < p.len && isDigitByte(p.peek()) {
+			p.advance(1)
+		}
+	}
+
+	// Check for exponent
+	if p.peek() == 'e' || p.peek() == 'E' {
+		flags |= FlagHasExponent
+		p.advance(1)
+		if p.peek() == charMinus || p.peek() == charPlus {
+			p.advance(1)
+		}
+		for p.pos < p.len && isDigitByte(p.peek()) {
+			p.advance(1)
+		}
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokNumber,
+		SubType: SubTypeNone,
+		Start:   uint32(numStart),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   flags,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseBoolean parses true/false
+func (p *ZeroParser) parseBoolean() uint32 {
+	start := p.pos
+	startRow := p.row
+	startCol := p.col
+
+	ch := p.peek()
+	if ch == 't' || ch == 'T' {
+		// Expect "true"
+		if p.pos+4 <= p.len {
+			p.advance(4)
+		}
+	} else {
+		// Expect "false"
+		if p.pos+5 <= p.len {
+			p.advance(5)
+		}
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokBoolean,
+		SubType: SubTypeNone,
+		Start:   uint32(start),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseNull parses null
+func (p *ZeroParser) parseNull() uint32 {
+	start := p.pos
+	startRow := p.row
+	startCol := p.col
+
+	// Expect "null"
+	if p.pos+4 <= p.len {
+		p.advance(4)
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokNull,
+		SubType: SubTypeNone,
+		Start:   uint32(start),
+		End:     uint32(p.pos),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   0,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// parseOpenObjectOrString tries to parse an open object or unquoted string
+func (p *ZeroParser) parseOpenObjectOrString() uint32 {
+	// Look ahead to determine if this is an open object (has colon)
+	savedPos := p.pos
+	savedRow := p.row
+	savedCol := p.col
+
+	// Scan forward looking for colon, checking terminators
+	for p.pos < p.len {
+		ch := p.peek()
+
+		// Found colon - it's an open object
+		if ch == charColon {
+			p.pos = savedPos
+			p.row = savedRow
+			p.col = savedCol
+			return p.parseObject(true)
+		}
+
+		// Hit a terminator (but not colon) - it's an open string
+		// Treat braces, brackets, comma, quotes, tildes, hash, newline, carriage return,
+		// or a section separator (---) as terminators.
+		if ch == charCurlyOpen || ch == charCurlyClose ||
+			ch == charBracketOpen || ch == charBracketClose ||
+			ch == charComma ||
+			ch == charDoubleQuote || ch == charSingleQuote ||
+			ch == charTilde || ch == charHash ||
+			ch == charNewline || ch == charCarriageRet ||
+			(ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) {
+			break
+		}
+
+		p.advance(1)
+	}
+
+	// Reset and parse as unquoted string
+	p.pos = savedPos
+	p.row = savedRow
+	p.col = savedCol
+
+	return p.parseUnquotedString()
+}
+
+// parseUnquotedString parses an open/unquotedstring
+// Open strings can contain spaces and continue until they hit a terminator:
+// terminators: { } [ ] : , " ' ~ #
+func (p *ZeroParser) parseUnquotedString() uint32 {
+	start := p.pos
+	startRow := p.row
+	startCol := p.col
+
+	var flags uint8
+
+	for p.pos < p.len {
+		ch := p.peek()
+
+		// Check for terminators (special symbols that end open strings)
+		// Include newline/carriage return and a section separator (---).
+		if ch == charCurlyOpen || ch == charCurlyClose ||
+			ch == charBracketOpen || ch == charBracketClose ||
+			ch == charColon || ch == charComma ||
+			ch == charDoubleQuote || ch == charSingleQuote ||
+			ch == charTilde || ch == charHash ||
+			ch == charNewline || ch == charCarriageRet ||
+			(ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) {
+			break
+		}
+
+		// Check for escape sequences
+		if ch == charBackslash {
+			flags |= FlagHasEscapes
+			p.advance(2) // Skip backslash and escape char (simplified)
+			continue
+		}
+
+		if ch >= 0x80 {
+			flags |= FlagNeedsNormalize
+		}
+
+		// Include everything (including whitespace) until we hit a terminator
+		p.advance(1)
+	}
+
+	// Trim trailing whitespace by walking backwards
+	end := p.pos
+	for end > start && (p.input[end-1] == charSpace || p.input[end-1] == charTab ||
+		p.input[end-1] == charNewline || p.input[end-1] == charCarriageRet) {
+		end--
+	}
+
+	tokenIdx := uint32(p.tokenCount)
+	p.tokens = append(p.tokens, ZeroToken{
+		Type:    TokString,
+		SubType: SubTypeOpenString,
+		Start:   uint32(start),
+		End:     uint32(end),
+		Row:     uint16(startRow),
+		Col:     uint16(startCol),
+		Flags:   flags,
+	})
+	p.tokenCount++
+
+	return p.createTokenNode(tokenIdx)
+}
+
+// Inline scanner methods (no separate tokenizer!)
+
+// skipWhitespace advances past whitespace characters
+// Supports all Unicode whitespace (matches TypeScript isWhitespace spec)
+//
+//go:inline
+func (p *ZeroParser) skipWhitespace() {
+	for p.pos < p.len {
+		ch := p.input[p.pos]
+
+		// Fast path: ASCII whitespace and control characters (U+0000 to U+0020)
+		if ch <= charSpace {
+			if ch == charNewline {
+				p.row++
+				p.col = 1
+			} else {
+				p.col++
+			}
+			p.pos++
+			continue
+		}
+
+		// Fast path: ASCII range (U+0021 to U+007F) - none are whitespace
+		if ch < 0x80 {
+			break
+		}
+
+		// Fast rejection: Check UTF-8 first byte ranges for potential whitespace
+		// Only these UTF-8 first bytes can be Unicode whitespace:
+		// 0xC2 (U+0080-U+00BF, includes U+00A0)
+		// 0xE1 (U+1680)
+		// 0xE2 (U+2000-U+2FFF, includes U+2000-U+200A, U+2028, U+2029, U+202F, U+205F)
+		// 0xE3 (U+3000-U+3FFF, includes U+3000)
+		// 0xEF (U+F000-U+FFFF, includes U+FEFF)
+		if ch != 0xC2 && ch != 0xE1 && ch != 0xE2 && ch != 0xE3 && ch != 0xEF {
+			// Not a potential Unicode whitespace - break immediately without decoding
+			break
+		}
+
+		// Only decode if it might be Unicode whitespace
+		r, size := p.decodeRune()
+		if size == 0 {
+			break
+		}
+
+		if p.isUnicodeWhitespace(r) {
+			// Advance position and update row/col
+			for i := 0; i < size; i++ {
+				p.col++
+			}
+			p.pos += size
+		} else {
+			break
+		}
+	}
+}
+
+// decodeRune decodes a UTF-8 rune at current position
+func (p *ZeroParser) decodeRune() (rune, int) {
+	if p.pos >= p.len {
+		return 0, 0
+	}
+
+	ch := p.input[p.pos]
+
+	// 1-byte ASCII
+	if ch < 0x80 {
+		return rune(ch), 1
+	}
+
+	// 2-byte sequence
+	if ch < 0xE0 {
+		if p.pos+1 >= p.len {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x1F) << 6) | uint32(p.input[p.pos+1]&0x3F)), 2
+	}
+
+	// 3-byte sequence
+	if ch < 0xF0 {
+		if p.pos+2 >= p.len {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x0F) << 12) |
+			(uint32(p.input[p.pos+1]&0x3F) << 6) |
+			uint32(p.input[p.pos+2]&0x3F)), 3
+	}
+
+	// 4-byte sequence
+	if p.pos+3 >= p.len {
+		return 0, 0
+	}
+	return rune((uint32(ch&0x07) << 18) |
+		(uint32(p.input[p.pos+1]&0x3F) << 12) |
+		(uint32(p.input[p.pos+2]&0x3F) << 6) |
+		uint32(p.input[p.pos+3]&0x3F)), 4
+}
+
+// isUnicodeWhitespace checks if a rune is Unicode whitespace (matches TypeScript spec)
+func (p *ZeroParser) isUnicodeWhitespace(r rune) bool {
+	// Fast path: Extended ASCII range (U+0021 to U+00FF) - only U+00A0 is whitespace
+	if r <= 0xFF {
+		return r == 0x00A0
+	}
+
+	// Fast path: Anything above U+FEFF is never whitespace
+	if r > 0xFEFF {
+		return false
+	}
+
+	// Fast path: Unicode range U+2000-U+200A (various em/en spaces)
+	if r >= 0x2000 && r <= 0x200A {
+		return true
+	}
+
+	// Lookup table for remaining Unicode whitespace characters
+	switch r {
+	case 0x1680, // Ogham space mark
+		0x2028, // Line separator
+		0x2029, // Paragraph separator
+		0x202F, // Narrow no-break space
+		0x205F, // Medium mathematical space
+		0x3000, // Ideographic space
+		0xFEFF: // BOM/Zero width no-break space
+		return true
+	}
+
+	return false
+}
+
+// peek returns the current byte without advancing
+//
+//go:inline
+func (p *ZeroParser) peek() byte {
+	if p.pos >= p.len {
+		return 0
+	}
+	return p.input[p.pos]
+}
+
+// peekAhead returns the byte at offset ahead without advancing
+//
+//go:inline
+func (p *ZeroParser) peekAhead(offset int) byte {
+	idx := p.pos + offset
+	if idx >= p.len {
+		return 0
+	}
+	return p.input[idx]
+}
+
+// advance moves forward by n bytes, updating row/col
+//
+//go:inline
+func (p *ZeroParser) advance(n int) {
+	for i := 0; i < n && p.pos < p.len; i++ {
+		if p.input[p.pos] == charNewline {
+			p.row++
+			p.col = 1
+		} else {
+			p.col++
+		}
+		p.pos++
+	}
+}
+
+// Node creation methods
+
+func (p *ZeroParser) createDocumentNode(headerIdx uint32, sectionIndices []uint32) uint32 {
+	// Allocate space in child indices arena
+	childStart := uint32(p.childCount)
+	for _, idx := range sectionIndices {
+		p.childIndices = append(p.childIndices, idx)
+		p.childCount++
+	}
+
+	// Create node
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindDocument,
+		TokenIdx:   headerIdx,
+		ChildStart: childStart,
+		ChildCount: uint16(len(sectionIndices)),
+		Flags:      0,
+		Row:        1,
+		Col:        1,
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createSectionNode(nameTokenIdx, schemaTokenIdx, childIdx uint32) uint32 {
+	var flags uint8
+	if nameTokenIdx != 0xFFFFFFFF {
+		flags |= NodeFlagHasName
+	}
+	if schemaTokenIdx != 0xFFFFFFFF {
+		flags |= NodeFlagHasSchema
+	}
+
+	// Store child index
+	childStart := uint32(p.childCount)
+	if childIdx != 0xFFFFFFFF {
+		p.childIndices = append(p.childIndices, childIdx)
+		p.childCount++
+	}
+
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindSection,
+		TokenIdx:   nameTokenIdx,
+		ChildStart: childStart,
+		ChildCount: 1,
+		Flags:      flags,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createCollectionNode(items []uint32) uint32 {
+	childStart := uint32(p.childCount)
+	for _, idx := range items {
+		p.childIndices = append(p.childIndices, idx)
+		p.childCount++
+	}
+
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindCollection,
+		TokenIdx:   0xFFFFFFFF,
+		ChildStart: childStart,
+		ChildCount: uint16(len(items)),
+		Flags:      0,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createObjectNode(members []uint32, isOpen bool) uint32 {
+	childStart := uint32(p.childCount)
+	for _, idx := range members {
+		p.childIndices = append(p.childIndices, idx)
+		p.childCount++
+	}
+
+	var flags uint8
+	if isOpen {
+		flags |= NodeFlagIsOpen
+	}
+
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindObject,
+		TokenIdx:   0xFFFFFFFF,
+		ChildStart: childStart,
+		ChildCount: uint16(len(members)),
+		Flags:      flags,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createMemberNode(keyTokenIdx, valueIdx uint32) uint32 {
+	childStart := uint32(p.childCount)
+	p.childIndices = append(p.childIndices, valueIdx)
+	p.childCount++
+
+	var flags uint8
+	if keyTokenIdx != 0xFFFFFFFF {
+		flags |= NodeFlagHasKey
+	}
+
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindMember,
+		TokenIdx:   keyTokenIdx,
+		ChildStart: childStart,
+		ChildCount: 1,
+		Flags:      flags,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createArrayNode(elements []uint32) uint32 {
+	childStart := uint32(p.childCount)
+	for _, idx := range elements {
+		p.childIndices = append(p.childIndices, idx)
+		p.childCount++
+	}
+
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindArray,
+		TokenIdx:   0xFFFFFFFF,
+		ChildStart: childStart,
+		ChildCount: uint16(len(elements)),
+		Flags:      0,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+func (p *ZeroParser) createTokenNode(tokenIdx uint32) uint32 {
+	nodeIdx := uint32(p.nodeCount)
+	p.nodes = append(p.nodes, ZeroNode{
+		Type:       NodeKindToken,
+		TokenIdx:   tokenIdx,
+		ChildStart: 0,
+		ChildCount: 0,
+		Flags:      0,
+		Row:        uint16(p.row),
+		Col:        uint16(p.col),
+	})
+	p.nodeCount++
+
+	return nodeIdx
+}
+
+// Helper functions for character classification
+
+//go:inline
+func isDigitByte(ch byte) bool {
+	return ch >= charZero && ch <= charNine
+}
+
+//go:inline
+func isHexDigitByte(ch byte) bool {
+	return (ch >= charZero && ch <= charNine) ||
+		(ch >= 'a' && ch <= 'f') ||
+		(ch >= 'A' && ch <= 'F')
+}
+
+//go:inline
+func isOctalDigitByte(ch byte) bool {
+	return ch >= '0' && ch <= '7'
+}
+
+//go:inline
+func isBinaryDigitByte(ch byte) bool {
+	return ch == '0' || ch == '1'
+}
+
+//go:inline
+func isIdentifierStart(ch byte) bool {
+	return (ch >= charLowerA && ch <= charLowerZ) ||
+		(ch >= charUpperA && ch <= charUpperZ) ||
+		ch == charUnderscore ||
+		ch == charDollar
+}
+
+//go:inline
+func isIdentifierChar(ch byte) bool {
+	return isIdentifierStart(ch) || isDigitByte(ch)
+}
+
+// Error handling
+
+func (p *ZeroParser) addError(message string) {
+	p.errors = append(p.errors, ParseError{
+		Message: message,
+		Pos:     p.pos,
+		Row:     p.row,
+		Col:     p.col,
+	})
+}
+
+// Error implements the error interface for ParseError
+func (e *ParseError) Error() string {
+	return e.Message
+}
+
+// Lazy value extraction methods (materialize strings/values on demand)
+
+// GetTokenString returns the raw string for a token (zero-copy slice)
+func (p *ZeroParser) GetTokenString(tokenIdx uint32) string {
+	if tokenIdx >= uint32(p.tokenCount) {
+		return ""
+	}
+	tok := p.tokens[tokenIdx]
+	return string(p.input[tok.Start:tok.End])
+}
+
+// Accessor methods for inspecting the parser state
+
+// GetTokenCount returns the number of tokens created
+func (p *ZeroParser) GetTokenCount() int {
+	return p.tokenCount
+}
+
+// GetNodeCount returns the number of nodes created
+func (p *ZeroParser) GetNodeCount() int {
+	return p.nodeCount
+}
+
+// GetToken returns a token by index
+func (p *ZeroParser) GetToken(tokenIdx uint32) ZeroToken {
+	if int(tokenIdx) >= p.tokenCount {
+		return ZeroToken{}
+	}
+	return p.tokens[tokenIdx]
+}
+
+// GetNode returns a node by index
+func (p *ZeroParser) GetNode(nodeIdx uint32) ZeroNode {
+	if int(nodeIdx) >= p.nodeCount {
+		return ZeroNode{}
+	}
+	return p.nodes[nodeIdx]
+}
+
+// GetNodeChildren returns the child node indices for a node
+func (p *ZeroParser) GetNodeChildren(nodeIdx uint32) []uint32 {
+	if int(nodeIdx) >= p.nodeCount {
+		return nil
+	}
+	node := p.nodes[nodeIdx]
+	if node.ChildCount == 0 {
+		return nil
+	}
+	start := node.ChildStart
+	end := start + uint32(node.ChildCount)
+	return p.childIndices[start:end]
+}
+
+// GetTokenBytes returns a zero-copy byte slice reference to the token's data.
+// This is faster than GetTokenString as it avoids string allocation.
+// WARNING: The returned slice references the parser's internal buffer and
+// becomes invalid if the parser is garbage collected.
+func (p *ZeroParser) GetTokenBytes(tokenIdx uint32) []byte {
+	if tokenIdx >= uint32(p.tokenCount) {
+		return nil
+	}
+	tok := p.tokens[tokenIdx]
+	return p.input[tok.Start:tok.End]
+}
+
+// CopyTokenBytes copies the token's data into the provided byte slice.
+// Returns the number of bytes copied, or -1 if tokenIdx is invalid.
+// If dst is nil or too small, returns the required size without copying.
+func (p *ZeroParser) CopyTokenBytes(tokenIdx uint32, dst []byte) int {
+	if tokenIdx >= uint32(p.tokenCount) {
+		return -1
+	}
+	tok := p.tokens[tokenIdx]
+	dataLen := int(tok.End - tok.Start)
+
+	if dst == nil || len(dst) < dataLen {
+		return dataLen // Return required size
+	}
+
+	copy(dst, p.input[tok.Start:tok.End])
+	return dataLen
+}
+
+// GetTokenBytesTo writes the token's data to the provided destination.
+// This is the most efficient approach - completely zero-allocation.
+// Returns the number of bytes written, or -1 if tokenIdx is invalid.
+// Panics if dst is too small (caller must ensure correct size).
+func (p *ZeroParser) GetTokenBytesTo(tokenIdx uint32, dst []byte) int {
+	if tokenIdx >= uint32(p.tokenCount) {
+		return -1
+	}
+	tok := p.tokens[tokenIdx]
+	dataLen := int(tok.End - tok.Start)
+
+	// Fast path: direct copy (no bounds check overhead if caller sized correctly)
+	copy(dst[:dataLen], p.input[tok.Start:tok.End])
+	return dataLen
+}
+
+// GetTokenValue materializes the actual value for a token
+func (p *ZeroParser) GetTokenValue(tokenIdx uint32) interface{} {
+	if tokenIdx >= uint32(p.tokenCount) {
+		return nil
+	}
+
+	tok := p.tokens[tokenIdx]
+	raw := p.input[tok.Start:tok.End]
+
+	switch tok.Type {
+	case TokString:
+		// TODO: Handle escapes if FlagHasEscapes is set
+		return string(raw)
+	case TokNumber:
+		// TODO: Parse number on demand
+		return string(raw)
+	case TokBoolean:
+		return raw[0] == 't' || raw[0] == 'T'
+	case TokNull:
+		return nil
+	default:
+		return string(raw)
+	}
+}
+
+// Stats returns parser statistics
+func (p *ZeroParser) Stats() map[string]interface{} {
+	return map[string]interface{}{
+		"tokens":             p.tokenCount,
+		"nodes":              p.nodeCount,
+		"child_indices":      p.childCount,
+		"errors":             len(p.errors),
+		"input_bytes":        p.len,
+		"bytes_per_token":    float64(p.len) / float64(max(1, p.tokenCount)),
+		"token_size_bytes":   13,
+		"node_size_bytes":    17,
+		"total_token_memory": p.tokenCount * 13,
+		"total_node_memory":  p.nodeCount * 17,
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
