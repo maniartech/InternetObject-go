@@ -52,6 +52,12 @@ func (t *Tokenizer) Tokenize() ([]Token, error) {
 			break
 		}
 	}
+	// Trim capacity to avoid holding excess memory after tokenization
+	if cap(t.tokens) > len(t.tokens) {
+		trimmed := make([]Token, len(t.tokens))
+		copy(trimmed, t.tokens)
+		t.tokens = trimmed
+	}
 	return t.tokens, nil
 }
 
@@ -141,7 +147,7 @@ func (t *Tokenizer) tokenizeNext() bool {
 			start := t.currentPosition()
 			msg := fmt.Sprintf("Unsupported annotation '%s'. Supported annotations are: 'r' (raw string), 'b' (binary), 'dt' (datetime), 'd' (date), 't' (time).", annotation.name)
 			err := NewSyntaxError(ErrorUnsupportedAnnotation, msg, start)
-			token = NewErrorToken(err, annotation.name+string(annotation.quote), start)
+			token = NewErrorToken(err, start)
 			t.skipToNextTokenBoundary()
 		}
 		t.tokens = append(t.tokens, *token)
@@ -241,7 +247,6 @@ func (t *Tokenizer) parseSingleLineComment() {
 // parseSpecialSymbol parses a structural symbol token.
 func (t *Tokenizer) parseSpecialSymbol(ch rune) *Token {
 	start := t.currentPosition()
-	raw := string(ch)
 	t.advance(1)
 
 	var tokenType TokenType
@@ -265,13 +270,13 @@ func (t *Tokenizer) parseSpecialSymbol(ch rune) *Token {
 	}
 
 	end := t.currentPosition()
-	return NewToken(tokenType, raw, raw, NewPositionRange(start.Start, end.Start))
+	return NewToken(tokenType, nil, NewPositionRange(start.Start, end.Start))
 }
 
 // parseRegularString parses a quoted string (single or double quoted).
 func (t *Tokenizer) parseRegularString(encloser rune) *Token {
 	start := t.currentPosition()
-	startPos := t.pos
+	// startPos not needed since we don't store raw per token
 
 	t.advance(1) // Skip opening quote
 	var value strings.Builder
@@ -321,15 +326,14 @@ func (t *Tokenizer) parseRegularString(encloser rune) *Token {
 
 	// Check for unclosed string
 	if t.reachedEnd {
-		raw := t.input[startPos:t.pos]
+		// raw := t.input[startPos:t.pos]
 		end := t.currentPosition()
 		err := NewSyntaxErrorEOF(ErrorStringNotClosed, "Unterminated string literal. Expected closing quote before end of input.")
-		return NewErrorToken(err, raw, NewPositionRange(start.Start, end.Start))
+		return NewErrorToken(err, NewPositionRange(start.Start, end.Start))
 	}
 
 	t.advance(1) // Skip closing quote
 
-	raw := t.input[startPos:t.pos]
 	finalValue := value.String()
 
 	// Normalize if needed (NFC normalization for Unicode)
@@ -339,7 +343,7 @@ func (t *Tokenizer) parseRegularString(encloser rune) *Token {
 	}
 
 	end := t.currentPosition()
-	return NewTokenWithSubType(TokenString, "REGULAR_STRING", finalValue, raw, NewPositionRange(start.Start, end.Start))
+	return NewTokenWithSubType(TokenString, SubRegularString, finalValue, NewPositionRange(start.Start, end.Start))
 }
 
 // escapeString processes an escape sequence starting at current position (after backslash).
@@ -492,7 +496,6 @@ func (t *Tokenizer) parseAnnotatedString(annotation *Annotation) *Token {
 		t.advance(1)
 	}
 
-	raw := t.input[startPos:t.pos]
 	var value string
 
 	if t.reachedEnd {
@@ -502,11 +505,10 @@ func (t *Tokenizer) parseAnnotatedString(annotation *Annotation) *Token {
 		t.advance(1) // Skip closing quote
 		fullRaw := t.input[startPos:t.pos]
 		value = fullRaw[len(annotation.name)+1 : len(fullRaw)-1]
-		raw = fullRaw
 	}
 
 	end := t.currentPosition()
-	token := NewToken(TokenString, value, raw, NewPositionRange(start.Start, end.Start))
+	token := NewToken(TokenString, value, NewPositionRange(start.Start, end.Start))
 	return token
 }
 
@@ -516,7 +518,7 @@ func (t *Tokenizer) parseRawString(annotation *Annotation) *Token {
 	if token.Type == TokenError {
 		return token
 	}
-	token.SubType = "RAW_STRING"
+	token.SubType = SubRawString
 	return token
 }
 
@@ -535,17 +537,17 @@ func (t *Tokenizer) parseByteString(annotation *Annotation) *Token {
 
 	if !isValidBase64(valueStr) {
 		err := NewSyntaxError(ErrorInvalidEscapeSeq, "Invalid base64 format in byte string", token.Position)
-		return NewErrorToken(err, token.Raw, token.Position)
+		return NewErrorToken(err, token.Position)
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(valueStr)
 	if err != nil {
 		syntaxErr := NewSyntaxError(ErrorInvalidEscapeSeq, fmt.Sprintf("Invalid base64 encoding: %v", err), token.Position)
-		return NewErrorToken(syntaxErr, token.Raw, token.Position)
+		return NewErrorToken(syntaxErr, token.Position)
 	}
 
 	token.Type = TokenBinary
-	token.SubType = "BINARY_STRING"
+	token.SubType = SubBinaryString
 	token.Value = decoded
 	return token
 }
@@ -568,13 +570,13 @@ func (t *Tokenizer) parseDateTime(annotation *Annotation) *Token {
 	switch annotation.name {
 	case AnnotationDateTime:
 		parsedTime, parseErr = time.Parse(time.RFC3339, valueStr)
-		token.SubType = "DATETIME"
+		token.SubType = SubDTDateTime
 	case AnnotationDate:
 		parsedTime, parseErr = time.Parse("2006-01-02", valueStr)
-		token.SubType = "DATE"
+		token.SubType = SubDTDate
 	case AnnotationTime:
 		parsedTime, parseErr = time.Parse("15:04:05", valueStr)
-		token.SubType = "TIME"
+		token.SubType = SubDTTime
 	}
 
 	if parseErr != nil {
@@ -586,7 +588,7 @@ func (t *Tokenizer) parseDateTime(annotation *Annotation) *Token {
 		}
 		msg := fmt.Sprintf("Invalid %s format '%s'. Expected valid ISO 8601 format.", typeName, valueStr)
 		err := NewSyntaxError(ErrorInvalidDateTime, msg, token.Position)
-		return NewErrorToken(err, token.Raw, token.Position)
+		return NewErrorToken(err, token.Position)
 	}
 
 	token.Type = TokenDateTime
@@ -597,14 +599,14 @@ func (t *Tokenizer) parseDateTime(annotation *Annotation) *Token {
 // parseNumber parses a numeric literal (integer, float, hex, octal, binary, BigInt, Decimal, Inf, NaN).
 func (t *Tokenizer) parseNumber() *Token {
 	start := t.currentPosition()
-	startPos := t.pos
+	// startPos no longer needed since we don't store raw per token
 
 	var rawValue strings.Builder
 	base := 10
 	hasDecimal := false
 	hasExponent := false
 	prefix := ""
-	var subType string
+	var subType TokenSubType
 
 	// Handle sign
 	if t.input[t.pos] == SymbolPlus || t.input[t.pos] == SymbolMinus {
@@ -618,8 +620,8 @@ func (t *Tokenizer) parseNumber() *Token {
 			if sign == "-" {
 				val = math.Inf(-1) // -Inf
 			}
-			raw := t.input[startPos:t.pos]
-			return NewToken(TokenNumber, val, raw, NewPositionRange(start.Start, end.Start))
+			// raw := t.input[startPos:t.pos]
+			return NewToken(TokenNumber, val, NewPositionRange(start.Start, end.Start))
 		}
 
 		// Allow sign only if followed by digit or dot
@@ -633,8 +635,7 @@ func (t *Tokenizer) parseNumber() *Token {
 		// Infinity without sign
 		t.advance(3)
 		end := t.currentPosition()
-		raw := t.input[startPos:t.pos]
-		return NewToken(TokenNumber, math.Inf(1), raw, NewPositionRange(start.Start, end.Start))
+		return NewToken(TokenNumber, math.Inf(1), NewPositionRange(start.Start, end.Start))
 	}
 
 	// Check for leading dot (decimal number starting with .)
@@ -650,7 +651,7 @@ func (t *Tokenizer) parseNumber() *Token {
 		switch next {
 		case CharX, CharXUpper:
 			base = 16
-			subType = "HEX"
+			subType = SubHex
 			prefix = t.input[t.pos : t.pos+2]
 			t.advance(2)
 			for !t.reachedEnd && isHexDigit(rune(t.input[t.pos])) {
@@ -659,7 +660,7 @@ func (t *Tokenizer) parseNumber() *Token {
 			}
 		case CharO, CharOUpper:
 			base = 8
-			subType = "OCTAL"
+			subType = SubOctal
 			prefix = t.input[t.pos : t.pos+2]
 			t.advance(2)
 			for !t.reachedEnd && isOctalDigit(rune(t.input[t.pos])) {
@@ -668,7 +669,7 @@ func (t *Tokenizer) parseNumber() *Token {
 			}
 		case CharB, CharBUpper:
 			base = 2
-			subType = "BINARY"
+			subType = SubBinary
 			prefix = t.input[t.pos : t.pos+2]
 			t.advance(2)
 			for !t.reachedEnd && isBinaryDigit(rune(t.input[t.pos])) {
@@ -734,8 +735,7 @@ func (t *Tokenizer) parseNumber() *Token {
 		_, success := bigInt.SetString(prefix+rawStr, base)
 		if !success {
 			err := NewSyntaxError(ErrorUnexpectedToken, fmt.Sprintf("Invalid BigInt literal: %s", prefix+rawStr), NewPositionRange(start.Start, end.Start))
-			raw := t.input[startPos:t.pos]
-			return NewErrorToken(err, raw, NewPositionRange(start.Start, end.Start))
+			return NewErrorToken(err, NewPositionRange(start.Start, end.Start))
 		}
 		value = bigInt
 	} else if !t.reachedEnd && t.input[t.pos] == CharM {
@@ -746,8 +746,7 @@ func (t *Tokenizer) parseNumber() *Token {
 		val, err := strconv.ParseFloat(rawStr, 64)
 		if err != nil {
 			syntaxErr := NewSyntaxError(ErrorUnexpectedToken, fmt.Sprintf("Invalid decimal literal: %s", rawStr), NewPositionRange(start.Start, end.Start))
-			raw := t.input[startPos:t.pos]
-			return NewErrorToken(syntaxErr, raw, NewPositionRange(start.Start, end.Start))
+			return NewErrorToken(syntaxErr, NewPositionRange(start.Start, end.Start))
 		}
 		value = val
 	} else {
@@ -756,33 +755,29 @@ func (t *Tokenizer) parseNumber() *Token {
 			val, err := strconv.ParseFloat(rawStr, 64)
 			if err != nil {
 				syntaxErr := NewSyntaxError(ErrorUnexpectedToken, fmt.Sprintf("Invalid number: %s", rawStr), NewPositionRange(start.Start, end.Start))
-				raw := t.input[startPos:t.pos]
-				return NewErrorToken(syntaxErr, raw, NewPositionRange(start.Start, end.Start))
+				return NewErrorToken(syntaxErr, NewPositionRange(start.Start, end.Start))
 			}
 			value = val
 		} else {
 			val, err := strconv.ParseInt(rawStr, base, 64)
 			if err != nil {
 				syntaxErr := NewSyntaxError(ErrorUnexpectedToken, fmt.Sprintf("Invalid integer: %s", rawStr), NewPositionRange(start.Start, end.Start))
-				raw := t.input[startPos:t.pos]
-				return NewErrorToken(syntaxErr, raw, NewPositionRange(start.Start, end.Start))
+				return NewErrorToken(syntaxErr, NewPositionRange(start.Start, end.Start))
 			}
 			value = val
 		}
 	}
 
 	end = t.currentPosition()
-	raw := t.input[startPos:t.pos]
-	if subType != "" {
-		return NewTokenWithSubType(tokenType, subType, value, raw, NewPositionRange(start.Start, end.Start))
+	if subType != SubNone {
+		return NewTokenWithSubType(tokenType, subType, value, NewPositionRange(start.Start, end.Start))
 	}
-	return NewToken(tokenType, value, raw, NewPositionRange(start.Start, end.Start))
+	return NewToken(tokenType, value, NewPositionRange(start.Start, end.Start))
 }
 
 // parseLiteralOrOpenString parses a literal value (true, false, null, NaN) or an open string.
 func (t *Tokenizer) parseLiteralOrOpenString() *Token {
 	start := t.currentPosition()
-	startPos := t.pos
 
 	var value strings.Builder
 
@@ -843,23 +838,22 @@ func (t *Tokenizer) parseLiteralOrOpenString() *Token {
 	// }
 
 	end := t.currentPosition()
-	raw := t.input[startPos:t.pos]
 	pos := NewPositionRange(start.Start, end.Start)
 
 	// Check for literals
 	switch str {
 	case LiteralTrue, LiteralT:
-		return NewToken(TokenBoolean, true, raw, pos)
+		return NewToken(TokenBoolean, true, pos)
 	case LiteralFalse, LiteralF:
-		return NewToken(TokenBoolean, false, raw, pos)
+		return NewToken(TokenBoolean, false, pos)
 	case LiteralNull, LiteralN:
-		return NewToken(TokenNull, nil, raw, pos)
+		return NewToken(TokenNull, nil, pos)
 	case LiteralInf:
-		return NewToken(TokenNumber, math.Inf(1), raw, pos)
+		return NewToken(TokenNumber, math.Inf(1), pos)
 	case LiteralNaN:
-		return NewToken(TokenNumber, math.NaN(), raw, pos)
+		return NewToken(TokenNumber, math.NaN(), pos)
 	default:
-		return NewTokenWithSubType(TokenString, "OPEN_STRING", str, raw, pos)
+		return NewTokenWithSubType(TokenString, SubOpenString, str, pos)
 	}
 }
 
@@ -870,7 +864,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 	// Parse ---
 	t.advance(3)
 	end := t.currentPosition()
-	sepToken := NewToken(TokenSectionSep, SectionSeparator, SectionSeparator, NewPositionRange(start.Start, end.Start))
+	sepToken := NewToken(TokenSectionSep, nil, NewPositionRange(start.Start, end.Start))
 	t.tokens = append(t.tokens, *sepToken)
 
 	// Skip horizontal whitespace
@@ -896,7 +890,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 
 		schema := t.input[schemaStart:t.pos]
 		end := t.currentPosition()
-		token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
+		token := NewTokenWithSubType(TokenString, SubSectionSchema, schema, NewPositionRange(start.Start, end.Start))
 		t.tokens = append(t.tokens, *token)
 		t.skipWhitespaces()
 		return
@@ -913,7 +907,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 
 		name := t.input[nameStart:t.pos]
 		end := t.currentPosition()
-		token := NewTokenWithSubType(TokenString, string(TokenSectionName), name, name, NewPositionRange(start.Start, end.Start))
+		token := NewTokenWithSubType(TokenString, SubSectionName, name, NewPositionRange(start.Start, end.Start))
 		t.tokens = append(t.tokens, *token)
 		t.skipWhitespaces()
 
@@ -925,7 +919,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 			// Schema must follow separator
 			if t.reachedEnd || t.input[t.pos] != '$' {
 				err := NewSyntaxError(ErrorSchemaMissing, "Missing schema definition after section separator. Expected schema name starting with '$'.", t.currentPosition())
-				errToken := NewErrorToken(err, "", t.currentPosition())
+				errToken := NewErrorToken(err, t.currentPosition())
 				t.tokens = append(t.tokens, *errToken)
 				return
 			}
@@ -941,7 +935,7 @@ func (t *Tokenizer) parseSectionSeparator() {
 
 			schema := t.input[schemaStart:t.pos]
 			end := t.currentPosition()
-			token := NewTokenWithSubType(TokenString, string(TokenSectionSchema), schema, schema, NewPositionRange(start.Start, end.Start))
+			token := NewTokenWithSubType(TokenString, SubSectionSchema, schema, NewPositionRange(start.Start, end.Start))
 			t.tokens = append(t.tokens, *token)
 			t.skipWhitespaces()
 		}
@@ -950,8 +944,14 @@ func (t *Tokenizer) parseSectionSeparator() {
 
 // mergeTokens merges two tokens into one (used when number is followed by open string).
 func (t *Tokenizer) mergeTokens(first, second *Token, spaces string) *Token {
-	raw := first.Raw + spaces + second.Raw
-	value := first.Raw + spaces + fmt.Sprint(second.Value)
+	// Reconstruct text from positions for first and use second.Value for the second part
+	fStart := first.Position.Start.Pos
+	fEnd := first.Position.End.Pos
+	sStart := second.Position.Start.Pos
+	sEnd := second.Position.End.Pos
+	firstText := t.input[fStart:fEnd]
+	_ = t.input[sStart:sEnd] // second raw not needed explicitly
+	value := firstText + spaces + fmt.Sprint(second.Value)
 	pos := NewPositionRange(first.Position.Start, second.Position.End)
-	return NewTokenWithSubType(TokenString, "OPEN_STRING", value, raw, pos)
+	return NewTokenWithSubType(TokenString, SubOpenString, value, pos)
 }

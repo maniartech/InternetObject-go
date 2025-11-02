@@ -31,12 +31,12 @@ func BenchmarkNewToken(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = NewToken(TokenString, "test", "test", pos)
+		_ = NewToken(TokenString, "test", pos)
 	}
 }
 
 func BenchmarkToken_Clone(b *testing.B) {
-	token := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	token := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -46,7 +46,7 @@ func BenchmarkToken_Clone(b *testing.B) {
 }
 
 func BenchmarkToken_IsStructural(b *testing.B) {
-	token := NewToken(TokenCurlyOpen, nil, "{", NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
+	token := NewToken(TokenCurlyOpen, nil, NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
@@ -55,7 +55,7 @@ func BenchmarkToken_IsStructural(b *testing.B) {
 }
 
 func BenchmarkToken_IsValue(b *testing.B) {
-	token := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	token := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
@@ -64,7 +64,7 @@ func BenchmarkToken_IsValue(b *testing.B) {
 }
 
 func BenchmarkNewTokenNode(b *testing.B) {
-	token := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	token := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -74,11 +74,11 @@ func BenchmarkNewTokenNode(b *testing.B) {
 }
 
 func BenchmarkNewObjectNode(b *testing.B) {
-	openBracket := NewToken(TokenCurlyOpen, nil, "{", NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
-	closeBracket := NewToken(TokenCurlyClose, nil, "}", NewPositionRange(NewPosition(10, 1, 11), NewPosition(11, 1, 12)))
+	openBracket := NewToken(TokenCurlyOpen, nil, NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
+	closeBracket := NewToken(TokenCurlyClose, nil, NewPositionRange(NewPosition(10, 1, 11), NewPosition(11, 1, 12)))
 
-	value := NewTokenNode(NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(2, 1, 3), NewPosition(6, 1, 7))))
-	key := NewToken(TokenString, "name", "name", NewPositionRange(NewPosition(2, 1, 3), NewPosition(6, 1, 7)))
+	value := NewTokenNode(NewToken(TokenString, "test", NewPositionRange(NewPosition(2, 1, 3), NewPosition(6, 1, 7))))
+	key := NewToken(TokenString, "name", NewPositionRange(NewPosition(2, 1, 3), NewPosition(6, 1, 7)))
 	member := NewMemberNode(value, key)
 	members := []*MemberNode{member}
 
@@ -91,10 +91,10 @@ func BenchmarkNewObjectNode(b *testing.B) {
 }
 
 func BenchmarkNewArrayNode(b *testing.B) {
-	openBracket := NewToken(TokenBracketOpen, nil, "[", NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
-	closeBracket := NewToken(TokenBracketClose, nil, "]", NewPositionRange(NewPosition(10, 1, 11), NewPosition(11, 1, 12)))
+	openBracket := NewToken(TokenBracketOpen, nil, NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
+	closeBracket := NewToken(TokenBracketClose, nil, NewPositionRange(NewPosition(10, 1, 11), NewPosition(11, 1, 12)))
 
-	element := NewTokenNode(NewToken(TokenNumber, 42, "42", NewPositionRange(NewPosition(2, 1, 3), NewPosition(4, 1, 5))))
+	element := NewTokenNode(NewToken(TokenNumber, 42, NewPositionRange(NewPosition(2, 1, 3), NewPosition(4, 1, 5))))
 	elements := []Node{element}
 
 	b.ResetTimer()
@@ -106,8 +106,8 @@ func BenchmarkNewArrayNode(b *testing.B) {
 }
 
 func BenchmarkNewMemberNode(b *testing.B) {
-	value := NewTokenNode(NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(5, 1, 6), NewPosition(9, 1, 10))))
-	key := NewToken(TokenString, "name", "name", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	value := NewTokenNode(NewToken(TokenString, "test", NewPositionRange(NewPosition(5, 1, 6), NewPosition(9, 1, 10))))
+	key := NewToken(TokenString, "name", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -118,8 +118,8 @@ func BenchmarkNewMemberNode(b *testing.B) {
 }
 
 func BenchmarkNewCollectionNode(b *testing.B) {
-	child1 := NewTokenNode(NewToken(TokenString, "item1", "item1", NewPositionRange(NewPosition(0, 1, 1), NewPosition(5, 1, 6))))
-	child2 := NewTokenNode(NewToken(TokenString, "item2", "item2", NewPositionRange(NewPosition(6, 1, 7), NewPosition(11, 1, 12))))
+	child1 := NewTokenNode(NewToken(TokenString, "item1", NewPositionRange(NewPosition(0, 1, 1), NewPosition(5, 1, 6))))
+	child2 := NewTokenNode(NewToken(TokenString, "item2", NewPositionRange(NewPosition(6, 1, 7), NewPosition(11, 1, 12))))
 	children := []Node{child1, child2}
 
 	b.ResetTimer()
@@ -132,8 +132,8 @@ func BenchmarkNewCollectionNode(b *testing.B) {
 
 func BenchmarkNewSectionNode(b *testing.B) {
 	child := NewCollectionNode([]Node{})
-	nameToken := NewToken(TokenString, "users", "users", NewPositionRange(NewPosition(0, 1, 1), NewPosition(5, 1, 6)))
-	schemaToken := NewToken(TokenString, "$schema", "$schema", NewPositionRange(NewPosition(7, 1, 8), NewPosition(14, 1, 15)))
+	nameToken := NewToken(TokenString, "users", NewPositionRange(NewPosition(0, 1, 1), NewPosition(5, 1, 6)))
+	schemaToken := NewToken(TokenString, "$schema", NewPositionRange(NewPosition(7, 1, 8), NewPosition(14, 1, 15)))
 
 	b.ResetTimer()
 	b.ReportAllocs()

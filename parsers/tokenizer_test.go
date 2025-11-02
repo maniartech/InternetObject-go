@@ -19,7 +19,7 @@ func TestTokenizer_SimpleString(t *testing.T) {
 
 	token := tokens[0]
 	if token.Type != TokenString {
-		t.Errorf("Expected token type STRING, got %s", token.Type)
+		t.Errorf("Expected token type STRING, got %v", token.Type)
 	}
 
 	if token.Value != "hello world" {
@@ -57,7 +57,7 @@ func TestTokenizer_Numbers(t *testing.T) {
 
 			token := tokens[0]
 			if token.Type != tt.tokenType {
-				t.Errorf("Expected token type %s, got %s", tt.tokenType, token.Type)
+				t.Errorf("Expected token type %v, got %v", tt.tokenType, token.Type)
 			}
 
 			// For floats, compare with tolerance
@@ -105,7 +105,7 @@ func TestTokenizer_Booleans(t *testing.T) {
 
 			token := tokens[0]
 			if token.Type != TokenBoolean {
-				t.Errorf("Expected token type BOOLEAN, got %s", token.Type)
+				t.Errorf("Expected token type BOOLEAN, got %v", token.Type)
 			}
 
 			if token.Value != tt.expected {
@@ -133,7 +133,7 @@ func TestTokenizer_Null(t *testing.T) {
 
 			token := tokens[0]
 			if token.Type != TokenNull {
-				t.Errorf("Expected token type NULL, got %s", token.Type)
+				t.Errorf("Expected token type NULL, got %v", token.Type)
 			}
 
 			if token.Value != nil {
@@ -172,7 +172,7 @@ func TestTokenizer_Symbols(t *testing.T) {
 
 			token := tokens[0]
 			if token.Type != tt.expected {
-				t.Errorf("Expected token type %s, got %s", tt.expected, token.Type)
+				t.Errorf("Expected token type %v, got %v", tt.expected, token.Type)
 			}
 		})
 	}
@@ -207,7 +207,7 @@ func TestTokenizer_SimpleObject(t *testing.T) {
 
 	for i, expected := range expectedTypes {
 		if tokens[i].Type != expected {
-			t.Errorf("Token %d: expected type %s, got %s", i, expected, tokens[i].Type)
+			t.Errorf("Token %d: expected type %v, got %v", i, expected, tokens[i].Type)
 		}
 	}
 }
@@ -239,7 +239,7 @@ func TestTokenizer_Array(t *testing.T) {
 
 	for i, expected := range expectedTypes {
 		if tokens[i].Type != expected {
-			t.Errorf("Token %d: expected type %s, got %s", i, expected, tokens[i].Type)
+			t.Errorf("Token %d: expected type %v, got %v", i, expected, tokens[i].Type)
 		}
 	}
 }
@@ -260,7 +260,7 @@ func TestTokenizer_Comments(t *testing.T) {
 	}
 
 	if tokens[0].Type != TokenString {
-		t.Errorf("Expected STRING token, got %s", tokens[0].Type)
+		t.Errorf("Expected STRING token, got %v", tokens[0].Type)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestTokenizer_SectionSeparator(t *testing.T) {
 	}
 
 	if tokens[0].Type != TokenSectionSep {
-		t.Errorf("Expected SECTION_SEP token, got %s", tokens[0].Type)
+		t.Errorf("Expected SECTION_SEP token, got %v", tokens[0].Type)
 	}
 }
 
@@ -296,11 +296,11 @@ func TestTokenizer_SectionWithName(t *testing.T) {
 	}
 
 	if tokens[0].Type != TokenSectionSep {
-		t.Errorf("Expected SECTION_SEP token, got %s", tokens[0].Type)
+		t.Errorf("Expected SECTION_SEP token, got %v", tokens[0].Type)
 	}
 
-	if tokens[1].SubType != string(TokenSectionName) {
-		t.Errorf("Expected SECTION_NAME subtype, got %s", tokens[1].SubType)
+	if tokens[1].SubType != SubSectionName {
+		t.Errorf("Expected SECTION_NAME subtype, got %v", tokens[1].SubType)
 	}
 
 	if tokens[1].Value != "users" {
@@ -354,11 +354,11 @@ func TestTokenizer_OpenString(t *testing.T) {
 
 	token := tokens[0]
 	if token.Type != TokenString {
-		t.Errorf("Expected STRING token, got %s", token.Type)
+		t.Errorf("Expected STRING token, got %v", token.Type)
 	}
 
-	if token.SubType != "OPEN_STRING" {
-		t.Errorf("Expected OPEN_STRING subtype, got %s", token.SubType)
+	if token.SubType != SubOpenString {
+		t.Errorf("Expected OPEN_STRING subtype, got %v", token.SubType)
 	}
 
 	if token.Value != "hello world" {

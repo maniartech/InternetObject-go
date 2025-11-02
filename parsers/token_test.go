@@ -5,7 +5,7 @@ import (
 )
 
 func TestToken_Clone(t *testing.T) {
-	original := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	original := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	cloned := original.Clone()
 
 	if cloned.Type != original.Type {
@@ -25,12 +25,12 @@ func TestToken_Clone(t *testing.T) {
 
 func TestToken_IsError(t *testing.T) {
 	pos := NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2))
-	errorToken := NewErrorToken(NewSyntaxError(ErrorUnexpectedToken, "test", pos), "x", pos)
+	errorToken := NewErrorToken(NewSyntaxError(ErrorUnexpectedToken, "test", pos), pos)
 	if !errorToken.IsError() {
 		t.Error("IsError() should return true for error token")
 	}
 
-	normalToken := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	normalToken := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	if normalToken.IsError() {
 		t.Error("IsError() should return false for normal token")
 	}
@@ -49,13 +49,13 @@ func TestToken_IsStructural(t *testing.T) {
 	}
 
 	for _, tokenType := range structuralTokens {
-		token := NewToken(tokenType, nil, "", NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
+		token := NewToken(tokenType, nil, NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
 		if !token.IsStructural() {
-			t.Errorf("IsStructural() should return true for %s", tokenType)
+			t.Errorf("IsStructural() should return true for %v", tokenType)
 		}
 	}
 
-	valueToken := NewToken(TokenString, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+	valueToken := NewToken(TokenString, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 	if valueToken.IsStructural() {
 		t.Error("IsStructural() should return false for value tokens")
 	}
@@ -69,18 +69,16 @@ func TestToken_IsValue(t *testing.T) {
 		TokenNull,
 		TokenBinary,
 		TokenDateTime,
-		TokenDate,
-		TokenTime,
 	}
 
 	for _, tokenType := range valueTokens {
-		token := NewToken(tokenType, "test", "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
+		token := NewToken(tokenType, "test", NewPositionRange(NewPosition(0, 1, 1), NewPosition(4, 1, 5)))
 		if !token.IsValue() {
-			t.Errorf("IsValue() should return true for %s", tokenType)
+			t.Errorf("IsValue() should return true for %v", tokenType)
 		}
 	}
 
-	structuralToken := NewToken(TokenCurlyOpen, nil, "", NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
+	structuralToken := NewToken(TokenCurlyOpen, nil, NewPositionRange(NewPosition(0, 1, 1), NewPosition(1, 1, 2)))
 	if structuralToken.IsValue() {
 		t.Error("IsValue() should return false for structural tokens")
 	}
@@ -89,7 +87,7 @@ func TestToken_IsValue(t *testing.T) {
 func TestToken_GetPositions(t *testing.T) {
 	start := NewPosition(0, 1, 1)
 	end := NewPosition(4, 1, 5)
-	token := NewToken(TokenString, "test", "test", NewPositionRange(start, end))
+	token := NewToken(TokenString, "test", NewPositionRange(start, end))
 
 	if token.GetStartPos() != start {
 		t.Errorf("GetStartPos() = %v, want %v", token.GetStartPos(), start)

@@ -87,7 +87,7 @@ func (p *Parser) processDocument() (*DocumentNode, error) {
 		if token.Type != TokenSectionSep {
 			err := NewSyntaxError(
 				ErrorUnexpectedToken,
-				fmt.Sprintf("Expected section separator '---' but found '%s'. Each section must be properly closed before starting a new one.", token.Raw),
+				fmt.Sprintf("Expected section separator '---' but found '%s'. Each section must be properly closed before starting a new one.", p.tokenString(token)),
 				p.currentPosition(),
 			)
 			return nil, err
@@ -157,17 +157,17 @@ func (p *Parser) parseSectionAndSchemaNames() (*Token, *Token) {
 	}
 
 	// Check for section name first
-	if token.Type == TokenString && token.SubType == string(TokenSectionName) {
+	if token.Type == TokenString && token.SubType == SubSectionName {
 		nameToken = token
 		p.advance()
 		token = p.peek()
 
 		// Check for schema reference after name
-		if token != nil && token.Type == TokenString && token.SubType == string(TokenSectionSchema) {
+		if token != nil && token.Type == TokenString && token.SubType == SubSectionSchema {
 			schemaToken = token
 			p.advance()
 		}
-	} else if token.Type == TokenString && token.SubType == string(TokenSectionSchema) {
+	} else if token.Type == TokenString && token.SubType == SubSectionSchema {
 		// Schema without name
 		schemaToken = token
 		p.advance()
@@ -413,7 +413,7 @@ func (p *Parser) parseMember() (*MemberNode, error) {
 		if !isValidKey {
 			return nil, NewSyntaxError(
 				ErrorInvalidKey,
-				fmt.Sprintf("Invalid key '%s'. Object keys must be strings, numbers, booleans, or null.", leftToken.Raw),
+				fmt.Sprintf("Invalid key '%s'. Object keys must be strings, numbers, booleans, or null.", p.tokenString(leftToken)),
 				leftToken.Position,
 			)
 		}
@@ -452,7 +452,7 @@ func (p *Parser) parseValue() (Node, error) {
 	}
 
 	switch token.Type {
-	case TokenString, TokenNumber, TokenBigInt, TokenDecimal, TokenBoolean, TokenNull, TokenDateTime, TokenDate, TokenTime:
+	case TokenString, TokenNumber, TokenBigInt, TokenDecimal, TokenBoolean, TokenNull, TokenDateTime:
 		// Primitive value - create TokenNode and advance
 		node := NewTokenNode(token)
 		p.advance()
@@ -568,9 +568,8 @@ func (p *Parser) pushUndefinedMember(members *[]*MemberNode, currentCommaToken *
 	// Clone the token and change it to undefined
 	valueToken := &Token{
 		Type:     TokenUndefined,
-		SubType:  "",
+		SubType:  SubNone,
 		Value:    nil,
-		Raw:      currentCommaToken.Raw,
 		Position: currentCommaToken.Position,
 	}
 	valueNode := NewTokenNode(valueToken)
@@ -625,10 +624,16 @@ func (p *Parser) tokenString(token *Token) string {
 	if token == nil {
 		return "end of input"
 	}
-	if token.Raw != "" {
-		return token.Raw
+	// For structural tokens, show the symbol/name
+	if token.IsStructural() {
+		return token.Type.String()
 	}
-	return fmt.Sprintf("%v", token.Value)
+	// For value tokens, show the value
+	if token.Value != nil {
+		return fmt.Sprintf("%v", token.Value)
+	}
+	// Fallback to token type name
+	return token.Type.String()
 }
 
 // peek returns the current token without advancing.

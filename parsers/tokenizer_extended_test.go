@@ -13,14 +13,14 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 		name      string
 		input     string
 		tokenType TokenType
-		subType   string
+		subType   TokenSubType
 		checkFunc func(t *testing.T, token *Token)
 	}{
 		{
 			name:      "raw string",
 			input:     `r"hello\nworld"`,
 			tokenType: TokenString,
-			subType:   "RAW_STRING",
+			subType:   SubRawString,
 			checkFunc: func(t *testing.T, token *Token) {
 				if token.Value != `hello\nworld` {
 					t.Errorf("Expected raw string to preserve escapes, got %q", token.Value)
@@ -31,7 +31,7 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 			name:      "byte string",
 			input:     `b"SGVsbG8="`,
 			tokenType: TokenBinary,
-			subType:   "BINARY_STRING",
+			subType:   SubBinaryString,
 			checkFunc: func(t *testing.T, token *Token) {
 				bytes, ok := token.Value.([]byte)
 				if !ok {
@@ -48,7 +48,7 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 			name:      "datetime",
 			input:     `dt"2023-10-29T15:30:00Z"`,
 			tokenType: TokenDateTime,
-			subType:   "DATETIME",
+			subType:   SubDTDateTime,
 			checkFunc: func(t *testing.T, token *Token) {
 				_, ok := token.Value.(time.Time)
 				if !ok {
@@ -60,7 +60,7 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 			name:      "date",
 			input:     `d"2023-10-29"`,
 			tokenType: TokenDateTime,
-			subType:   "DATE",
+			subType:   SubDTDate,
 			checkFunc: func(t *testing.T, token *Token) {
 				_, ok := token.Value.(time.Time)
 				if !ok {
@@ -72,7 +72,7 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 			name:      "time",
 			input:     `t"15:30:00"`,
 			tokenType: TokenDateTime,
-			subType:   "TIME",
+			subType:   SubDTTime,
 			checkFunc: func(t *testing.T, token *Token) {
 				_, ok := token.Value.(time.Time)
 				if !ok {
@@ -96,11 +96,11 @@ func TestTokenizer_AnnotatedStrings(t *testing.T) {
 
 			token := tokens[0]
 			if token.Type != tt.tokenType {
-				t.Errorf("Expected token type %s, got %s", tt.tokenType, token.Type)
+				t.Errorf("Expected token type %v, got %v", tt.tokenType, token.Type)
 			}
 
 			if token.SubType != tt.subType {
-				t.Errorf("Expected subtype %s, got %s", tt.subType, token.SubType)
+				t.Errorf("Expected subtype %v, got %v", tt.subType, token.SubType)
 			}
 
 			if tt.checkFunc != nil {
@@ -369,11 +369,11 @@ func TestTokenizer_NumberMergedWithOpenString(t *testing.T) {
 
 	token := tokens[0]
 	if token.Type != TokenString {
-		t.Errorf("Expected STRING token, got %s", token.Type)
+		t.Errorf("Expected STRING token, got %v", token.Type)
 	}
 
-	if token.SubType != "OPEN_STRING" {
-		t.Errorf("Expected OPEN_STRING subtype, got %s", token.SubType)
+	if token.SubType != SubOpenString {
+		t.Errorf("Expected OPEN_STRING subtype, got %v", token.SubType)
 	}
 }
 
@@ -427,13 +427,13 @@ func TestTokenizer_SectionSchemaVariations(t *testing.T) {
 			foundSchema := false
 
 			for _, token := range tokens[1:] {
-				if token.SubType == string(TokenSectionName) {
+				if token.SubType == SubSectionName {
 					foundName = true
 					if token.Value != tt.sectionName {
 						t.Errorf("Expected section name %q, got %q", tt.sectionName, token.Value)
 					}
 				}
-				if token.SubType == string(TokenSectionSchema) {
+				if token.SubType == SubSectionSchema {
 					foundSchema = true
 					if token.Value != tt.schemaName {
 						t.Errorf("Expected schema name %q, got %q", tt.schemaName, token.Value)

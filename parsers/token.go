@@ -1,83 +1,144 @@
 package parsers
 
-// TokenType represents the type of a token in the Internet Object format.
-// These types match the TypeScript implementation for consistency.
-type TokenType string
+// TokenType represents the type of a token (compact uint8).
+type TokenType uint8
 
-// Token types - matching TypeScript implementation
+// TokenSubType represents optional sub-classification for a token (compact uint8).
+type TokenSubType uint8
+
+// Token types (stable order; do not reorder without updating tests/benchmarks)
 const (
 	// Structural tokens
-	TokenCurlyOpen       TokenType = "CURLY_OPEN"
-	TokenCurlyClose      TokenType = "CURLY_CLOSE"
-	TokenBracketOpen     TokenType = "BRACKET_OPEN"
-	TokenBracketClose    TokenType = "BRACKET_CLOSE"
-	TokenColon           TokenType = "COLON"
-	TokenComma           TokenType = "COMMA"
-	TokenCollectionStart TokenType = "COLLECTION_START"
-	TokenSectionSep      TokenType = "SECTION_SEP"
+	TokenCurlyOpen TokenType = iota
+	TokenCurlyClose
+	TokenBracketOpen
+	TokenBracketClose
+	TokenColon
+	TokenComma
+	TokenCollectionStart
+	TokenSectionSep
 
 	// Value tokens
-	TokenString    TokenType = "STRING"
-	TokenNumber    TokenType = "NUMBER"
-	TokenBigInt    TokenType = "BIGINT"
-	TokenDecimal   TokenType = "DECIMAL"
-	TokenBoolean   TokenType = "BOOLEAN"
-	TokenNull      TokenType = "NULL"
-	TokenUndefined TokenType = "UNDEFINED"
-	TokenBinary    TokenType = "BINARY"
+	TokenString
+	TokenNumber
+	TokenBigInt
+	TokenDecimal
+	TokenBoolean
+	TokenNull
+	TokenUndefined
+	TokenBinary
 
-	// DateTime tokens
-	TokenDateTime TokenType = "DATETIME"
-	TokenDate     TokenType = "DATE"
-	TokenTime     TokenType = "TIME"
-
-	// Section tokens
-	TokenSectionName   TokenType = "SECTION_NAME"
-	TokenSectionSchema TokenType = "SECTION_SCHEMA"
+	// DateTime umbrella (value stored as time.Time)
+	TokenDateTime
 
 	// Special tokens
-	TokenWhitespace TokenType = "WHITESPACE"
-	TokenUnknown    TokenType = "UNKNOWN"
-	TokenError      TokenType = "ERROR"
+	TokenWhitespace
+	TokenUnknown
+	TokenError
 )
+
+// Token subtypes for additional classification when needed
+const (
+	SubNone TokenSubType = iota
+	// Strings
+	SubRegularString
+	SubOpenString
+	SubRawString
+	SubBinaryString
+	// Date/Time variants
+	SubDTDateTime
+	SubDTDate
+	SubDTTime
+	// Number bases
+	SubHex
+	SubOctal
+	SubBinary
+	// Section markers attached to TokenString
+	SubSectionName
+	SubSectionSchema
+)
+
+// String returns a human-readable name for the token type.
+func (tt TokenType) String() string {
+	switch tt {
+	case TokenCurlyOpen:
+		return "{"
+	case TokenCurlyClose:
+		return "}"
+	case TokenBracketOpen:
+		return "["
+	case TokenBracketClose:
+		return "]"
+	case TokenColon:
+		return ":"
+	case TokenComma:
+		return ","
+	case TokenCollectionStart:
+		return "~"
+	case TokenSectionSep:
+		return "---"
+	case TokenString:
+		return "STRING"
+	case TokenNumber:
+		return "NUMBER"
+	case TokenBigInt:
+		return "BIGINT"
+	case TokenDecimal:
+		return "DECIMAL"
+	case TokenBoolean:
+		return "BOOLEAN"
+	case TokenNull:
+		return "NULL"
+	case TokenUndefined:
+		return "UNDEFINED"
+	case TokenBinary:
+		return "BINARY"
+	case TokenDateTime:
+		return "DATETIME"
+	case TokenWhitespace:
+		return "WHITESPACE"
+	case TokenUnknown:
+		return "UNKNOWN"
+	case TokenError:
+		return "ERROR"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 // Token represents a lexical token in the Internet Object format.
 // Tokens are immutable after creation for thread safety.
 type Token struct {
 	Type     TokenType     // Type of the token
-	SubType  string        // Optional subtype (e.g., "RAW_STRING", "HEX", "OPEN_STRING")
+	SubType  TokenSubType  // Optional subtype (e.g., SubRawString, SubHex, SubOpenString)
 	Value    interface{}   // Parsed value of the token
-	Raw      string        // Raw text from source
 	Position PositionRange // Position in source code
 }
 
 // NewToken creates a new token with the specified properties.
-func NewToken(tokenType TokenType, value interface{}, raw string, pos PositionRange) *Token {
+func NewToken(tokenType TokenType, value interface{}, pos PositionRange) *Token {
 	return &Token{
 		Type:     tokenType,
 		Value:    value,
-		Raw:      raw,
 		Position: pos,
 	}
 }
 
 // NewTokenWithSubType creates a new token with a subtype.
-func NewTokenWithSubType(tokenType TokenType, subType string, value interface{}, raw string, pos PositionRange) *Token {
+func NewTokenWithSubType(tokenType TokenType, subType TokenSubType, value interface{}, pos PositionRange) *Token {
 	return &Token{
 		Type:     tokenType,
 		SubType:  subType,
 		Value:    value,
-		Raw:      raw,
 		Position: pos,
 	}
 }
 
 // NewErrorToken creates an error token with error information.
-func NewErrorToken(err error, raw string, pos PositionRange) *Token {
+func NewErrorToken(err error, pos PositionRange) *Token {
 	return &Token{
 		Type:     TokenError,
 		Value:    err,
-		Raw:      raw,
 		Position: pos,
 	}
 }
@@ -89,7 +150,6 @@ func (t *Token) Clone() *Token {
 		Type:     t.Type,
 		SubType:  t.SubType,
 		Value:    t.Value,
-		Raw:      t.Raw,
 		Position: t.Position,
 	}
 }
@@ -114,7 +174,7 @@ func (t *Token) IsStructural() bool {
 func (t *Token) IsValue() bool {
 	switch t.Type {
 	case TokenString, TokenNumber, TokenBigInt, TokenDecimal, TokenBoolean,
-		TokenNull, TokenUndefined, TokenBinary, TokenDateTime, TokenDate, TokenTime:
+		TokenNull, TokenUndefined, TokenBinary, TokenDateTime:
 		return true
 	default:
 		return false
