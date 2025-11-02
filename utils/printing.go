@@ -12,6 +12,6 @@ func PrettyPrint(val interface{}) {
 	if e != nil {
 		log.Panic(e.Error())
 	}
-	fmt.Printf(string(o))
+	fmt.Print(string(o))
 	fmt.Println()
 }

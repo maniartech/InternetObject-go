@@ -162,6 +162,99 @@ func TestZeroParser_MemoryEfficiency(t *testing.T) {
 	}
 }
 
+func TestZeroParser_UnicodeWhitespace(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"U+00A0 non-breaking space", "{\u00A0\"key\":\u00A0\"value\"\u00A0}"},
+		{"U+1680 Ogham space", "{\u1680\"key\":\u1680\"value\"\u1680}"},
+		{"U+2000 en quad", "{\u2000\"key\":\u2000\"value\"\u2000}"},
+		{"U+2001 em quad", "{\u2001\"key\":\u2001\"value\"\u2001}"},
+		{"U+2002 en space", "{\u2002\"key\":\u2002\"value\"\u2002}"},
+		{"U+2003 em space", "{\u2003\"key\":\u2003\"value\"\u2003}"},
+		{"U+2004 three-per-em", "{\u2004\"key\":\u2004\"value\"\u2004}"},
+		{"U+2005 four-per-em", "{\u2005\"key\":\u2005\"value\"\u2005}"},
+		{"U+2006 six-per-em", "{\u2006\"key\":\u2006\"value\"\u2006}"},
+		{"U+2007 figure space", "{\u2007\"key\":\u2007\"value\"\u2007}"},
+		{"U+2008 punctuation", "{\u2008\"key\":\u2008\"value\"\u2008}"},
+		{"U+2009 thin space", "{\u2009\"key\":\u2009\"value\"\u2009}"},
+		{"U+200A hair space", "{\u200A\"key\":\u200A\"value\"\u200A}"},
+		{"U+2028 line separator", "{\u2028\"key\":\u2028\"value\"\u2028}"},
+		{"U+2029 paragraph separator", "{\u2029\"key\":\u2029\"value\"\u2029}"},
+		{"U+202F narrow no-break", "{\u202F\"key\":\u202F\"value\"\u202F}"},
+		{"U+205F medium math", "{\u205F\"key\":\u205F\"value\"\u205F}"},
+		{"U+3000 ideographic", "{\u3000\"key\":\u3000\"value\"\u3000}"},
+		{"U+FEFF BOM", "{\uFEFF\"key\":\uFEFF\"value\"\uFEFF}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewZeroParser(tt.input)
+			rootIdx, err := parser.Parse()
+			if err != nil {
+				t.Fatalf("Parse failed: %v", err)
+			}
+
+			rootNode := parser.nodes[rootIdx]
+			if rootNode.Type != NodeKindObject {
+				t.Errorf("Expected Object node, got type %d", rootNode.Type)
+			}
+
+			if rootNode.ChildCount != 1 {
+				t.Errorf("Expected 1 member, got %d", rootNode.ChildCount)
+			}
+		})
+	}
+}
+
+func TestZeroParser_OpenStringsWithSpaces(t *testing.T) {
+	input := `{street: bond street, city: new york}`
+
+	parser := NewZeroParser(input)
+	rootIdx, err := parser.Parse()
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	rootNode := parser.nodes[rootIdx]
+	if rootNode.Type != NodeKindObject {
+		t.Errorf("Expected Object node, got type %d", rootNode.Type)
+	}
+
+	// Should have 2 members: street and city
+	if rootNode.ChildCount != 2 {
+		t.Errorf("Expected 2 members, got %d", rootNode.ChildCount)
+	}
+
+	// Check first member (street)
+	member1Idx := parser.childIndices[rootNode.ChildStart]
+	member1 := parser.nodes[member1Idx]
+	if member1.Type != NodeKindMember {
+		t.Errorf("Expected Member node for first child, got type %d", member1.Type)
+	}
+
+	keyStr := parser.GetTokenString(member1.TokenIdx)
+	if keyStr != "street" {
+		t.Errorf("Expected key 'street', got '%s'", keyStr)
+	}
+
+	// Check the value
+	valueIdx := parser.childIndices[member1.ChildStart]
+	valueNode := parser.nodes[valueIdx]
+	if valueNode.Type != NodeKindToken {
+		t.Errorf("Expected Token node for value, got type %d", valueNode.Type)
+	}
+
+	valueStr := parser.GetTokenString(valueNode.TokenIdx)
+	if valueStr != "bond street" {
+		t.Errorf("Expected value 'bond street', got '%s'", valueStr)
+	}
+
+	t.Logf("✅ Successfully parsed open string: '%s'", valueStr)
+}
+
 // Benchmark to compare with regular AST
 func BenchmarkZeroParser_Simple(b *testing.B) {
 	input := `{name: "John Doe", age: 30, active: true}`

@@ -1,5 +1,7 @@
 package parsers
 
+import "strings"
+
 // ZeroParser is a zero-allocation Internet Object parser that combines
 // tokenization and AST construction in a single pass. It stores only
 // positions and types, materializing strings/values only on demand.
@@ -212,16 +214,31 @@ func NewZeroParser(input string) *ZeroParser {
 // Parse performs a single-pass parse of the input, creating tokens and AST
 // nodes simultaneously. Returns the root document node index.
 func (p *ZeroParser) Parse() (uint32, error) {
-	// Check if input looks like a document (has sections)
-	// Simple heuristic: if it starts with ---, ~, or #, it's likely a document
-	p.skipWhitespace()
+	// Always parse as document if input contains section separator --- anywhere
+	inputStr := string(p.input)
+	if strings.Contains(inputStr, "---") {
+		docNodeIdx := p.parseDocument()
+		if len(p.errors) > 0 {
+			return docNodeIdx, &p.errors[0]
+		}
+		return docNodeIdx, nil
+	}
 
-	if p.pos < p.len {
-		ch := p.peek()
-		// Check for document markers
-		if (ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) ||
-			ch == charTilde || ch == charHash {
-			// Parse as document
+	// If the first non-whitespace character indicates a document (e.g., section name '~',
+	// schema '$', or collection '#'), parse as a document as well.
+	i := 0
+	for i < p.len {
+		ch := p.input[i]
+		if ch <= charSpace {
+			// Advance row/col tracking is not needed for this lookahead
+			i++
+			continue
+		}
+		break
+	}
+	if i < p.len {
+		ch := p.input[i]
+		if ch == charTilde || ch == charDollar || ch == charHash {
 			docNodeIdx := p.parseDocument()
 			if len(p.errors) > 0 {
 				return docNodeIdx, &p.errors[0]
@@ -230,7 +247,7 @@ func (p *ZeroParser) Parse() (uint32, error) {
 		}
 	}
 
-	// Parse as single value
+	// Otherwise, parse as single value
 	rootIdx := p.parseValue()
 
 	if len(p.errors) > 0 {
@@ -250,7 +267,9 @@ func (p *ZeroParser) Parse() (uint32, error) {
 // parseDocument parses the entire document structure.
 // Follows the logic from TypeScript ASTParser.processDocument()
 func (p *ZeroParser) parseDocument() uint32 {
-	p.childBuffer = p.childBuffer[:0] // Reset child buffer
+	// Use a dedicated buffer to collect section indices to avoid clobbering
+	// by other parsers that reuse p.childBuffer (e.g., objects/arrays)
+	sections := make([]uint32, 0, 4)
 
 	var headerIdx uint32 = 0xFFFFFFFF // Use max uint32 as "null"
 	first := true
@@ -278,7 +297,7 @@ func (p *ZeroParser) parseDocument() uint32 {
 			headerIdx = sectionIdx
 			first = false
 		} else {
-			p.childBuffer = append(p.childBuffer, sectionIdx)
+			sections = append(sections, sectionIdx)
 		}
 
 		// Skip whitespace after section
@@ -294,19 +313,22 @@ func (p *ZeroParser) parseDocument() uint32 {
 			continue
 		}
 
-		// If not first and no section separator and not at end, it's an error
+		// If not first and no section separator and not at end, allow trailing whitespace/newlines
 		if !first && p.pos < p.len {
-			// Only error if there's actual content remaining
 			p.skipWhitespace()
-			if p.pos < p.len {
-				p.addError("Expected section separator '---' or end of document")
-			}
+			// Never error if only whitespace/newlines remain
+			// If any non-whitespace remains, just break (do not error)
 			break
 		}
 	}
 
-	// Create document node
-	return p.createDocumentNode(headerIdx, p.childBuffer)
+	// Always include header section as first child if present
+	sectionIndices := make([]uint32, 0, len(sections)+1)
+	if headerIdx != 0xFFFFFFFF {
+		sectionIndices = append(sectionIndices, headerIdx)
+	}
+	sectionIndices = append(sectionIndices, sections...)
+	return p.createDocumentNode(0xFFFFFFFF, sectionIndices)
 }
 
 // parseSection parses a section with optional name and schema
@@ -434,45 +456,21 @@ func (p *ZeroParser) parseSectionContent() uint32 {
 	if ch == charBracketOpen {
 		return p.parseArray()
 	}
-
-	// Check if it looks like an open object (identifier followed by colon)
-	// This is common in sections
-	if isIdentifierStart(ch) {
-		// Look ahead for colon to determine if it's an open object
-		savedPos := p.pos
-		savedRow := p.row
-		savedCol := p.col
-
-		// Skip identifier
-		for p.pos < p.len && isIdentifierChar(p.peek()) {
-			p.advance(1)
-		}
-		p.skipWhitespace()
-
-		if p.peek() == charColon {
-			// It's an open object - reset and parse it
-			p.pos = savedPos
-			p.row = savedRow
-			p.col = savedCol
-			return p.parseObject(true)
-		}
-
-		// Not an open object, reset and parse as value
-		p.pos = savedPos
-		p.row = savedRow
-		p.col = savedCol
+	// If we hit a section separator immediately, section content is empty
+	if ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus {
+		return 0xFFFFFFFF
 	}
 
-	// Otherwise parse a value
-	return p.parseValue()
+	// For sections, default to parsing an open object (comma-separated values/members)
+	return p.parseObject(true)
 }
 
 // parseCollection parses a collection (starts with #)
 func (p *ZeroParser) parseCollection() uint32 {
 	p.advance(1) // Skip #
 	p.skipWhitespace()
-
-	p.childBuffer = p.childBuffer[:0]
+	// Use local slice to avoid aliasing with nested structures
+	items := make([]uint32, 0, 4)
 
 	// Parse items until we hit section separator or end
 	for p.pos < p.len {
@@ -485,7 +483,7 @@ func (p *ZeroParser) parseCollection() uint32 {
 
 		// Parse one value
 		itemIdx := p.parseValue()
-		p.childBuffer = append(p.childBuffer, itemIdx)
+		items = append(items, itemIdx)
 
 		p.skipWhitespace()
 
@@ -496,7 +494,7 @@ func (p *ZeroParser) parseCollection() uint32 {
 		}
 	}
 
-	return p.createCollectionNode(p.childBuffer)
+	return p.createCollectionNode(items)
 }
 
 // parseValue parses any value (object, array, or scalar)
@@ -523,15 +521,54 @@ func (p *ZeroParser) parseValue() uint32 {
 	default:
 		// Try to parse as number, boolean, null, or unquoted string
 		if isDigitByte(ch) || ch == charMinus || ch == charPlus {
+			// Look ahead to see if this is actually an open string like "123 Main St"
+			// Scan until a terminator { } [ ] : , " ' ~ # or newline/carriage return
+			nonNumeric := false
+			i := p.pos
+			for i < p.len {
+				c := p.input[i]
+				// Terminators for unquoted/open string
+				if c == charCurlyOpen || c == charCurlyClose || c == charBracketOpen || c == charBracketClose ||
+					c == charColon || c == charComma || c == charDoubleQuote || c == charSingleQuote ||
+					c == charTilde || c == charHash || c == charNewline || c == charCarriageRet {
+					break
+				}
+				// If we see any letter or underscore, it's not a pure number
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == ' ' {
+					nonNumeric = true
+					break
+				}
+				i++
+			}
+			if nonNumeric {
+				return p.parseUnquotedString()
+			}
 			return p.parseNumber()
 		}
-		if ch == 't' || ch == 'f' || ch == 'T' || ch == 'F' {
-			return p.parseBoolean()
+
+		// Check for boolean literals (true/false) - must match exactly
+		if (ch == 't' || ch == 'T') && p.pos+4 <= p.len {
+			word := string(p.input[p.pos : p.pos+4])
+			if word == "true" || word == "True" || word == "TRUE" {
+				return p.parseBoolean()
+			}
 		}
-		if ch == 'n' || ch == 'N' {
-			return p.parseNull()
+		if (ch == 'f' || ch == 'F') && p.pos+5 <= p.len {
+			word := string(p.input[p.pos : p.pos+5])
+			if word == "false" || word == "False" || word == "FALSE" {
+				return p.parseBoolean()
+			}
 		}
-		// Check for open object (no braces)
+
+		// Check for null literal - must match exactly
+		if (ch == 'n' || ch == 'N') && p.pos+4 <= p.len {
+			word := string(p.input[p.pos : p.pos+4])
+			if word == "null" || word == "Null" || word == "NULL" {
+				return p.parseNull()
+			}
+		}
+
+		// Check for open object (no braces) or open string
 		if isIdentifierStart(ch) {
 			return p.parseOpenObjectOrString()
 		}
@@ -546,7 +583,8 @@ func (p *ZeroParser) parseObject(isOpen bool) uint32 {
 	}
 
 	p.skipWhitespace()
-	p.childBuffer = p.childBuffer[:0]
+	// Use local slice to avoid aliasing with nested parser buffers
+	members := make([]uint32, 0, 4)
 
 	// Check for empty object
 	if !isOpen && p.peek() == charCurlyClose {
@@ -569,7 +607,7 @@ func (p *ZeroParser) parseObject(isOpen bool) uint32 {
 		if memberIdx == 0xFFFFFFFF {
 			break
 		}
-		p.childBuffer = append(p.childBuffer, memberIdx)
+		members = append(members, memberIdx)
 
 		p.skipWhitespace()
 
@@ -598,10 +636,10 @@ func (p *ZeroParser) parseObject(isOpen bool) uint32 {
 		}
 	}
 
-	return p.createObjectNode(p.childBuffer, isOpen)
+	return p.createObjectNode(members, isOpen)
 }
 
-// parseMember parses an object member (key: value)
+// parseMember parses an object member (key: value) or value without key
 func (p *ZeroParser) parseMember() uint32 {
 	p.skipWhitespace()
 
@@ -609,7 +647,13 @@ func (p *ZeroParser) parseMember() uint32 {
 		return 0xFFFFFFFF
 	}
 
-	// Parse key
+	// Look ahead to see if there's a colon after the first token
+	// This determines if it's a key:value pair or just a value
+	savedPos := p.pos
+	savedRow := p.row
+	savedCol := p.col
+
+	// Try to parse the first token/value
 	keyTokenIdx := p.parseMemberKey()
 	if keyTokenIdx == 0xFFFFFFFF {
 		return 0xFFFFFFFF
@@ -617,18 +661,26 @@ func (p *ZeroParser) parseMember() uint32 {
 
 	p.skipWhitespace()
 
-	// Expect colon
-	if p.peek() != charColon {
-		p.addError("Expected ':' after object key")
-		return 0xFFFFFFFF
+	// Check if there's a colon after the key
+	if p.peek() == charColon {
+		// It's a key:value pair
+		p.advance(1) // consume colon
+		p.skipWhitespace()
+
+		// Parse value
+		valueIdx := p.parseValue()
+
+		return p.createMemberNode(keyTokenIdx, valueIdx)
 	}
-	p.advance(1)
-	p.skipWhitespace()
 
-	// Parse value
+	// No colon - it's a value without a key
+	// Reset and parse as a value
+	p.pos = savedPos
+	p.row = savedRow
+	p.col = savedCol
+
 	valueIdx := p.parseValue()
-
-	return p.createMemberNode(keyTokenIdx, valueIdx)
+	return p.createMemberNode(0xFFFFFFFF, valueIdx)
 }
 
 // parseMemberKey parses an object key (quoted or unquoted)
@@ -676,8 +728,8 @@ func (p *ZeroParser) parseMemberKey() uint32 {
 func (p *ZeroParser) parseArray() uint32 {
 	p.advance(1) // Skip [
 	p.skipWhitespace()
-
-	p.childBuffer = p.childBuffer[:0]
+	// Use local slice to avoid aliasing with object/collection buffers
+	elements := make([]uint32, 0, 4)
 
 	// Check for empty array
 	if p.peek() == charBracketClose {
@@ -700,7 +752,7 @@ func (p *ZeroParser) parseArray() uint32 {
 		if elemIdx == 0xFFFFFFFF {
 			break
 		}
-		p.childBuffer = append(p.childBuffer, elemIdx)
+		elements = append(elements, elemIdx)
 
 		p.skipWhitespace()
 
@@ -717,7 +769,7 @@ func (p *ZeroParser) parseArray() uint32 {
 		}
 	}
 
-	return p.createArrayNode(p.childBuffer)
+	return p.createArrayNode(elements)
 }
 
 // parseQuotedString parses a double-quoted string "..."
@@ -1018,20 +1070,31 @@ func (p *ZeroParser) parseOpenObjectOrString() uint32 {
 	savedRow := p.row
 	savedCol := p.col
 
-	// Scan forward looking for colon
+	// Scan forward looking for colon, checking terminators
 	for p.pos < p.len {
 		ch := p.peek()
+
+		// Found colon - it's an open object
 		if ch == charColon {
-			// It's an open object
 			p.pos = savedPos
 			p.row = savedRow
 			p.col = savedCol
 			return p.parseObject(true)
 		}
-		if ch == charComma || ch == charNewline || ch == charBracketClose || ch == charCurlyClose {
-			// It's an unquoted string
+
+		// Hit a terminator (but not colon) - it's an open string
+		// Treat braces, brackets, comma, quotes, tildes, hash, newline, carriage return,
+		// or a section separator (---) as terminators.
+		if ch == charCurlyOpen || ch == charCurlyClose ||
+			ch == charBracketOpen || ch == charBracketClose ||
+			ch == charComma ||
+			ch == charDoubleQuote || ch == charSingleQuote ||
+			ch == charTilde || ch == charHash ||
+			ch == charNewline || ch == charCarriageRet ||
+			(ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) {
 			break
 		}
+
 		p.advance(1)
 	}
 
@@ -1043,30 +1106,62 @@ func (p *ZeroParser) parseOpenObjectOrString() uint32 {
 	return p.parseUnquotedString()
 }
 
-// parseUnquotedString parses an unquoted string
+// parseUnquotedString parses an open/unquotedstring
+// Open strings can contain spaces and continue until they hit a terminator:
+// terminators: { } [ ] : , " ' ~ #
 func (p *ZeroParser) parseUnquotedString() uint32 {
 	start := p.pos
 	startRow := p.row
 	startCol := p.col
 
+	var flags uint8
+
 	for p.pos < p.len {
 		ch := p.peek()
-		if ch == charComma || ch == charNewline || ch == charCarriageRet ||
-			ch == charBracketClose || ch == charCurlyClose {
+
+		// Check for terminators (special symbols that end open strings)
+		// Include newline/carriage return and a section separator (---).
+		if ch == charCurlyOpen || ch == charCurlyClose ||
+			ch == charBracketOpen || ch == charBracketClose ||
+			ch == charColon || ch == charComma ||
+			ch == charDoubleQuote || ch == charSingleQuote ||
+			ch == charTilde || ch == charHash ||
+			ch == charNewline || ch == charCarriageRet ||
+			(ch == charMinus && p.peekAhead(1) == charMinus && p.peekAhead(2) == charMinus) {
 			break
 		}
+
+		// Check for escape sequences
+		if ch == charBackslash {
+			flags |= FlagHasEscapes
+			p.advance(2) // Skip backslash and escape char (simplified)
+			continue
+		}
+
+		if ch >= 0x80 {
+			flags |= FlagNeedsNormalize
+		}
+
+		// Include everything (including whitespace) until we hit a terminator
 		p.advance(1)
+	}
+
+	// Trim trailing whitespace by walking backwards
+	end := p.pos
+	for end > start && (p.input[end-1] == charSpace || p.input[end-1] == charTab ||
+		p.input[end-1] == charNewline || p.input[end-1] == charCarriageRet) {
+		end--
 	}
 
 	tokenIdx := uint32(p.tokenCount)
 	p.tokens = append(p.tokens, ZeroToken{
 		Type:    TokString,
-		SubType: SubTypeRegularString,
+		SubType: SubTypeOpenString,
 		Start:   uint32(start),
-		End:     uint32(p.pos),
+		End:     uint32(end),
 		Row:     uint16(startRow),
 		Col:     uint16(startCol),
-		Flags:   0,
+		Flags:   flags,
 	})
 	p.tokenCount++
 
@@ -1076,33 +1171,131 @@ func (p *ZeroParser) parseUnquotedString() uint32 {
 // Inline scanner methods (no separate tokenizer!)
 
 // skipWhitespace advances past whitespace characters
+// Supports all Unicode whitespace (matches TypeScript isWhitespace spec)
 //
 //go:inline
 func (p *ZeroParser) skipWhitespace() {
 	for p.pos < p.len {
 		ch := p.input[p.pos]
 
-		// Fast path for ASCII whitespace
+		// Fast path: ASCII whitespace and control characters (U+0000 to U+0020)
 		if ch <= charSpace {
-			if ch == charSpace || ch == charTab || ch == charNewline || ch == charCarriageRet {
-				if ch == charNewline {
-					p.row++
-					p.col = 1
-				} else {
-					p.col++
-				}
-				p.pos++
-				continue
+			if ch == charNewline {
+				p.row++
+				p.col = 1
+			} else {
+				p.col++
 			}
+			p.pos++
+			continue
 		}
 
-		// Check for Unicode whitespace (using lessons from fast_parser_bytes)
-		if ch >= 0xC2 { // Potential multi-byte whitespace
-			// TODO: Add Unicode whitespace support
+		// Fast path: ASCII range (U+0021 to U+007F) - none are whitespace
+		if ch < 0x80 {
+			break
 		}
 
-		break
+		// Fast rejection: Check UTF-8 first byte ranges for potential whitespace
+		// Only these UTF-8 first bytes can be Unicode whitespace:
+		// 0xC2 (U+0080-U+00BF, includes U+00A0)
+		// 0xE1 (U+1680)
+		// 0xE2 (U+2000-U+2FFF, includes U+2000-U+200A, U+2028, U+2029, U+202F, U+205F)
+		// 0xE3 (U+3000-U+3FFF, includes U+3000)
+		// 0xEF (U+F000-U+FFFF, includes U+FEFF)
+		if ch != 0xC2 && ch != 0xE1 && ch != 0xE2 && ch != 0xE3 && ch != 0xEF {
+			// Not a potential Unicode whitespace - break immediately without decoding
+			break
+		}
+
+		// Only decode if it might be Unicode whitespace
+		r, size := p.decodeRune()
+		if size == 0 {
+			break
+		}
+
+		if p.isUnicodeWhitespace(r) {
+			// Advance position and update row/col
+			for i := 0; i < size; i++ {
+				p.col++
+			}
+			p.pos += size
+		} else {
+			break
+		}
 	}
+}
+
+// decodeRune decodes a UTF-8 rune at current position
+func (p *ZeroParser) decodeRune() (rune, int) {
+	if p.pos >= p.len {
+		return 0, 0
+	}
+
+	ch := p.input[p.pos]
+
+	// 1-byte ASCII
+	if ch < 0x80 {
+		return rune(ch), 1
+	}
+
+	// 2-byte sequence
+	if ch < 0xE0 {
+		if p.pos+1 >= p.len {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x1F) << 6) | uint32(p.input[p.pos+1]&0x3F)), 2
+	}
+
+	// 3-byte sequence
+	if ch < 0xF0 {
+		if p.pos+2 >= p.len {
+			return 0, 0
+		}
+		return rune((uint32(ch&0x0F) << 12) |
+			(uint32(p.input[p.pos+1]&0x3F) << 6) |
+			uint32(p.input[p.pos+2]&0x3F)), 3
+	}
+
+	// 4-byte sequence
+	if p.pos+3 >= p.len {
+		return 0, 0
+	}
+	return rune((uint32(ch&0x07) << 18) |
+		(uint32(p.input[p.pos+1]&0x3F) << 12) |
+		(uint32(p.input[p.pos+2]&0x3F) << 6) |
+		uint32(p.input[p.pos+3]&0x3F)), 4
+}
+
+// isUnicodeWhitespace checks if a rune is Unicode whitespace (matches TypeScript spec)
+func (p *ZeroParser) isUnicodeWhitespace(r rune) bool {
+	// Fast path: Extended ASCII range (U+0021 to U+00FF) - only U+00A0 is whitespace
+	if r <= 0xFF {
+		return r == 0x00A0
+	}
+
+	// Fast path: Anything above U+FEFF is never whitespace
+	if r > 0xFEFF {
+		return false
+	}
+
+	// Fast path: Unicode range U+2000-U+200A (various em/en spaces)
+	if r >= 0x2000 && r <= 0x200A {
+		return true
+	}
+
+	// Lookup table for remaining Unicode whitespace characters
+	switch r {
+	case 0x1680, // Ogham space mark
+		0x2028, // Line separator
+		0x2029, // Paragraph separator
+		0x202F, // Narrow no-break space
+		0x205F, // Medium mathematical space
+		0x3000, // Ideographic space
+		0xFEFF: // BOM/Zero width no-break space
+		return true
+	}
+
+	return false
 }
 
 // peek returns the current byte without advancing
@@ -1372,6 +1565,48 @@ func (p *ZeroParser) GetTokenString(tokenIdx uint32) string {
 	}
 	tok := p.tokens[tokenIdx]
 	return string(p.input[tok.Start:tok.End])
+}
+
+// Accessor methods for inspecting the parser state
+
+// GetTokenCount returns the number of tokens created
+func (p *ZeroParser) GetTokenCount() int {
+	return p.tokenCount
+}
+
+// GetNodeCount returns the number of nodes created
+func (p *ZeroParser) GetNodeCount() int {
+	return p.nodeCount
+}
+
+// GetToken returns a token by index
+func (p *ZeroParser) GetToken(tokenIdx uint32) ZeroToken {
+	if int(tokenIdx) >= p.tokenCount {
+		return ZeroToken{}
+	}
+	return p.tokens[tokenIdx]
+}
+
+// GetNode returns a node by index
+func (p *ZeroParser) GetNode(nodeIdx uint32) ZeroNode {
+	if int(nodeIdx) >= p.nodeCount {
+		return ZeroNode{}
+	}
+	return p.nodes[nodeIdx]
+}
+
+// GetNodeChildren returns the child node indices for a node
+func (p *ZeroParser) GetNodeChildren(nodeIdx uint32) []uint32 {
+	if int(nodeIdx) >= p.nodeCount {
+		return nil
+	}
+	node := p.nodes[nodeIdx]
+	if node.ChildCount == 0 {
+		return nil
+	}
+	start := node.ChildStart
+	end := start + uint32(node.ChildCount)
+	return p.childIndices[start:end]
 }
 
 // GetTokenBytes returns a zero-copy byte slice reference to the token's data.
