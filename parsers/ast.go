@@ -32,11 +32,21 @@ type DocumentNode struct {
 	BaseNode
 	Header   *SectionNode   // Optional header section
 	Sections []*SectionNode // Data sections
+	errors   []error        // Accumulated errors during parsing (unexported)
 }
 
 // NodeType returns the node type.
 func (n *DocumentNode) NodeType() string {
 	return "DocumentNode"
+}
+
+// GetErrors returns all errors accumulated during parsing.
+// This enables IDEs and tools to show all diagnostics in one pass.
+func (n *DocumentNode) GetErrors() []error {
+	if n == nil {
+		return nil
+	}
+	return n.errors
 }
 
 // SectionNode represents a section in the document.
@@ -173,7 +183,7 @@ func (n *ErrorNode) NodeType() string {
 }
 
 // NewDocumentNode creates a new document node.
-func NewDocumentNode(header *SectionNode, sections []*SectionNode) *DocumentNode {
+func NewDocumentNode(header *SectionNode, sections []*SectionNode, errors []error) *DocumentNode {
 	var start, end Position
 
 	if header != nil {
@@ -192,6 +202,7 @@ func NewDocumentNode(header *SectionNode, sections []*SectionNode) *DocumentNode
 		BaseNode: BaseNode{Position: NewPositionRange(start, end)},
 		Header:   header,
 		Sections: sections,
+		errors:   errors,
 	}
 }
 
