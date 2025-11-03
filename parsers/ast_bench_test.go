@@ -153,7 +153,7 @@ func BenchmarkNewDocumentNode(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = NewDocumentNode(nil, sections)
+		_ = NewDocumentNode(nil, sections, nil)
 	}
 }
 

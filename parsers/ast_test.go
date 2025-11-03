@@ -28,7 +28,7 @@ func TestDocumentNode(t *testing.T) {
 		BaseNode: BaseNode{Position: NewPositionRange(NewPosition(6, 2, 1), NewPosition(10, 2, 5))},
 	}
 
-	doc := NewDocumentNode(header, []*SectionNode{section})
+	doc := NewDocumentNode(header, []*SectionNode{section}, nil)
 
 	if doc.NodeType() != "DocumentNode" {
 		t.Errorf("NodeType() = %v, want DocumentNode", doc.NodeType())

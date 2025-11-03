@@ -10,6 +10,7 @@ type Parser struct {
 	tokens       []Token         // Tokens produced by the tokenizer
 	current      int             // Current token index
 	sectionNames map[string]bool // Track section names to detect duplicates
+	errors       []error         // Accumulated errors during parsing
 }
 
 // NewParser creates a new parser from a token stream.
@@ -18,6 +19,7 @@ func NewParser(tokens []Token) *Parser {
 		tokens:       tokens,
 		current:      0,
 		sectionNames: make(map[string]bool),
+		errors:       make([]error, 0),
 	}
 }
 
@@ -42,10 +44,12 @@ func ParseString(input string) (*DocumentNode, error) {
 
 // processDocument parses the entire document structure.
 // Returns a DocumentNode with optional header and sections.
+// Implements document-level error recovery: accumulates errors, always returns partial document.
 func (p *Parser) processDocument() (*DocumentNode, error) {
 	// Pre-allocate with reasonable capacity to reduce allocations
 	sections := make([]*SectionNode, 0, 4)
 	var header *SectionNode
+	var lastErr error
 	first := true
 
 	for {
@@ -56,10 +60,11 @@ func (p *Parser) processDocument() (*DocumentNode, error) {
 			first = false
 		}
 
-		// Parse the section
+		// Parse the section - keep section even if there's an error
 		section, err := p.processSection(first)
 		if err != nil {
-			return nil, err
+			lastErr = err // Store for backward compatibility
+			// Don't add here - errors are already accumulated in lower-level functions
 		}
 
 		token = p.peek()
@@ -90,19 +95,26 @@ func (p *Parser) processDocument() (*DocumentNode, error) {
 				fmt.Sprintf("Expected section separator '---' but found '%s'. Each section must be properly closed before starting a new one.", p.tokenString(token)),
 				p.currentPosition(),
 			)
-			return nil, err
+			// Store error and return partial document
+			lastErr = err
+			// Don't add here - this is a fatal document-level error that stops parsing
+			p.errors = append(p.errors, err)
+			break
 		}
 
 		// Move to next token after separator
 		p.advance()
 	}
 
-	return NewDocumentNode(header, sections), nil
+	return NewDocumentNode(header, sections, p.errors), lastErr
 }
 
 // processSection parses a single section.
 // first indicates if this is the first section (potential header).
+// Implements section-level error recovery: uses defaults for metadata errors, continues parsing content.
 func (p *Parser) processSection(first bool) (*SectionNode, error) {
+	var lastErr error
+
 	token := p.peek()
 
 	// Skip section separator if present
@@ -124,13 +136,35 @@ func (p *Parser) processSection(first bool) (*SectionNode, error) {
 		}
 	}
 
-	// Check for duplicate section names
-	if name != "" && p.sectionNames[name] {
-		return nil, NewSyntaxError(
+	// Handle duplicate section names - auto-rename instead of failing
+	originalName := name
+	if name != "" && name != "unnamed" && p.sectionNames[name] {
+		err := NewSyntaxError(
 			ErrorDuplicateSection,
 			fmt.Sprintf("Duplicate section name '%s'. Each section must have a unique name within the document.", name),
 			p.currentPosition(),
 		)
+		lastErr = err
+		p.errors = append(p.errors, err) // Accumulate duplicate section error
+		// Auto-rename: users -> users_2, users_3, etc.
+		suffix := 2
+		for {
+			newName := fmt.Sprintf("%s_%d", originalName, suffix)
+			if !p.sectionNames[newName] {
+				name = newName
+				break
+			}
+			suffix++
+		}
+		// Create a new token with the renamed value
+		if nameToken != nil {
+			nameToken = &Token{
+				Type:     nameToken.Type,
+				SubType:  nameToken.SubType,
+				Value:    name, // Use the renamed value
+				Position: nameToken.Position,
+			}
+		}
 	}
 
 	// Register section name (skip for first/header section with default name)
@@ -138,12 +172,16 @@ func (p *Parser) processSection(first bool) (*SectionNode, error) {
 		p.sectionNames[name] = true
 	}
 
-	// Parse section content - if error, still create section node but return error
+	// Parse section content - always attempt even with metadata errors
 	content, err := p.parseSectionContent()
+	if err != nil {
+		lastErr = err // Content error overrides metadata error (more critical)
+		// Don't add here - errors are accumulated in processCollection
+	}
 
-	// Always create section node even if there's an error
+	// Always create section node even if there are errors
 	section := NewSectionNode(content, nameToken, schemaToken)
-	return section, err
+	return section, lastErr
 }
 
 // parseSectionAndSchemaNames extracts section name and schema reference.
@@ -216,6 +254,7 @@ func (p *Parser) processCollection() (*CollectionNode, error) {
 		obj, err := p.processObject(true)
 		if err != nil {
 			lastErr = err
+			p.errors = append(p.errors, err) // Accumulate collection item error
 			// Create error node and continue
 			errorNode := NewErrorNode(err, p.currentPosition())
 			children = append(children, errorNode)
