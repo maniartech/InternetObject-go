@@ -29,7 +29,9 @@ import (
 // name, and variables.
 type Defs interface {
 	SchemaOf(name string) (*Schema, *errs.Error)
-	Var(name string) (any, bool)
+	// Var resolves a variable by sigil-less name; the error is
+	// undefined-variable for a missing one, invalid-definition for a cycle.
+	Var(name string) (any, *errs.Error)
 }
 
 // absent marks a member that legitimately produced no value (optional, no
@@ -74,7 +76,10 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 
 	defer func() {
 		if r := recover(); r != nil {
-			f := r.(valFail)
+			f, ok := r.(valFail)
+			if !ok {
+				panic(r)
+			}
 			fatal = &f.err
 			out = nil
 		}
@@ -85,7 +90,10 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 	try := func(name string, f func() any) {
 		defer func() {
 			if r := recover(); r != nil {
-				f := r.(valFail)
+				f, ok := r.(valFail)
+				if !ok {
+					panic(r)
+				}
 				acc = append(acc, f.err)
 				processed[name] = true
 			}
@@ -103,7 +111,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 	// consumed the whole record already and must not read it twice.
 	fillMissing := func(lookup bool) {
 		for _, name := range s.Names {
-			if name == "*" || processed[name] {
+			if (name == "*" && isWildcardDef(s)) || processed[name] {
 				continue
 			}
 			md := s.Defs[name]
@@ -138,7 +146,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 	positional := true
 	for ; i < len(s.Names); i++ {
 		name := s.Names[i]
-		if name == "*" {
+		if name == "*" && isWildcardDef(s) {
 			break // the wildcard is openness, not a member
 		}
 		md := s.Defs[name]
@@ -147,6 +155,14 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			if !m.Positional {
 				positional = false
 				break
+			}
+			if m.Absent {
+				// an empty comma slot: the member holds its position, absent
+				if md.Optional && !md.HasDefault {
+					continue
+				}
+				try(name, func() any { return validateMember(nil, false, md, defs) })
+				continue
 			}
 			try(name, func() any { return validateMember(m.Value, true, md, defs) })
 		} else {
@@ -167,6 +183,9 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			if !m.Positional {
 				break
 			}
+			if m.Absent {
+				continue // a trailing hole carries no information
+			}
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
 			}
@@ -185,7 +204,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			vfail(errs.DuplicateMember)
 		}
 		md := s.Defs[name]
-		if md == nil && name != "*" {
+		if md == nil {
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
 			}
@@ -206,6 +225,13 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 
 	fillMissing(true)
 	return assemble(s, slots, extras), acc, nil
+}
+
+// isWildcardDef reports whether the "*" entry in Names is the typed-open
+// wildcard (its def IS s.Open) rather than a literal quoted "*" member.
+func isWildcardDef(s *Schema) bool {
+	o, ok := s.Open.(*MemberDef)
+	return ok && o == s.Defs["*"]
 }
 
 // assemble builds the validated object: declared members in schema order,
@@ -243,9 +269,9 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 	// Resolution: an @-string is a variable reference (the reference resolves
 	// these before every other check).
 	if s, ok := val.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
-		v, ok := defs.Var(s[1:])
-		if !ok {
-			vfail(errs.UndefinedVariable)
+		v, verr := defs.Var(s[1:])
+		if verr != nil {
+			panic(valFail{*verr})
 		}
 		val = v
 	}
@@ -330,7 +356,10 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 // success instead of failing.
 func tryAlternative(val any, md *MemberDef, defs Defs) (v any, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			if _, isFail := r.(valFail); !isFail {
+				panic(r)
+			}
 			v, ok = nil, false
 		}
 	}()
@@ -341,10 +370,11 @@ func tryAlternative(val any, md *MemberDef, defs Defs) (v any, ok bool) {
 // or default may name a variable).
 func resolveRef(v any, defs Defs) any {
 	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
-		if r, ok := defs.Var(s[1:]); ok {
-			return r
+		r, verr := defs.Var(s[1:])
+		if verr != nil {
+			panic(valFail{*verr})
 		}
-		vfail(errs.UndefinedVariable)
+		return r
 	}
 	return v
 }

@@ -37,17 +37,28 @@ func Equal(a, b any) bool {
 		}
 		return x == y
 	case string:
+		if y, ok := b.(Decimal); ok {
+			return y.String() == x // the corpus's neutral spelling of a decimal
+		}
 		y, ok := b.(string)
 		return ok && x == y
 	case *big.Int:
 		y, ok := b.(*big.Int)
 		return ok && x.Cmp(y) == 0
 	case Decimal:
+		if y, ok := b.(string); ok {
+			return x.String() == y // the corpus's neutral spelling of a decimal
+		}
 		y, ok := b.(Decimal)
 		return ok && x.Scale == y.Scale && x.Coef.Cmp(y.Coef) == 0
 	case []byte:
-		y, ok := b.([]byte)
-		return ok && bytes.Equal(x, y)
+		if y, ok := b.([]byte); ok {
+			return bytes.Equal(x, y)
+		}
+		if y, ok := b.([]any); ok {
+			return bytesEqualNumbers(x, y)
+		}
+		return false
 	case Temporal:
 		y, ok := b.(Temporal)
 		return ok && x.T.UnixMilli() == y.T.UnixMilli()
@@ -55,6 +66,9 @@ func Equal(a, b any) bool {
 		y, ok := b.(ErrorNode)
 		return ok && x == y
 	case []any:
+		if y, ok := b.([]byte); ok {
+			return bytesEqualNumbers(y, x)
+		}
 		y, ok := b.([]any)
 		if !ok || len(x) != len(y) {
 			return false
@@ -82,6 +96,21 @@ func Equal(a, b any) bool {
 		return true
 	}
 	return false
+}
+
+// bytesEqualNumbers compares bytes against the corpus's neutral spelling of
+// binary — a list of byte numbers.
+func bytesEqualNumbers(x []byte, y []any) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		f, ok := y[i].(float64)
+		if !ok || float64(x[i]) != f {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedKeys(o *Object) []string {

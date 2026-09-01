@@ -41,9 +41,17 @@ func Load(src string) *Doc {
 		}
 		doc.SecSchemas[sec] = sch
 		if sch == nil {
-			// No schema: the section's deferred literal errors surface as
-			// themselves.
-			for _, rec := range sec.Records {
+			// No schema: variable references resolve in place, and deferred
+			// literal errors surface as themselves.
+			for i, rec := range sec.Records {
+				if verr := resolveVars(rec, defs); verr != nil {
+					doc.Errors = append(doc.Errors, *verr)
+					sec.Records[i] = value.ErrorNode{Code: verr.Code}
+					if !sec.Collection {
+						return doc
+					}
+					continue
+				}
 				surfaceDeferred(rec, &doc.Errors)
 			}
 			continue
@@ -148,13 +156,29 @@ func (d *docDefs) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 	return s, nil
 }
 
-// Var resolves a variable by (sigil-less) name.
-func (d *docDefs) Var(name string) (any, bool) {
-	if d.header == nil {
-		return nil, false
+// Var resolves a variable by (sigil-less) name, chasing @-references so a
+// definition may name one parsed later. A missing name is undefined-variable;
+// a self- or mutually-referential chain is invalid-definition.
+func (d *docDefs) Var(name string) (any, *errs.Error) {
+	seen := map[string]bool{}
+	for {
+		if d.header == nil {
+			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
+		}
+		if seen[name] {
+			return nil, &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
+		}
+		seen[name] = true
+		v, ok := d.header.Vars[name]
+		if !ok {
+			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
+		}
+		if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+			name = s[1:]
+			continue
+		}
+		return v, nil
 	}
-	v, ok := d.header.Vars[name]
-	return v, ok
 }
 
 // sectionSchema resolves the schema a section is bound to, or nil when it has
@@ -181,6 +205,44 @@ func sectionSchema(sec *parser.Section, defs *docDefs) (*schema.Schema, *errs.Er
 		return s, nil
 	}
 	return nil, nil
+}
+
+// resolveVars resolves every @-string VALUE in a record in place — quoted or
+// open, by design references in any string form (io-test-cases FINDINGS #3).
+// Keys stay literal. Returns the first resolution error.
+func resolveVars(v any, defs *docDefs) *errs.Error {
+	switch x := v.(type) {
+	case *value.Object:
+		for i := range x.Members {
+			mv := x.Members[i].Value
+			if s, ok := mv.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+				r, verr := defs.Var(s[1:])
+				if verr != nil {
+					return verr
+				}
+				x.Members[i].Value = r
+				continue
+			}
+			if verr := resolveVars(mv, defs); verr != nil {
+				return verr
+			}
+		}
+	case []any:
+		for i, e := range x {
+			if s, ok := e.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+				r, verr := defs.Var(s[1:])
+				if verr != nil {
+					return verr
+				}
+				x[i] = r
+				continue
+			}
+			if verr := resolveVars(e, defs); verr != nil {
+				return verr
+			}
+		}
+	}
+	return nil
 }
 
 // surfaceDeferred walks a record collecting the deferred malformed-literal

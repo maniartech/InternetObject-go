@@ -25,19 +25,15 @@ import (
 // comparison ignores it (see Equal), serialization does not.
 type Object struct {
 	Members []Member
-
-	// EmptySlots counts commas that separated nothing (leading, doubled or
-	// trailing) when this object was parsed. Data projection tolerates them;
-	// schema compilation reports empty-memberdef when any are present.
-	EmptySlots int
 }
 
 // Member is one object member. A positional member has no key of its own —
 // its identity is its index.
 type Member struct {
 	Key        string
-	Quoted     bool // the key was written quoted, so it is literal
+	Quoted     bool // the key (or positional string value) was written quoted
 	Positional bool // no key was written
+	Absent     bool // an empty comma slot: a positional hole with no value
 	Value      any
 }
 
@@ -57,6 +53,24 @@ func (o *Object) Find(key string) int {
 type Decimal struct {
 	Coef  *big.Int
 	Scale int
+}
+
+// String renders the decimal's exact digits at its scale — the canonical
+// spelling, shared by the writer and the corpus comparator.
+func (d Decimal) String() string {
+	digits := new(big.Int).Abs(d.Coef).String()
+	sign := ""
+	if d.Coef.Sign() < 0 {
+		sign = "-"
+	}
+	if d.Scale == 0 {
+		return sign + digits
+	}
+	for len(digits) <= d.Scale {
+		digits = "0" + digits
+	}
+	cut := len(digits) - d.Scale
+	return sign + digits[:cut] + "." + digits[cut:]
 }
 
 // TemporalKind distinguishes the three temporal literal kinds, which stay

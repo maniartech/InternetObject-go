@@ -32,6 +32,17 @@ func TestSerializerSuite(t *testing.T) {
 	runIOSuiteDir(t, "serializer")
 }
 
+// TestDocumentSuite is the phase-6 gate: sections, header, core types.
+func TestDocumentSuite(t *testing.T) {
+	runIOSuiteDir(t, "document")
+}
+
+// TestRegressionSuite is the phase-8 gate: every bug the reference ever had,
+// pinned. Passing these first time is evidence the corpus generalizes.
+func TestRegressionSuite(t *testing.T) {
+	runIOSuiteDir(t, "regression")
+}
+
 func runIOSuiteDir(t *testing.T, dir string) {
 	root, err := CorpusDir()
 	if err != nil {
@@ -40,6 +51,9 @@ func runIOSuiteDir(t *testing.T, dir string) {
 	files, err := filepath.Glob(filepath.Join(root, dir, "*.io"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no suite files under %s/%s — the gate did not run", root, dir)
+	}
+	if sub, _ := filepath.Glob(filepath.Join(root, dir, "*", "*.io")); len(sub) > 0 {
+		files = append(files, sub...) // e.g. regression/fixed/
 	}
 
 	const detailLimit = 20

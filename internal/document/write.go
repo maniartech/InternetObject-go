@@ -20,6 +20,9 @@ import (
 // how the header and sections are laid out) mirror the reference writer,
 // which the round-trip corpus pins.
 
+// reservedSectionNames are the parser defaults a writer treats as no name.
+var reservedSectionNames = map[string]bool{"data": true, "schema": true, "$schema": true}
+
 // Write renders the loaded document in canonical form: header included,
 // schemas spelled with types, keys emitted only where a name is not
 // recoverable ("extras" mode).
@@ -34,7 +37,7 @@ func (d *Doc) Write() string {
 
 	for _, sec := range d.Sections {
 		hasNamedSchema := sec.SchemaName != "" && sec.SchemaName != "schema"
-		hasRealName := sec.Name != ""
+		hasRealName := sec.Name != "" && !reservedSectionNames[sec.Name]
 
 		if len(parts) > 0 && (hasRealName || hasNamedSchema) {
 			parts = append(parts, "") // a blank line before a named/bound section
@@ -110,11 +113,11 @@ func (d *Doc) writeSchemaBody(s *schema.Schema) string {
 		if name == "*" {
 			continue // handled through Open below
 		}
-		parts = append(parts, memberDeclaration(name, s.Defs[name]))
+		parts = append(parts, d.memberDeclaration(name, s.Defs[name]))
 	}
 	switch o := s.Open.(type) {
 	case *schema.MemberDef:
-		if ann := memberAnnotation(o); ann != "" {
+		if ann := d.memberAnnotation(o); ann != "" {
 			parts = append(parts, "*:"+ann)
 		} else {
 			parts = append(parts, "*")
@@ -129,9 +132,9 @@ func (d *Doc) writeSchemaBody(s *schema.Schema) string {
 
 // memberDeclaration renders one `name?*: annotation` declaration; a name that
 // needs quoting cannot carry the short markers and uses the long form.
-func memberDeclaration(name string, md *schema.MemberDef) string {
+func (d *Doc) memberDeclaration(name string, md *schema.MemberDef) string {
 	key := formatObjectKey(name)
-	ann := memberAnnotation(md)
+	ann := d.memberAnnotation(md)
 
 	if key == name || (!md.Optional && !md.Null) {
 		markers := ""
@@ -147,7 +150,7 @@ func memberDeclaration(name string, md *schema.MemberDef) string {
 		return key + markers
 	}
 	// Long form: `"a,b": {number, optional: T, "null": T}`.
-	body := longFormBodyOf(md)
+	body := d.longFormBodyOf(md)
 	var flags []string
 	if md.Optional {
 		flags = append(flags, "optional: T")
@@ -160,7 +163,7 @@ func memberDeclaration(name string, md *schema.MemberDef) string {
 
 // longFormBodyOf renders the inside of a long-form memberdef (everything
 // before the optional/"null" flags), for members whose names need quoting.
-func longFormBodyOf(md *schema.MemberDef) string {
+func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 	if md.SchemaRef != "" {
 		if md.Type == "array" {
 			return "array, of: " + md.SchemaRef
@@ -168,10 +171,10 @@ func longFormBodyOf(md *schema.MemberDef) string {
 		return "object, schema: " + md.SchemaRef
 	}
 	if md.Type == "object" && md.Schema != nil {
-		return "object, schema: " + nestedSchemaAnnotation(md.Schema)
+		return "object, schema: " + d.nestedSchemaAnnotation(md.Schema)
 	}
 	if md.Type == "array" && md.Of != nil {
-		return "array, of: " + arrayElemAnnotation(md.Of)
+		return "array, of: " + d.arrayElemAnnotation(md.Of)
 	}
 	typeName := md.Type
 	if typeName == "" {
@@ -188,14 +191,14 @@ func longFormBodyOf(md *schema.MemberDef) string {
 		default:
 			v = md.Constraints[key]
 		}
-		parts = append(parts, key+":"+constraintValue(v))
+		parts = append(parts, key+":"+d.constraintValue(v))
 	}
 	return strings.Join(parts, ", ")
 }
 
 // memberAnnotation renders a memberdef's type annotation — empty for a bare
 // `any` with no constraints.
-func memberAnnotation(md *schema.MemberDef) string {
+func (d *Doc) memberAnnotation(md *schema.MemberDef) string {
 	if md.SchemaRef != "" {
 		if md.Type == "array" {
 			return "[" + md.SchemaRef + "]"
@@ -203,34 +206,34 @@ func memberAnnotation(md *schema.MemberDef) string {
 		return md.SchemaRef
 	}
 	if md.Type == "object" && md.Schema != nil {
-		return nestedSchemaAnnotation(md.Schema)
+		return d.nestedSchemaAnnotation(md.Schema)
 	}
 	if md.Type == "" || md.Type == "any" {
 		if len(md.Keys) == 0 {
 			return ""
 		}
-		return typeWithConstraints("any", md)
+		return d.typeWithConstraints("any", md)
 	}
 	if md.Type == "array" && md.Of != nil && len(md.Keys) == 0 {
-		return "[" + arrayElemAnnotation(md.Of) + "]"
+		return "[" + d.arrayElemAnnotation(md.Of) + "]"
 	}
 	if len(md.Keys) > 0 || (md.Type == "array" && md.Of != nil) {
-		return typeWithConstraints(md.Type, md)
+		return d.typeWithConstraints(md.Type, md)
 	}
 	return md.Type
 }
 
-func nestedSchemaAnnotation(s *schema.Schema) string {
+func (d *Doc) nestedSchemaAnnotation(s *schema.Schema) string {
 	var fields []string
 	for _, name := range s.Names {
 		if name == "*" {
 			continue
 		}
-		fields = append(fields, memberDeclaration(name, s.Defs[name]))
+		fields = append(fields, d.memberDeclaration(name, s.Defs[name]))
 	}
 	switch o := s.Open.(type) {
 	case *schema.MemberDef:
-		if ann := memberAnnotation(o); ann != "" {
+		if ann := d.memberAnnotation(o); ann != "" {
 			fields = append(fields, "*: "+ann)
 		} else {
 			fields = append(fields, "*")
@@ -243,23 +246,23 @@ func nestedSchemaAnnotation(s *schema.Schema) string {
 	return "{" + strings.Join(fields, ", ") + "}"
 }
 
-func arrayElemAnnotation(of *schema.MemberDef) string {
+func (d *Doc) arrayElemAnnotation(of *schema.MemberDef) string {
 	if of.SchemaRef != "" {
 		return of.SchemaRef
 	}
 	if of.Type == "object" && of.Schema != nil {
-		return nestedSchemaAnnotation(of.Schema)
+		return d.nestedSchemaAnnotation(of.Schema)
 	}
 	if of.Type == "array" && of.Of != nil {
-		return "[" + arrayElemAnnotation(of.Of) + "]"
+		return "[" + d.arrayElemAnnotation(of.Of) + "]"
 	}
 	if len(of.Keys) > 0 {
-		return typeWithConstraints(of.Type, of)
+		return d.typeWithConstraints(of.Type, of)
 	}
 	return of.Type
 }
 
-func typeWithConstraints(typeName string, md *schema.MemberDef) string {
+func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string {
 	parts := []string{typeName}
 	for _, key := range md.Keys {
 		var v any
@@ -271,23 +274,29 @@ func typeWithConstraints(typeName string, md *schema.MemberDef) string {
 		case "anyOf":
 			var alts []string
 			for _, alt := range md.AnyOf {
-				alts = append(alts, arrayElemAnnotation(alt))
+				alts = append(alts, d.arrayElemAnnotation(alt))
 			}
 			parts = append(parts, "anyOf:["+strings.Join(alts, ", ")+"]")
 			continue
 		default:
 			v = md.Constraints[key]
 		}
-		parts = append(parts, key+":"+constraintValue(v))
+		parts = append(parts, key+":"+d.constraintValue(v))
 	}
 	if md.Type == "array" && md.Of != nil {
-		parts = append(parts[:1], append([]string{"of: " + arrayElemAnnotation(md.Of)}, parts[1:]...)...)
+		parts = append(parts[:1], append([]string{"of: " + d.arrayElemAnnotation(md.Of)}, parts[1:]...)...)
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
-// constraintValue renders a constraint's value: strings always quoted.
-func constraintValue(v any) string {
+// constraintValue renders a constraint's value: @-references resolved,
+// strings always quoted.
+func (d *Doc) constraintValue(v any) string {
+	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+		if r, verr := d.Defs.Var(s[1:]); verr == nil {
+			v = r
+		}
+	}
 	switch x := v.(type) {
 	case nil:
 		return "null"
@@ -303,13 +312,13 @@ func constraintValue(v any) string {
 	case *big.Int:
 		return x.String() + "n"
 	case value.Decimal:
-		return decimalString(x) + "m"
+		return x.String() + "m"
 	case value.Temporal:
 		return temporalLiteral(x, "")
 	case []any:
 		var elems []string
 		for _, e := range x {
-			elems = append(elems, constraintValue(e))
+			elems = append(elems, d.constraintValue(e))
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
 	}
@@ -450,7 +459,7 @@ func (d *Doc) writeValue(v any, md *schema.MemberDef) string {
 	case *big.Int:
 		return x.String() + "n"
 	case value.Decimal:
-		return decimalString(x) + "m"
+		return x.String() + "m"
 	case []byte:
 		return `b"` + base64.StdEncoding.EncodeToString(x) + `"`
 	case value.Temporal:
@@ -483,23 +492,6 @@ func ioNumber(f float64) string {
 		return "-Inf"
 	}
 	return numfmt.Format(f)
-}
-
-// decimalString renders a decimal's exact digits at its scale (no suffix).
-func decimalString(dec value.Decimal) string {
-	digits := new(big.Int).Abs(dec.Coef).String()
-	sign := ""
-	if dec.Coef.Sign() < 0 {
-		sign = "-"
-	}
-	if dec.Scale == 0 {
-		return sign + digits
-	}
-	for len(digits) <= dec.Scale {
-		digits = "0" + digits
-	}
-	cut := len(digits) - dec.Scale
-	return sign + digits[:cut] + "." + digits[cut:]
 }
 
 // temporalLiteral renders a temporal value under the declared kind, or the

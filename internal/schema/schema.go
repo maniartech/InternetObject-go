@@ -155,7 +155,7 @@ func compileSchema(shape any, path string) *Schema {
 	if !ok {
 		fail(errs.InvalidSchema)
 	}
-	if obj.EmptySlots > 0 {
+	if hasAbsentMember(obj) {
 		fail(errs.EmptyMemberdef)
 	}
 
@@ -168,15 +168,19 @@ func compileSchema(shape any, path string) *Schema {
 			if !ok {
 				fail(errs.InvalidKey)
 			}
-			if name == "*" {
+			if name == "*" && !m.Quoted {
 				// A bare `*` opens the schema; it is legal only in last place.
+				// A QUOTED "*" is an ordinary member named `*`.
 				if !last || s.Open != nil {
 					fail(errs.InvalidSchema)
 				}
 				s.Open = OpenAny
 				continue
 			}
-			bare, opt, nul := stripMarkers(name)
+			bare, opt, nul := name, false, false
+			if !m.Quoted {
+				bare, opt, nul = stripMarkers(name)
+			}
 			md := &MemberDef{Name: bare, Type: "any", Path: joinPath(path, bare), Optional: opt, Null: nul}
 			addMember(s, md)
 			continue
@@ -206,6 +210,17 @@ func compileSchema(shape any, path string) *Schema {
 		s.Open = OpenAny
 	}
 	return s
+}
+
+// hasAbsentMember reports an empty comma slot — a schema declares nothing
+// there, so it is empty-memberdef.
+func hasAbsentMember(obj *value.Object) bool {
+	for i := range obj.Members {
+		if obj.Members[i].Absent {
+			return true
+		}
+	}
+	return false
 }
 
 func addMember(s *Schema, md *MemberDef) {
@@ -310,7 +325,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 	}
 	md.Type = typeName
 	allowed := allowedKeys(typeName)
-	if obj.EmptySlots > 0 {
+	if hasAbsentMember(obj) {
 		fail(errs.EmptyMemberdef)
 	}
 

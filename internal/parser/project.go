@@ -66,6 +66,9 @@ func projectValue(v any) any {
 	case *value.Object:
 		out := &value.Object{Members: make([]value.Member, 0, len(x.Members))}
 		for i, m := range x.Members {
+			if m.Absent {
+				continue // an empty comma slot projects nothing
+			}
 			key := m.Key
 			if m.Positional || key == "" {
 				key = strconv.Itoa(i)

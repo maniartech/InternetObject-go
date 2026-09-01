@@ -144,6 +144,11 @@ func (p *parser) run() {
 		p.parseSectionBody(&Section{})
 	}
 
+	for _, sec := range p.doc.Sections {
+		if sec.Name == "" {
+			sec.Name = "data" // the reserved default section name
+		}
+	}
 	p.renameDuplicateSections()
 }
 
@@ -332,13 +337,13 @@ func (p *parser) parseRecord() any {
 		t, ok := p.peek()
 		if !ok || recordEnd(t) {
 			if pendingComma {
-				obj.EmptySlots++
+				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
 			}
 			break
 		}
 		if t.Kind == tokenizer.KindComma {
 			if expectMember {
-				obj.EmptySlots++
+				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
 			}
 			sawComma = true
 			expectMember, pendingComma = true, true
@@ -402,12 +407,13 @@ func (p *parser) parseMember(obj *value.Object) {
 		}
 	}
 
+	quotedVal := t.Kind == tokenizer.KindString && t.Sub != tokenizer.SubOpenString
 	v := p.parseValue()
 	if nt, ok := p.peek(); ok && nt.Kind == tokenizer.KindColon {
 		// A structured value (array/object) cannot name a member.
 		p.die(errs.UnexpectedToken, nt)
 	}
-	p.addMember(obj, value.Member{Positional: true, Value: v}, t)
+	p.addMember(obj, value.Member{Positional: true, Quoted: quotedVal, Value: v}, t)
 }
 
 // addMember appends m, rejecting a duplicate member name (quoting does not
@@ -461,11 +467,10 @@ func (p *parser) parseValue() any {
 		}
 		return value.Temporal{T: p.s.Temporal(t), Kind: kind}
 	case tokenizer.KindString:
-		v := p.s.StringValue(t)
-		if t.Sub == tokenizer.SubOpenString && isVarRef(v) {
-			return p.resolveVar(v[1:], t)
-		}
-		return v
+		// An @-string stays a string here; variable references resolve
+		// lazily, at validation or projection, so definition order and
+		// quoted references behave as the reference implementation does.
+		return p.s.StringValue(t)
 	case tokenizer.KindCurlyOpen:
 		return p.parseObject(t)
 	case tokenizer.KindBracketOpen:
@@ -492,22 +497,6 @@ func deferrable(c tokenizer.Code) bool {
 	return false
 }
 
-// isVarRef reports a whole-word variable reference: @ plus a name with no
-// whitespace. A quoted "@name" is an ordinary string.
-func isVarRef(s string) bool {
-	return len(s) > 1 && s[0] == '@' && !strings.ContainsAny(s[1:], " \t\n")
-}
-
-func (p *parser) resolveVar(name string, t tokenizer.Token) any {
-	if p.doc.Header != nil {
-		if v, ok := p.doc.Header.Vars[name]; ok {
-			return v
-		}
-	}
-	p.die(errs.UndefinedVariable, t)
-	return nil
-}
-
 // parseObject parses a braced object. Stray commas are tolerated inside
 // braces — a leading, doubled or trailing comma separates nothing and is
 // skipped.
@@ -523,14 +512,14 @@ func (p *parser) parseObject(open tokenizer.Token) any {
 		switch t.Kind {
 		case tokenizer.KindComma:
 			if expectMember {
-				obj.EmptySlots++
+				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
 			}
 			expectMember, pendingComma = true, true
 			p.i++
 			continue
 		case tokenizer.KindCurlyClose:
 			if pendingComma {
-				obj.EmptySlots++
+				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
 			}
 			p.i++
 			return obj
