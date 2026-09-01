@@ -32,6 +32,12 @@ func TestSerializerSuite(t *testing.T) {
 	runIOSuiteDir(t, "serializer")
 }
 
+// TestStreamingSuite is the phase-7 gate: the emitted item sequence under
+// three chunkings, which must agree.
+func TestStreamingSuite(t *testing.T) {
+	runIOSuiteDir(t, "streaming")
+}
+
 // TestDocumentSuite is the phase-6 gate: sections, header, core types.
 func TestDocumentSuite(t *testing.T) {
 	runIOSuiteDir(t, "document")
@@ -87,6 +93,12 @@ func runIOSuiteDir(t *testing.T, dir string) {
 					continue
 				}
 				problems = RunRoundtripCase(row)
+			case dir == "streaming":
+				if !row.HasInput {
+					inert++
+					continue
+				}
+				problems = RunStreamCase(row)
 			default:
 				if !row.HasInput {
 					inert++

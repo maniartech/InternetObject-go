@@ -20,19 +20,21 @@ import (
 // SuiteRow is one corpus case, projected to named columns by the suite's own
 // $schema header.
 type SuiteRow struct {
-	Name         string
-	Input        string
-	HasInput     bool
-	SchemaDef    string
-	HasSchemaDef bool
-	Schema       string
-	HasSchema    bool
-	Expected     any
-	Output       any
-	HasOutput    bool
-	ErrorCodes   []string
-	Recovered    any
-	HasRecovered bool
+	Name          string
+	Input         string
+	HasInput      bool
+	SchemaDef     string
+	HasSchemaDef  bool
+	Schema        string
+	HasSchema     bool
+	Expected      any
+	Output        any
+	HasOutput     bool
+	Definitions   string
+	DefaultSchema string
+	ErrorCodes    []string
+	Recovered     any
+	HasRecovered  bool
 }
 
 // LoadIOSuite parses one suite file and returns its rows. A suite file that
@@ -86,6 +88,12 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 		}
 		row.Expected, _ = field(obj, "expected")
 		row.Output, row.HasOutput = field(obj, "output")
+		if v, ok := field(obj, "definitions"); ok {
+			row.Definitions, _ = v.(string)
+		}
+		if v, ok := field(obj, "defaultSchema"); ok {
+			row.DefaultSchema, _ = v.(string)
+		}
 		if v, ok := field(obj, "error_codes"); ok {
 			if arr, ok := v.([]any); ok {
 				for _, c := range arr {

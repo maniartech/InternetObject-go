@@ -59,8 +59,10 @@ func sectionValue(sec *Section) any {
 	return projectValue(sec.Records[0])
 }
 
-// projectValue projects one value: objects get every member keyed (positional
+// ProjectValue projects one value: objects get every member keyed (positional
 // and empty-quoted keys become index keys), recursively.
+func ProjectValue(v any) any { return projectValue(v) }
+
 func projectValue(v any) any {
 	switch x := v.(type) {
 	case *value.Object:
