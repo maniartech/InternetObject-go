@@ -23,6 +23,10 @@ type SuiteRow struct {
 	Name         string
 	Input        string
 	HasInput     bool
+	SchemaDef    string
+	HasSchemaDef bool
+	Schema       string
+	HasSchema    bool
 	Expected     any
 	ErrorCodes   []string
 	Recovered    any
@@ -69,6 +73,14 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 		if v, ok := field(obj, "input"); ok {
 			row.Input, _ = v.(string)
 			row.HasInput = true
+		}
+		if v, ok := field(obj, "schemaDef"); ok {
+			row.SchemaDef, _ = v.(string)
+			row.HasSchemaDef = true
+		}
+		if v, ok := field(obj, "schema"); ok {
+			row.Schema, _ = v.(string)
+			row.HasSchema = true
 		}
 		row.Expected, _ = field(obj, "expected")
 		if v, ok := field(obj, "error_codes"); ok {

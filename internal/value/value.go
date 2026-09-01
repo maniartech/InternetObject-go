@@ -25,6 +25,11 @@ import (
 // comparison ignores it (see Equal), serialization does not.
 type Object struct {
 	Members []Member
+
+	// EmptySlots counts commas that separated nothing (leading, doubled or
+	// trailing) when this object was parsed. Data projection tolerates them;
+	// schema compilation reports empty-memberdef when any are present.
+	EmptySlots int
 }
 
 // Member is one object member. A positional member has no key of its own —

@@ -21,6 +21,16 @@ const (
 	DuplicateSectionName   = "duplicate-section-name"
 )
 
+// Schema-compilation codes.
+const (
+	InvalidSchema  = "invalid-schema"
+	EmptyMemberdef = "empty-memberdef"
+	UnknownType    = "unknown-type"
+	ReservedType   = "reserved-type"
+	UnknownMember  = "unknown-member"
+	ForbiddenNull  = "forbidden-null"
+)
+
 // Error is one accumulated fault: a designated code and a 1-based position.
 type Error struct {
 	Code string

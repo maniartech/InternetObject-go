@@ -291,13 +291,22 @@ func recordEnd(t tokenizer.Token) bool {
 func (p *parser) parseRecord() any {
 	obj := &value.Object{}
 	sawComma := false
+	expectMember := true // a comma while a member is still expected separates nothing
+	pendingComma := false
 	for {
 		t, ok := p.peek()
 		if !ok || recordEnd(t) {
+			if pendingComma {
+				obj.EmptySlots++
+			}
 			break
 		}
 		if t.Kind == tokenizer.KindComma {
+			if expectMember {
+				obj.EmptySlots++
+			}
 			sawComma = true
+			expectMember, pendingComma = true, true
 			p.i++
 			continue
 		}
@@ -305,6 +314,7 @@ func (p *parser) parseRecord() any {
 			p.die(errs.UnexpectedToken, t)
 		}
 		p.parseMember(obj)
+		expectMember, pendingComma = false, false
 		// After a member: a comma, or the record's end.
 		t, ok = p.peek()
 		if !ok || recordEnd(t) {
@@ -453,6 +463,8 @@ func (p *parser) resolveVar(name string, t tokenizer.Token) any {
 // skipped.
 func (p *parser) parseObject(open tokenizer.Token) any {
 	obj := &value.Object{}
+	expectMember := true
+	pendingComma := false
 	for {
 		t, ok := p.peek()
 		if !ok || t.Kind == tokenizer.KindSectionSep {
@@ -460,9 +472,16 @@ func (p *parser) parseObject(open tokenizer.Token) any {
 		}
 		switch t.Kind {
 		case tokenizer.KindComma:
+			if expectMember {
+				obj.EmptySlots++
+			}
+			expectMember, pendingComma = true, true
 			p.i++
 			continue
 		case tokenizer.KindCurlyClose:
+			if pendingComma {
+				obj.EmptySlots++
+			}
 			p.i++
 			return obj
 		case tokenizer.KindCollectionStart:
@@ -471,6 +490,7 @@ func (p *parser) parseObject(open tokenizer.Token) any {
 			p.die(errs.UnexpectedToken, t)
 		}
 		p.parseMember(obj)
+		expectMember, pendingComma = false, false
 		t, ok = p.peek()
 		if !ok || t.Kind == tokenizer.KindSectionSep {
 			p.die(errs.ExpectedClosingBracket, open)

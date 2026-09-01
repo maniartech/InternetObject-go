@@ -14,6 +14,12 @@ func TestParserSuite(t *testing.T) {
 	runIOSuiteDir(t, "parser")
 }
 
+// TestSchemaSuite is the phase-3 gate: schema definition strings compiled and
+// compared by subset against the neutral shape.
+func TestSchemaSuite(t *testing.T) {
+	runIOSuiteDir(t, "schema")
+}
+
 func runIOSuiteDir(t *testing.T, dir string) {
 	root, err := CorpusDir()
 	if err != nil {
@@ -35,11 +41,21 @@ func runIOSuiteDir(t *testing.T, dir string) {
 			continue
 		}
 		for _, row := range rows {
-			if !row.HasInput {
-				inert++
-				continue
+			var problems []string
+			switch {
+			case dir == "schema":
+				if !row.HasSchemaDef {
+					inert++
+					continue
+				}
+				problems = RunSchemaDefCase(row)
+			default:
+				if !row.HasInput {
+					inert++
+					continue
+				}
+				problems = RunParseCase(row)
 			}
-			problems := RunParseCase(row)
 			invalid := len(row.ErrorCodes) > 0
 			if len(problems) == 0 {
 				if invalid {
