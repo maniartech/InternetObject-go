@@ -4,30 +4,80 @@ A from-scratch, independent Go implementation of the
 [Internet Object](https://internetobject.org) data-interchange format, built against the shared
 conformance corpus (`io-test-cases`) with the specification (`io-specs`) as the sole authority.
 
-**Status: in development.** Progress is measured by the corpus, phase by phase — see
-[docs/PROGRESS.md](docs/PROGRESS.md) for the live scoreboard and
-[docs/decisions/](docs/decisions/) for the architecture decisions.
+**Status: the full conformance corpus passes** — all eight suites, 1,572 cases
+(tokenizer 262 · parser 195 · schema 160 · validation 538 · serializer 148 · document 100 ·
+streaming 118 · regression 51), against `io-test-cases` commit `0fc0af8`. See
+[docs/PROGRESS.md](docs/PROGRESS.md) for the live scoreboard and [docs/decisions/](docs/decisions/)
+for the architecture decisions.
+
+## Usage
+
+```go
+import io "github.com/maniartech/InternetObject-go"
+
+doc, err := io.Parse(`
+~ $schema: {name: string, age: {int, min: 0}}
+---
+~ Alice, 30
+~ Bob, 25
+`)
+// err lists every fault (stable kebab-case codes with positions) and the
+// document still holds every record that survived — errors accumulate,
+// they don't abort.
+
+records := doc.Value().([]any)   // the live value model
+text := doc.String()             // canonical IO text: re-parses to the same
+                                 // value, and re-writing it changes nothing
+```
+
+Values decode precisely: numbers are `float64`, bigints `*big.Int`, decimals keep their scale
+(`1.50m` ≠ `1.5m`), temporals keep their kind (`date` / `time` / `datetime`), binary is
+`[]byte`.
+
+### Streaming
+
+```go
+for item, err := range io.Stream(reader, nil) {
+    if err != nil { /* fatal: iteration is over */ }
+    if item.Err != nil { /* one bad record; the stream continues */ }
+    use(item.Value)
+}
+```
+
+Chunk boundaries are never semantic — the same input split any way yields the identical item
+sequence.
+
+### Schemas
+
+```go
+s, err := io.ParseSchema("name: string, age?: {int, min: 0}, *")
+```
 
 ## Conformance
 
-The corpus is the definition of done. Every phase is gated by a number the test suite prints:
+The corpus is the definition of done. The suite prints per-suite numbers with the pinned corpus
+commit, and **fails** (never skips) when the sibling `io-test-cases` checkout is missing
+(`IO_CORPUS_DIR` overrides the location):
 
 ```bash
 go test ./...
 ```
 
-The conformance harness requires a sibling checkout of
-[`io-test-cases`](https://github.com/maniartech/InternetObject-test-cases) (or the
-`IO_CORPUS_DIR` environment variable pointing at one). A missing corpus **fails** the run — it
-never skips.
+Divergences between the specification and the reference implementation found by this port are
+recorded in [docs/FINDINGS.md](docs/FINDINGS.md) and belong upstream — per the corpus's porting
+guide, that output outranks the library.
 
 ## Design
 
-- The **format** is portable; the **API** is not. The public surface is designed for Go —
-  `(value, error)` returns, error codes exposed via a typed error — not transliterated from the
-  JavaScript reference. See [ADR 0001](docs/decisions/0001-go-port-architecture.md).
-- Near-zero-allocation tokenizer: tokens are compact value structs over the source text, decoded
-  lazily.
+- The **format** is portable; the **API** is not. The public surface is Go idiom —
+  `(value, error)` returns with accumulate-and-continue, `iter.Seq2` streaming — designed in
+  [ADR 0002](docs/decisions/0002-public-api-v0.md), not transliterated from the JavaScript
+  reference.
+- Near-zero-allocation tokenizer: compact 20-byte value tokens over the source text, decoded
+  lazily; the token stream is a single slice.
+- Every easy-to-duplicate decision (record-vs-scalar, string writing, undeclared-member
+  defaults, numeric claim rules) lives at exactly one site — the central lesson of the
+  reference implementation's bug history.
 
 ## History
 
