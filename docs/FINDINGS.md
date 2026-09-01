@@ -55,6 +55,31 @@ Status legend: **open** = not yet reported/resolved upstream.
   whitespace; the EBNF and the table on the same page omit it. This port follows the EBNF
   (U+00A0 is not whitespace).
 
+## 7. Open strings process escapes; the spec page says they do not — open
+
+- **Spec** (`open-strings.md`): "No escaping — character escaping is not processed".
+- **io-js2** (and the round-trip corpus): open strings process the FULL escape set — `a\:b`
+  decodes to `a:b`, `Abc` to `Abc`, marker escapes claim (`\xZZq` is
+  `invalid-escape-sequence`) — and the WRITER depends on it (`serializer/quoting.io` emits
+  `a\:b`, `say \"hi\"`). The corpus pins the behavior; the spec page contradicts it.
+- **This port**: implements the corpus behavior.
+
+## 8. The reference writer drops time-of-day milliseconds — open, data loss
+
+- io-js2's `dateToTimeString` splits the ISO string at `.`, so a `time` value with nonzero
+  milliseconds writes without them — silent data loss on rewrite. The round-trip generator
+  refused such cases, so the corpus is silent.
+- **This port**: writes `.SSS` when nonzero (`t"14:30:45.123"`), zero-suppressed otherwise
+  (matching the pinned `t"14:30:45"`).
+
+## 9. Unicode keys are quoted by the writer's ASCII identifier rule — open, spec drift
+
+- **Spec** (`value-formatting.md`): a key is quoted when numeric, keyword, structural-carrying,
+  `---`-carrying, or untrimmed — nothing about non-ASCII.
+- **io-js2**: the bare-safe test is `^[$A-Za-z_][A-Za-z0-9_. -]*$`, so `клавиша` is quoted
+  (pinned by `serializer/quoting.io`) though it reads back fine bare.
+- **This port**: matches the corpus/writer rule.
+
 ## Go-specific notes (not upstream defects)
 
 - **Lone UTF-16 surrogates.** JS strings can hold a lone surrogate from `\uD83D`; Go strings
