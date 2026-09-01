@@ -127,7 +127,11 @@ func (s *Stream) StringValue(t Token) string {
 		inner := s.innerText(t, 1)
 		q := s.Src[t.Start+1]
 		return collapseDoubled(inner, q)
-	default: // open string, section name: the text is the value
+	case SubOpenString:
+		// Open strings process the same escapes as regular strings, so a
+		// writer can spell a structural character bare: `a\:b` is `a:b`.
+		return decodeRegular(s.Text(t))
+	default: // section name/schema: the text is the value
 		return s.Text(t)
 	}
 }

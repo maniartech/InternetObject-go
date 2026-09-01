@@ -26,6 +26,12 @@ func TestValidationSuite(t *testing.T) {
 	runIOSuiteDir(t, "validation")
 }
 
+// TestSerializerSuite is the phase-5 gate: canonical output, value
+// preservation, and idempotence, per case.
+func TestSerializerSuite(t *testing.T) {
+	runIOSuiteDir(t, "serializer")
+}
+
 func runIOSuiteDir(t *testing.T, dir string) {
 	root, err := CorpusDir()
 	if err != nil {
@@ -61,6 +67,12 @@ func runIOSuiteDir(t *testing.T, dir string) {
 					continue
 				}
 				problems = RunValidationCase(row)
+			case dir == "serializer":
+				if !row.HasInput || !row.HasOutput {
+					inert++
+					continue
+				}
+				problems = RunRoundtripCase(row)
 			default:
 				if !row.HasInput {
 					inert++

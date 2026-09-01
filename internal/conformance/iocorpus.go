@@ -28,6 +28,8 @@ type SuiteRow struct {
 	Schema       string
 	HasSchema    bool
 	Expected     any
+	Output       any
+	HasOutput    bool
 	ErrorCodes   []string
 	Recovered    any
 	HasRecovered bool
@@ -83,6 +85,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 			row.HasSchema = true
 		}
 		row.Expected, _ = field(obj, "expected")
+		row.Output, row.HasOutput = field(obj, "output")
 		if v, ok := field(obj, "error_codes"); ok {
 			if arr, ok := v.([]any); ok {
 				for _, c := range arr {

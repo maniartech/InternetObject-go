@@ -49,8 +49,11 @@ type MemberDef struct {
 	AnyOf     []*MemberDef // union alternatives, for `{any, anyOf: [...]}`
 
 	// Constraints holds the carried per-type constraint keys (min, max,
-	// multipleOf, len, minLen, maxLen, pattern, precision, scale, …).
+	// multipleOf, len, minLen, maxLen, pattern, precision, scale, …), and
+	// Keys their declaration order (default/choices/anyOf included), which the
+	// writer reproduces.
 	Constraints map[string]any
+	Keys        []string
 
 	re *regexp.Regexp // the compiled pattern, cached at first use
 }
@@ -333,6 +336,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			}
 			checkConstraintValue(typeName, "default", m.Value)
 			md.HasDefault, md.Default = true, m.Value
+			md.Keys = append(md.Keys, "default")
 		case "choices":
 			if !allowed["choices"] {
 				fail(errs.UnknownMember)
@@ -342,6 +346,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 				fail(errs.ExpectedArray)
 			}
 			md.Choices = arr
+			md.Keys = append(md.Keys, "choices")
 		case "anyOf":
 			if !allowed["anyOf"] {
 				fail(errs.UnknownMember)
@@ -353,6 +358,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			for _, alt := range arr {
 				md.AnyOf = append(md.AnyOf, compileOfDef(alt))
 			}
+			md.Keys = append(md.Keys, "anyOf")
 		case "of":
 			if !allowed["of"] {
 				fail(errs.UnknownMember)
@@ -374,6 +380,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 				md.Constraints = map[string]any{}
 			}
 			md.Constraints[key] = m.Value
+			md.Keys = append(md.Keys, key)
 		}
 	}
 }

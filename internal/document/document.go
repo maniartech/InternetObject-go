@@ -14,23 +14,32 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
+// Doc is a loaded (parsed, bound, validated) document.
+type Doc struct {
+	*parser.Document
+	Defs       *docDefs
+	SecSchemas map[*parser.Section]*schema.Schema
+}
+
 // Load parses and validates one document.
-func Load(src string) *parser.Document {
-	doc := parser.Parse(src)
-	defs := newDefs(doc.Header)
+func Load(src string) *Doc {
+	pdoc := parser.Parse(src)
+	defs := newDefs(pdoc.Header)
+	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 
 	// A fatal parse error abandons everything, as the reference does; the
 	// error list already carries it.
-	if hasFatalParse(doc) {
+	if hasFatalParse(pdoc) {
 		return doc
 	}
 
-	for _, sec := range doc.Sections {
+	for _, sec := range pdoc.Sections {
 		sch, cerr := sectionSchema(sec, defs)
 		if cerr != nil {
 			doc.Errors = append(doc.Errors, *cerr)
 			return doc // a broken binding is fatal, like a thrown compile error
 		}
+		doc.SecSchemas[sec] = sch
 		if sch == nil {
 			// No schema: the section's deferred literal errors surface as
 			// themselves.

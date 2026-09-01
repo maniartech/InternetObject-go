@@ -65,6 +65,45 @@ type scanner struct {
 	line int32
 	col  int32
 	toks []Token
+
+	// runEscErr marks an invalid marker escape (a \u or \x with bad digits)
+	// seen while scanning the current value run; the run becomes an ERROR.
+	runEscErr bool
+}
+
+// consumeRunEscape advances over a backslash escape inside a value run. Open
+// strings process the same escape set as regular strings; an escaped
+// character never terminates the run. Returns false at a bare trailing
+// backslash (the caller lets the run end).
+func (s *scanner) consumeRunEscape() bool {
+	if s.pos+1 >= len(s.src) {
+		s.pos++
+		s.col++
+		return false
+	}
+	n := s.src[s.pos+1]
+	consumed := 2
+	switch {
+	case n == 'u':
+		if countHex(s.src, s.pos+2, 4) != 4 {
+			s.runEscErr = true
+		}
+	case n == 'x':
+		if countHex(s.src, s.pos+2, 2) != 2 {
+			s.runEscErr = true
+		}
+	case n >= utf8.RuneSelf:
+		consumed = 1 // the rune's own bytes flow as ordinary run content
+	}
+	if n == '\n' && consumed == 2 {
+		s.pos += 2
+		s.line++
+		s.col = 1
+		return true
+	}
+	s.pos += consumed
+	s.col += int32(consumed)
+	return true
 }
 
 func (s *scanner) add(t Token) { s.toks = append(s.toks, t) }
@@ -164,10 +203,17 @@ func (s *scanner) skipSpaceAndComments() {
 }
 
 // scanWord advances over one word: up to the next whitespace or terminator.
+// A backslash escapes the next character, terminators included.
 func (s *scanner) scanWord() {
 	for s.pos < len(s.src) {
 		c := s.src[s.pos]
 		if c < utf8.RuneSelf {
+			if c == '\\' {
+				if !s.consumeRunEscape() {
+					return
+				}
+				continue
+			}
 			if isASCIISpace(c) || s.terminatorAt(s.pos) {
 				return
 			}
@@ -222,6 +268,7 @@ const maxAnnotationLen = 4
 // rather than text (rule 2 — a marker is a claim).
 func (s *scanner) scanValue() {
 	start, line, col := s.pos, s.line, s.col
+	s.runEscErr = false
 	s.scanWord()
 	word := s.src[start:s.pos]
 	kind, sub, code := classifyWord(word)
@@ -282,6 +329,10 @@ func (s *scanner) scanValue() {
 		}
 		end -= w
 	}
+	if s.runEscErr {
+		s.add(Token{Kind: KindError, Err: CodeInvalidEscape, Start: int32(start), End: int32(end), Line: line, Col: col})
+		return
+	}
 	s.add(Token{Kind: KindString, Sub: SubOpenString, Start: int32(start), End: int32(end), Line: line, Col: col})
 }
 
@@ -291,6 +342,12 @@ func (s *scanner) scanRun() {
 	for s.pos < len(s.src) {
 		c := s.src[s.pos]
 		if c < utf8.RuneSelf {
+			if c == '\\' {
+				if !s.consumeRunEscape() {
+					return
+				}
+				continue
+			}
 			if s.terminatorAt(s.pos) {
 				return
 			}

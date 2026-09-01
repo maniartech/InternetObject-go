@@ -32,6 +32,36 @@ type Header struct {
 	Schemas map[string]any // $name → schema shape (sigil stripped), last wins
 	Vars    map[string]any // @name → value (sigil stripped), last wins
 	Inline  any            // the schema shape when the header is a bare schema expression
+
+	// Defs lists every definition in document order (one entry per key, a
+	// duplicate updates in place), so a writer can reproduce the header.
+	Defs []HeaderDef
+}
+
+// DefKind classifies a header definition.
+type DefKind uint8
+
+const (
+	DefPlain DefKind = iota
+	DefSchema
+	DefVar
+)
+
+// HeaderDef is one header definition, with its sigil-less key.
+type HeaderDef struct {
+	Kind  DefKind
+	Key   string
+	Value any
+}
+
+func (h *Header) upsertDef(kind DefKind, key string, val any) {
+	for i := range h.Defs {
+		if h.Defs[i].Kind == kind && h.Defs[i].Key == key {
+			h.Defs[i].Value = val
+			return
+		}
+	}
+	h.Defs = append(h.Defs, HeaderDef{Kind: kind, Key: key, Value: val})
 }
 
 // Section is one data section.
@@ -164,8 +194,10 @@ func (p *parser) parseDefinition(h *Header) {
 	switch {
 	case strings.HasPrefix(key, "$") && kt.Sub == tokenizer.SubOpenString:
 		h.Schemas[key[1:]] = val
+		h.upsertDef(DefSchema, key[1:], val)
 	case strings.HasPrefix(key, "@") && kt.Sub == tokenizer.SubOpenString:
 		h.Vars[key[1:]] = val
+		h.upsertDef(DefVar, key[1:], val)
 	default:
 		if h.Plain == nil {
 			h.Plain = &value.Object{}
@@ -176,6 +208,7 @@ func (p *parser) parseDefinition(h *Header) {
 			h.Plain.Members = append(h.Plain.Members,
 				value.Member{Key: key, Quoted: kt.Sub != tokenizer.SubOpenString, Value: val})
 		}
+		h.upsertDef(DefPlain, key, val)
 	}
 
 	// Nothing else may follow a definition before the next `~` or `---`.
