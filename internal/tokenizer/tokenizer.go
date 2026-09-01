@@ -103,7 +103,7 @@ func (s *scanner) run() {
 				s.pos += 3
 				s.col += 3
 				s.add(Token{Kind: KindSectionSep, Start: int32(start), End: int32(s.pos), Line: line, Col: col})
-				s.scanSectionName()
+				s.scanSectionHeader()
 			} else {
 				s.scanValue()
 			}
@@ -309,11 +309,66 @@ func (s *scanner) scanRun() {
 	}
 }
 
-// scanSectionName scans the optional name after a `---` separator: on the same
-// line, letters, marks, digits, `-` and `_` only. A word that violates the
-// grammar is an invalid-section-name error; a missing word is nothing at all.
-func (s *scanner) scanSectionName() {
-	i, cols := s.pos, int32(0)
+// scanSectionHeader scans what may follow a `---` separator on the same line:
+// an optional section name, and an optional `$schema` binding written either
+// bare (`--- $a`) or after the name (`--- name: $a`, colon not emitted).
+//
+// The name grammar is restricted — letters, marks, digits, `-`, `_` — and
+// anchored: the name word runs to the next whitespace, colon, `#` or end of
+// line (quotes and sigils INCLUDED, so `user'x` is one invalid word, not a
+// legal prefix plus junk). A word violating the grammar is
+// invalid-section-name; after `name:` anything but a `$ref` is missing-schema
+// (an empty-token error), and scanning then continues normally.
+func (s *scanner) scanSectionHeader() {
+	start, line, col, ok := s.sectionWord()
+	if !ok {
+		return
+	}
+	word := s.src[start:s.pos]
+	if word[0] == '$' {
+		s.add(Token{Kind: KindString, Sub: SubSectionSchema,
+			Start: int32(start), End: int32(s.pos), Line: line, Col: col})
+		return
+	}
+	valid := true
+	for _, r := range word {
+		if !isSectionNameRune(r) {
+			valid = false
+			break
+		}
+	}
+	if !valid {
+		s.add(Token{Kind: KindError, Err: CodeInvalidSectionName,
+			Start: int32(start), End: int32(s.pos), Line: line, Col: col})
+		return
+	}
+	s.add(Token{Kind: KindString, Sub: SubSectionName,
+		Start: int32(start), End: int32(s.pos), Line: line, Col: col})
+
+	// An optional `: $schema` binding follows the name on the same line.
+	i, cols := s.horizontalSpaceEnd(s.pos)
+	if i >= len(s.src) || s.src[i] != ':' {
+		return
+	}
+	s.pos, s.col = i+1, s.col+cols+1
+	refStart, refLine, refCol, ok := s.sectionWord()
+	if !ok || s.src[refStart] != '$' {
+		if ok {
+			// the word was not a schema ref; put it back for the main loop
+			s.pos, s.line, s.col = refStart, refLine, refCol
+		}
+		s.add(Token{Kind: KindError, Err: CodeMissingSchema,
+			Start: int32(s.pos), End: int32(s.pos), Line: s.line, Col: s.col})
+		return
+	}
+	s.add(Token{Kind: KindString, Sub: SubSectionSchema,
+		Start: int32(refStart), End: int32(s.pos), Line: refLine, Col: refCol})
+}
+
+// horizontalSpaceEnd returns the index after any same-line whitespace at i,
+// and how many runes it spans.
+func (s *scanner) horizontalSpaceEnd(i int) (int, int32) {
+	cols := int32(0)
 	for i < len(s.src) {
 		r, w := utf8.DecodeRuneInString(s.src[i:])
 		if r == '\n' || !isSpaceRune(r) {
@@ -322,25 +377,43 @@ func (s *scanner) scanSectionName() {
 		i += w
 		cols++
 	}
-	if i >= len(s.src) || s.src[i] == '\n' || s.terminatorAt(i) {
-		return
+	return i, cols
+}
+
+// sectionWord consumes one section-header word: same line, terminated by
+// whitespace, `:`, or `#`. A word that would begin with a value-structural
+// character (brace, bracket, comma, tilde, quote) is not a section word at
+// all — the caller leaves it to the main loop. ok=false when there is none;
+// otherwise the word is s.src[start:s.pos].
+func (s *scanner) sectionWord() (start int, line, col int32, ok bool) {
+	i, cols := s.horizontalSpaceEnd(s.pos)
+	if i >= len(s.src) {
+		return 0, 0, 0, false
+	}
+	switch s.src[i] {
+	case '\n', ':', '#', '{', '}', '[', ']', ',', '~', '"', '\'':
+		return 0, 0, 0, false
 	}
 	s.pos, s.col = i, s.col+cols
-	start, line, col := s.pos, s.line, s.col
-	s.scanWord()
-	word := s.src[start:s.pos]
-	valid := true
-	for _, r := range word {
-		if !isSectionNameRune(r) {
-			valid = false
+	wstart, wline, wcol := s.pos, s.line, s.col
+	for s.pos < len(s.src) {
+		c := s.src[s.pos]
+		if c < utf8.RuneSelf {
+			if c == '\n' || c == ':' || c == '#' || isASCIISpace(c) {
+				break
+			}
+			s.pos++
+			s.col++
+			continue
+		}
+		r, w := utf8.DecodeRuneInString(s.src[s.pos:])
+		if isUniSpace(r) {
 			break
 		}
+		s.pos += w
+		s.col++
 	}
-	t := Token{Kind: KindString, Sub: SubSectionName, Start: int32(start), End: int32(s.pos), Line: line, Col: col}
-	if !valid {
-		t = Token{Kind: KindError, Err: CodeInvalidSectionName, Start: int32(start), End: int32(s.pos), Line: line, Col: col}
-	}
-	s.add(t)
+	return wstart, wline, wcol, true
 }
 
 // scanRegular scans a quoted string with escape processing. start is the

@@ -67,6 +67,7 @@ const (
 	SubRegularString
 	SubRawString
 	SubSectionName
+	SubSectionSchema
 	SubBinaryString
 	SubDate
 	SubTime
@@ -82,6 +83,7 @@ var subNames = [...]string{
 	SubRegularString: "REGULAR_STRING",
 	SubRawString:     "RAW_STRING",
 	SubSectionName:   "SECTION_NAME",
+	SubSectionSchema: "SECTION_SCHEMA",
 	SubBinaryString:  "BINARY_STRING",
 	SubDate:          "DATE",
 	SubTime:          "TIME",
@@ -108,6 +110,7 @@ const (
 	CodeInvalidEscape
 	CodeUnknownAnnotation
 	CodeInvalidSectionName
+	CodeMissingSchema
 )
 
 var codeNames = [...]string{
@@ -123,6 +126,7 @@ var codeNames = [...]string{
 	CodeInvalidEscape:      "invalid-escape-sequence",
 	CodeUnknownAnnotation:  "unknown-annotation",
 	CodeInvalidSectionName: "invalid-section-name",
+	CodeMissingSchema:      "missing-schema",
 }
 
 func (c Code) String() string { return codeNames[c] }

@@ -76,6 +76,13 @@ func TestOracleDerivedBehaviors(t *testing.T) {
 		{`dt"2024-03-20T14:30:45+0530"`, `DATETIME/DATETIME(dt"2024-03-20T14:30:45+0530")`},
 		{`dt"2024-03-20T14:30:45-08"`, `DATETIME/DATETIME(dt"2024-03-20T14:30:45-08")`},
 		{`dt"2024-03-20T1430"`, `DATETIME/DATETIME(dt"2024-03-20T1430")`},
+		// Section schema bindings: `--- $a` and `--- name: $ref` (the colon is
+		// consumed, not emitted); a non-$ word after `name:` is missing-schema
+		// with an empty token, and scanning then continues normally.
+		{`--- $a`, `SECTION_SEP(---) STRING/SECTION_SCHEMA($a)`},
+		{`--- name: $s`, `SECTION_SEP(---) STRING/SECTION_NAME(name) STRING/SECTION_SCHEMA($s)`},
+		{`--- user$x: $s`, `SECTION_SEP(---) ERROR(user$x,invalid-section-name) COLON(:) STRING/OPEN_STRING($s)`},
+		{`--- code:en: $b`, `SECTION_SEP(---) STRING/SECTION_NAME(code) ERROR(,missing-schema) STRING/OPEN_STRING(en) COLON(:) STRING/OPEN_STRING($b)`},
 		// Out-of-range values stay errors.
 		{`dt"2024-03-20T14:30+25:00"`, `ERROR(dt"2024-03-20T14:30+25:00",invalid-datetime)`},
 		{`t"25:00"`, `ERROR(t"25:00",invalid-time)`},
