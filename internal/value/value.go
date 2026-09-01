@@ -81,6 +81,17 @@ type ErrorNode struct {
 	Code string
 }
 
+// ErrorValue is a malformed VALUE literal (a bad datetime, bigint, decimal or
+// number) whose error is deferred rather than fatal: parsing continues, and
+// the fault surfaces either as the recorded code (no schema) or as the typed
+// member's own expected-* code (a schema masks it — reference behavior,
+// io-test-cases ISSUE-23).
+type ErrorValue struct {
+	Code string
+	Line int32
+	Col  int32
+}
+
 // IsScalar is THE record-versus-value decision, made once. It lists the value
 // types explicitly and lets "record" be what is left, so the next value type
 // added to the format extends this list instead of being silently walked as a

@@ -115,7 +115,6 @@ func (p *parser) run() {
 	}
 
 	p.renameDuplicateSections()
-	p.apply()
 }
 
 // ── header ─────────────────────────────────────────────────────────────────
@@ -273,6 +272,9 @@ func (p *parser) parseCollectionRecord() (rec any) {
 		t.Kind != tokenizer.KindCollectionStart && t.Kind != tokenizer.KindSectionSep {
 		p.die(errs.UnexpectedToken, t)
 	}
+	if rec == nil {
+		rec = &value.Object{} // an empty `~` record is an empty object
+	}
 	return rec
 }
 
@@ -347,7 +349,7 @@ func (p *parser) parseMember(obj *value.Object) {
 	if t.Kind == tokenizer.KindColon {
 		p.die(errs.UnexpectedToken, t)
 	}
-	if t.Kind == tokenizer.KindError {
+	if t.Kind == tokenizer.KindError && !deferrable(t.Err) {
 		p.dieToken(t)
 	}
 
@@ -436,10 +438,25 @@ func (p *parser) parseValue() any {
 	case tokenizer.KindBracketOpen:
 		return p.parseArray(t)
 	case tokenizer.KindError:
+		if deferrable(t.Err) {
+			return value.ErrorValue{Code: t.Err.String(), Line: t.Line, Col: t.Col}
+		}
 		p.dieToken(t)
 	}
 	p.die(errs.UnexpectedToken, t)
 	return nil
+}
+
+// deferrable reports the malformed-literal codes whose errors defer to the
+// end of the pipeline (or to a schema's own type check) rather than aborting
+// the parse: the numeric and temporal claim errors.
+func deferrable(c tokenizer.Code) bool {
+	switch c {
+	case tokenizer.CodeInvalidNumber, tokenizer.CodeInvalidBigInt, tokenizer.CodeInvalidDecimal,
+		tokenizer.CodeInvalidDate, tokenizer.CodeInvalidTime, tokenizer.CodeInvalidDateTime:
+		return true
+	}
+	return false
 }
 
 // isVarRef reports a whole-word variable reference: @ plus a name with no

@@ -8,10 +8,11 @@
 package schema
 
 import (
+	"math/big"
+	"regexp"
 	"strings"
 
 	"github.com/maniartech/InternetObject-go/internal/errs"
-	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
@@ -42,13 +43,16 @@ type MemberDef struct {
 	Default    any
 	Choices    []any // nil when not declared
 
-	Of        *MemberDef // array element definition
-	Schema    *Schema    // nested schema, for object bodies
-	SchemaRef string     // a `$name` reference, resolved lazily at validation
+	Of        *MemberDef   // array element definition
+	Schema    *Schema      // nested schema, for object bodies
+	SchemaRef string       // a `$name` reference, resolved lazily at validation
+	AnyOf     []*MemberDef // union alternatives, for `{any, anyOf: [...]}`
 
 	// Constraints holds the carried per-type constraint keys (min, max,
 	// multipleOf, len, minLen, maxLen, pattern, precision, scale, …).
 	Constraints map[string]any
+
+	re *regexp.Regexp // the compiled pattern, cached at first use
 }
 
 // The registered type names. A name outside this set is unknown-type — unless
@@ -123,20 +127,6 @@ func allowedKeys(typeName string) map[string]bool {
 	default: // the number family, bigint included
 		return numberKeys
 	}
-}
-
-// CompileString parses a schema definition string and compiles it.
-func CompileString(src string) (*Schema, *errs.Error) {
-	doc := parser.Parse(src)
-	if len(doc.Errors) > 0 {
-		e := doc.Errors[0]
-		return nil, &e
-	}
-	var root any
-	if len(doc.Sections) == 1 && len(doc.Sections[0].Records) == 1 {
-		root = doc.Sections[0].Records[0]
-	}
-	return Compile(root, "")
 }
 
 // Compile compiles a parsed schema expression (the value model of a schema
@@ -341,6 +331,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			if m.Value == nil {
 				fail(errs.ForbiddenNull)
 			}
+			checkConstraintValue(typeName, "default", m.Value)
 			md.HasDefault, md.Default = true, m.Value
 		case "choices":
 			if !allowed["choices"] {
@@ -348,9 +339,20 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			}
 			arr, ok := m.Value.([]any)
 			if !ok {
-				fail(errs.UnknownMember)
+				fail(errs.ExpectedArray)
 			}
 			md.Choices = arr
+		case "anyOf":
+			if !allowed["anyOf"] {
+				fail(errs.UnknownMember)
+			}
+			arr, ok := m.Value.([]any)
+			if !ok {
+				fail(errs.ExpectedArray)
+			}
+			for _, alt := range arr {
+				md.AnyOf = append(md.AnyOf, compileOfDef(alt))
+			}
 		case "of":
 			if !allowed["of"] {
 				fail(errs.UnknownMember)
@@ -367,6 +369,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			if !allowed[key] {
 				fail(errs.UnknownMember)
 			}
+			checkConstraintValue(typeName, key, m.Value)
 			if md.Constraints == nil {
 				md.Constraints = map[string]any{}
 			}
@@ -416,4 +419,95 @@ func compileArrayElem(v any, path string) *MemberDef {
 	}
 	fail(errs.UnknownType)
 	return nil
+}
+
+// checkConstraintValue type-checks one constraint's VALUE against what the
+// member's type expects — the reference validates the object-form typedef
+// against a per-type memberdef schema, so `{int, default: notanumber}` is
+// expected-number and `{bigint, multipleOf: 5}` is expected-bigint, at
+// compile. An @-reference is resolved later and skipped here.
+func checkConstraintValue(typeName, key string, v any) {
+	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") {
+		return
+	}
+	expect := func(code string, ok bool) {
+		if !ok {
+			fail(code)
+		}
+	}
+	switch key {
+	case "len", "minLen", "maxLen", "precision", "scale":
+		_, ok := v.(float64)
+		expect(errs.ExpectedNumber, ok)
+	case "pattern", "flags", "format", "encloser":
+		_, ok := v.(string)
+		expect(errs.ExpectedString, ok)
+	case "escapeLines":
+		_, ok := v.(bool)
+		expect(errs.ExpectedBoolean, ok)
+	case "min", "max", "multipleOf", "default":
+		switch familyOf(typeName) {
+		case famString:
+			_, ok := v.(string)
+			expect(errs.ExpectedString, ok)
+		case famBigInt:
+			_, ok := v.(*big.Int)
+			expect(errs.ExpectedBigInt, ok)
+		case famDecimal:
+			_, ok := v.(value.Decimal)
+			expect(errs.ExpectedDecimal, ok)
+		case famTemporal:
+			_, ok := v.(value.Temporal)
+			expect(errs.ExpectedDateTime, ok)
+		case famBool:
+			_, ok := v.(bool)
+			expect(errs.ExpectedBoolean, ok)
+		case famArray:
+			_, ok := v.([]any)
+			expect(errs.ExpectedArray, ok)
+		case famObject:
+			_, ok := v.(*value.Object)
+			expect(errs.InvalidObject, ok)
+		case famNumber:
+			_, ok := v.(float64)
+			expect(errs.ExpectedNumber, ok)
+		}
+	}
+}
+
+// The type families, shared by compile-time constraint checks and validation.
+type family uint8
+
+const (
+	famAny family = iota
+	famString
+	famNumber
+	famBigInt
+	famDecimal
+	famBool
+	famTemporal
+	famArray
+	famObject
+)
+
+func familyOf(typeName string) family {
+	switch typeName {
+	case "any":
+		return famAny
+	case "string", "email", "url":
+		return famString
+	case "bigint":
+		return famBigInt
+	case "decimal":
+		return famDecimal
+	case "bool":
+		return famBool
+	case "datetime", "date", "time":
+		return famTemporal
+	case "array":
+		return famArray
+	case "object":
+		return famObject
+	}
+	return famNumber
 }

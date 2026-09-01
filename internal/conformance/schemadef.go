@@ -3,6 +3,7 @@ package conformance
 import (
 	"fmt"
 
+	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/schema"
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
@@ -16,7 +17,7 @@ import (
 
 // RunSchemaDefCase runs one schemaDef-kind case.
 func RunSchemaDefCase(row SuiteRow) []string {
-	compiled, cerr := schema.CompileString(row.SchemaDef)
+	compiled, cerr := document.CompileSchemaString(row.SchemaDef)
 	var codes []string
 	if cerr != nil {
 		codes = []string{cerr.Code}

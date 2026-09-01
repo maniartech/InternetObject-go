@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
-	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
@@ -40,7 +40,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	doc := parser.Parse(string(src))
+	doc := document.Load(string(src))
 	if len(doc.Errors) > 0 {
 		codes := make([]string, len(doc.Errors))
 		for i, e := range doc.Errors {
@@ -110,7 +110,7 @@ func field(o *value.Object, key string) (any, bool) {
 // expected — the projected value. The `recovered` column, when present,
 // additionally asserts the value that survived DESPITE the errors.
 func RunParseCase(row SuiteRow) []string {
-	doc := parser.Parse(row.Input)
+	doc := document.Load(row.Input)
 	var codes []string
 	for _, e := range doc.Errors {
 		codes = append(codes, e.Code)

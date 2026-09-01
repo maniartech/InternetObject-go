@@ -20,6 +20,12 @@ func TestSchemaSuite(t *testing.T) {
 	runIOSuiteDir(t, "schema")
 }
 
+// TestValidationSuite is the phase-4 gate: schema + data → validated value or
+// designated codes.
+func TestValidationSuite(t *testing.T) {
+	runIOSuiteDir(t, "validation")
+}
+
 func runIOSuiteDir(t *testing.T, dir string) {
 	root, err := CorpusDir()
 	if err != nil {
@@ -49,6 +55,12 @@ func runIOSuiteDir(t *testing.T, dir string) {
 					continue
 				}
 				problems = RunSchemaDefCase(row)
+			case dir == "validation":
+				if !row.HasInput || !row.HasSchema {
+					inert++
+					continue
+				}
+				problems = RunValidationCase(row)
 			default:
 				if !row.HasInput {
 					inert++

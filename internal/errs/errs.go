@@ -31,6 +31,44 @@ const (
 	ForbiddenNull  = "forbidden-null"
 )
 
+// Validation codes. expected-* is a TYPE problem; missing-value a PRESENCE
+// problem; mismatched-* a DECLARED constraint; out-of-range-* the type's own
+// intrinsic range.
+const (
+	ExpectedString   = "expected-string"
+	ExpectedNumber   = "expected-number"
+	ExpectedInteger  = "expected-integer"
+	ExpectedDecimal  = "expected-decimal"
+	ExpectedBigInt   = "expected-bigint"
+	ExpectedBoolean  = "expected-boolean"
+	ExpectedArray    = "expected-array"
+	ExpectedDateTime = "expected-datetime"
+	ExpectedDate     = "expected-date"
+	ExpectedTime     = "expected-time"
+	InvalidObject    = "invalid-object"
+
+	MissingValue = "missing-value"
+
+	MismatchedMin        = "mismatched-min"
+	MismatchedMax        = "mismatched-max"
+	MismatchedMultipleOf = "mismatched-multiple-of"
+	MismatchedLen        = "mismatched-len"
+	MismatchedMinLen     = "mismatched-min-len"
+	MismatchedMaxLen     = "mismatched-max-len"
+	MismatchedPattern    = "mismatched-pattern"
+	MismatchedChoice     = "mismatched-choice"
+	MismatchedAnyOf      = "mismatched-any-of"
+	MismatchedScale      = "mismatched-scale"
+	MismatchedPrecision  = "mismatched-precision"
+
+	OutOfRangeInteger = "out-of-range-integer"
+
+	InvalidEmail = "invalid-email"
+	InvalidURL   = "invalid-url"
+
+	UnexpectedPositionalMember = "unexpected-positional-member"
+)
+
 // Error is one accumulated fault: a designated code and a 1-based position.
 type Error struct {
 	Code string

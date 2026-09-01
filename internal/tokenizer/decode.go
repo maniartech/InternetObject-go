@@ -142,9 +142,10 @@ func (s *Stream) innerText(t Token, prefixLen int32) string {
 // Base64Text returns a BINARY token's payload as the base64 text itself.
 func (s *Stream) Base64Text(t Token) string { return s.innerText(t, 1) }
 
-// Bytes decodes a BINARY token's payload.
+// Bytes decodes a BINARY token's payload. Missing padding is tolerated.
 func (s *Stream) Bytes(t Token) []byte {
-	b, _ := base64.StdEncoding.DecodeString(s.Base64Text(t))
+	text := strings.TrimRight(s.Base64Text(t), "=")
+	b, _ := base64.RawStdEncoding.DecodeString(text)
 	return b
 }
 

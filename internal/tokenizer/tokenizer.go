@@ -618,23 +618,27 @@ func isHexDigit(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
-// validBase64 checks standard RFC 4648 base64 with `=` padding: quads of the
-// standard alphabet, padding only at the end.
+// validBase64 checks standard RFC 4648 base64: the standard alphabet with
+// `=` padding only at the end. Missing padding is tolerated (the reference
+// accepts `SGVsbG8` for `SGVsbG8=`), but a length that no padding could fix
+// is not.
 func validBase64(s string) bool {
-	if len(s)%4 != 0 {
+	end := len(s)
+	for end > 0 && s[end-1] == '=' {
+		end--
+	}
+	if len(s)-end > 2 {
 		return false
 	}
-	pad := 0
-	for i := 0; i < len(s); i++ {
+	if len(s)%4 != 0 && len(s) != end {
+		return false // explicit padding must complete a quad
+	}
+	if end%4 == 1 {
+		return false // no amount of padding makes this decodable
+	}
+	for i := 0; i < end; i++ {
 		c := s[i]
 		switch {
-		case c == '=':
-			pad++
-			if pad > 2 || i < len(s)-2 {
-				return false
-			}
-		case pad > 0:
-			return false // data after padding
 		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+', c == '/':
 		default:
 			return false
