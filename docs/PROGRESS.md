@@ -6,17 +6,20 @@ are `io-test-cases/PORTING-NOTES.md`.
 
 ## Current state
 
-- **Phase 0 in progress** — clean restart (old tree on `archive/2025-tokenizer`), conformance
-  harness being wired against `bootstrap/tokenizer.csv`.
+- **Phase 1 complete — 262/262.** Tokenizer in `internal/tokenizer`: compact 20-byte tokens,
+  lazy decoding, zero per-token allocations (~117 MB/s on the bench doc). Six upstream findings
+  recorded in [FINDINGS.md](FINDINGS.md) — three temporal divergences are implemented per the
+  **spec**, diverging deliberately from io-js2; expect possible corpus friction in later phases
+  and resolve it upstream, not here.
 - Corpus pin: commit `0fc0af8` of `io-test-cases` (no tags exist upstream yet; see ADR 0001 D2).
-- The bootstrap CSV currently holds **262** cases (the upstream docs' "255" predates the corpus's
-  latest commit; the harness reports what it measures).
+- The bootstrap CSV holds **262** cases (the upstream docs' "255" predates the corpus's latest
+  commit; the harness reports what it measures).
 
 ## Scoreboard
 
 | Phase | Suite | Cases | Status |
 | ----: | ----- | ----: | ------ |
-| 1 | Tokenizer (bootstrap CSV) | 262 | **0/262** — harness wired, no tokenizer |
+| 1 | Tokenizer (bootstrap CSV) | 262 | **262/262** ✅ |
 | 2 | Parser | 195 | not started |
 | 3 | Schema | 160 | not started |
 | 4 | Validation | 538 | not started |
@@ -29,9 +32,12 @@ Run `go test ./...` — the suite prints the live numbers with the corpus pin.
 
 ## What's next
 
-1. Phase 1: implement `internal/tokenizer` to 262/262.
-2. Phase 2: parser + value model (Decimal, BigInt, temporal kinds) — the self-hosting step; the
-   port then reads the `.io` corpus with its own parser.
+1. Phase 2: parser + value model (Decimal, BigInt, temporal kinds) — the self-hosting step; the
+   port then reads the `.io` corpus (`parser/` suite, 195 cases) with its own parser. Start by
+   reading `io-test-cases/parser/*.io` and the reference runner
+   `io-js2/tools/corpus/verify.ts` to learn the case-file schema, then build the `.io` case
+   loader on top of the parser being tested.
+2. Report FINDINGS.md items upstream (io-specs / io-js2 / io-test-cases).
 
 ## Standing rules (from upstream, non-negotiable)
 
