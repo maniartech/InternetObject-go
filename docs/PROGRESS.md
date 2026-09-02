@@ -77,9 +77,24 @@ the type carries constraints; `Validate(v)` runs the check on demand (the Go spe
 "validate on mutation" — field assignment cannot be intercepted); `SchemaFor[T]()` +
 `Schema.String()` expose the derived schema (String round-trips through ParseSchema).
 
+## Native API design — ADR 0004 accepted; examples/ documents everything
+
+The full surface is designed and recorded in
+[decisions/0004-native-api-design.md](decisions/0004-native-api-design.md): a gradient
+(plain structs → optional embedded bases `Object`/`Document`/`Collection[T]`/`Definitions`,
+no `Section` base → `iogen` generated types), attachment mechanics, runtime-schema
+attachment (works today via definitions injection; typed `With` functions in phase 2), and
+the `Object`→`Record` rename. `examples/` holds five RUNNABLE examples for everything
+shipped (all verified) plus `examples/PROPOSED.md` showing the ADR surface as user code.
+Building the examples caught a real divergence, fixed: headerless streams ignored preloaded
+definitions (reference validates; FINDINGS corpus-gap list updated).
+
 ## What's next
 
-1. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
+   `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
+   (documents/sections/collections/definitions, `With` functions), then `iogen`.
+2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
    outranks the library.
 2. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is

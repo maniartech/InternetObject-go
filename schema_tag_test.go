@@ -106,6 +106,30 @@ func TestSchemaFor(t *testing.T) {
 	}
 }
 
+// `optional` marks the member `?` in the schema but still writes zero values;
+// `omitempty` implies optional AND leaves the zero value off the wire.
+func TestOptionalVersusOmitempty(t *testing.T) {
+	type rec struct {
+		A string `io:"a,optional"`
+		B string `io:"b,omitempty"`
+	}
+	text, err := io.Marshal(rec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "a?: string, b?: string\n---\n\"\""
+	if text != want {
+		t.Fatalf("got %q want %q", text, want)
+	}
+	var back rec
+	if err := io.Unmarshal(text, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back != (rec{}) {
+		t.Fatalf("round trip: %+v", back)
+	}
+}
+
 func TestBadSchemaTag(t *testing.T) {
 	type broken struct {
 		X int `io:"x" schema:"nosuchtype"`

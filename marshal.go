@@ -129,7 +129,8 @@ type structPlan struct {
 type fieldPlan struct {
 	name     string
 	index    []int // reflect index path (embedded fields included)
-	optional bool  // ,omitempty
+	optional bool  // ,optional or ,omitempty: the member compiles as `name?`
+	omitZero bool  // ,omitempty only: the zero value is left off the wire
 	nullable bool  // pointer field
 	kind     string
 }
@@ -165,9 +166,13 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 			continue
 		}
 		fp := fieldPlan{
-			name:     name,
-			index:    f.Index,
-			optional: opts["omitempty"],
+			name:  name,
+			index: f.Index,
+			// `optional` is the schema fact (the member may be absent — IO's
+			// `name?`); `omitempty` is the json-familiar encoding behavior
+			// (skip the zero value on output), which requires optionality.
+			optional: opts["optional"] || opts["omitempty"],
+			omitZero: opts["omitempty"],
 			nullable: f.Type.Kind() == reflect.Pointer,
 		}
 		switch {
@@ -403,7 +408,7 @@ func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Objec
 	out := &value.Object{}
 	for _, f := range plan.fields {
 		fv := rv.FieldByIndex(f.index)
-		if f.optional && fv.IsZero() {
+		if f.omitZero && fv.IsZero() {
 			continue
 		}
 		ev, err := encodeValue(fv, f.kind, path+"."+f.name)

@@ -320,7 +320,17 @@ func (r *Reader) processRecord(text string) Item {
 	if len(doc.Sections) == 0 || len(doc.Sections[0].Records) == 0 {
 		return Item{Kind: "record", Value: &value.Object{}}
 	}
-	rec := doc.Sections[0].Records[0]
+	return r.recordItem(doc.Sections[0].Records[0])
+}
+
+// recordItem converts one parsed record to an item under the ACTIVE schema
+// context — the shared tail of the framed and legacy paths, so a headerless
+// stream validates against preloaded definitions exactly as a framed one does
+// (the reference passes its definitions to parse() on both routes).
+func (r *Reader) recordItem(rec any) Item {
+	if e, ok := rec.(value.ErrorNode); ok {
+		return Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(e.Code), Code: e.Code}}
+	}
 	obj, ok := rec.(*value.Object)
 	if !ok {
 		return Item{Kind: "record", Value: parser.ProjectValue(rec)}
@@ -362,13 +372,7 @@ func (r *Reader) legacyFlush() []Item {
 	var items []Item
 	for _, sec := range doc.Sections {
 		for _, rec := range sec.Records {
-			var item Item
-			switch x := rec.(type) {
-			case value.ErrorNode:
-				item = Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(x.Code), Code: x.Code}}
-			default:
-				item = Item{Kind: "record", Value: parser.ProjectValue(rec)}
-			}
+			item := r.recordItem(rec)
 			item.RecordIndex = r.index
 			r.index++
 			items = append(items, item)

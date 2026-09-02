@@ -123,6 +123,10 @@ Status legend: **open** = not yet reported/resolved upstream.
 - `--- $$` (a `$`-named schema selector), a `*`-only header, `~ ,` records with trailing
   holes, and strings containing `\r` (which every unescaped spelling newline-normalizes) all
   round-trip through the canonical writer.
+- A HEADERLESS stream (no `---` at all) with PRELOADED definitions still validates its
+  records against the preloaded default schema (the reference passes definitions to `parse`
+  on the legacy route too). No streaming case combines the two, so this port shipped the
+  divergence until an example caught it.
 
 ## Go-specific notes (not upstream defects)
 
