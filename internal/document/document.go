@@ -96,6 +96,23 @@ func Load(src string) *Doc {
 	return doc
 }
 
+// NewUnvalidated wraps a hand-built parser.Document for WRITING: each section
+// is bound to its schema (so the writer can emit records positionally), but
+// records are not validated — the builder is trusted to have produced
+// conforming values. Used by the struct marshaler.
+func NewUnvalidated(pdoc *parser.Document) (*Doc, *errs.Error) {
+	defs := newDefs(pdoc.Header)
+	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
+	for _, sec := range pdoc.Sections {
+		sch, cerr := sectionSchema(sec, defs)
+		if cerr != nil {
+			return nil, cerr
+		}
+		doc.SecSchemas[sec] = sch
+	}
+	return doc, nil
+}
+
 // CompileSchemaString parses a schema definition string and compiles it — the
 // schemaDef pipeline stage, used by the conformance suite and (later) the
 // public API.

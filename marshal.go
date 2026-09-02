@@ -1,0 +1,454 @@
+package internetobject
+
+import (
+	"fmt"
+	"math/big"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/parser"
+	"github.com/maniartech/InternetObject-go/internal/value"
+)
+
+// Struct marshaling (ADR 0003): Marshal derives an Internet Object schema
+// from the struct type, writes it as the document header, and emits the data
+// positionally — the format's leanness for free. The `io` struct tag follows
+// encoding/json's grammar: `io:"name,omitempty"`, `io:"-"`. A pointer field
+// is the nullable marker. `io:",date"` / `io:",time"` select a time.Time
+// field's temporal kind.
+
+// Marshal renders v as canonical Internet Object text.
+//
+// A struct marshals as a schema header plus one record; a slice of structs as
+// a schema header plus a `~`-collection. Maps, scalars and other values
+// marshal as a schema-less record.
+func Marshal(v any) (string, error) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
+		}
+		rv = rv.Elem()
+	}
+
+	var pdoc *parser.Document
+	switch {
+	case rv.Kind() == reflect.Struct && !isModelStruct(rv.Type()):
+		plan, err := planFor(rv.Type())
+		if err != nil {
+			return "", err
+		}
+		rec, err := encodeStruct(rv, plan, "$")
+		if err != nil {
+			return "", err
+		}
+		pdoc = schemaDoc(plan.shape, &parser.Section{Name: "data", Records: []any{rec}})
+
+	case rv.Kind() == reflect.Slice && isStructElem(rv.Type().Elem()):
+		et := rv.Type().Elem()
+		for et.Kind() == reflect.Pointer {
+			et = et.Elem()
+		}
+		plan, err := planFor(et)
+		if err != nil {
+			return "", err
+		}
+		sec := &parser.Section{Name: "data", Collection: true}
+		for i := 0; i < rv.Len(); i++ {
+			ev := rv.Index(i)
+			path := fmt.Sprintf("$[%d]", i)
+			for ev.Kind() == reflect.Pointer {
+				if ev.IsNil() {
+					return "", &MarshalError{Path: path, Msg: "a collection record cannot be nil"}
+				}
+				ev = ev.Elem()
+			}
+			rec, err := encodeStruct(ev, plan, path)
+			if err != nil {
+				return "", err
+			}
+			sec.Records = append(sec.Records, rec)
+		}
+		pdoc = schemaDoc(plan.shape, sec)
+
+	default:
+		ev, err := encodeValue(rv, "", "$")
+		if err != nil {
+			return "", err
+		}
+		rec, ok := ev.(*value.Object)
+		if !ok {
+			rec = &value.Object{Members: []value.Member{{Positional: true, Value: ev}}}
+		}
+		pdoc = &parser.Document{Sections: []*parser.Section{
+			{Name: "data", Records: []any{rec}},
+		}}
+	}
+
+	doc, cerr := document.NewUnvalidated(pdoc)
+	if cerr != nil {
+		return "", &MarshalError{Path: "$", Msg: "derived schema does not compile: " + cerr.Code}
+	}
+	return doc.Write(), nil
+}
+
+// MarshalError is a binding fault found while marshaling: the field path and
+// what went wrong. Wire-level faults never occur on marshal — the writer is
+// total over what encode produces.
+type MarshalError struct {
+	Path string
+	Msg  string
+}
+
+func (e *MarshalError) Error() string { return e.Path + ": " + e.Msg }
+
+// ── field plans ────────────────────────────────────────────────────────────
+
+type structPlan struct {
+	fields []fieldPlan
+	shape  *value.Object // the derived schema shape, compile-ready
+}
+
+type fieldPlan struct {
+	name     string
+	index    []int // reflect index path (embedded fields included)
+	optional bool  // ,omitempty
+	nullable bool  // pointer field
+	kind     string
+}
+
+var planCache sync.Map // reflect.Type → *structPlan
+
+func planFor(t reflect.Type) (*structPlan, error) {
+	if p, ok := planCache.Load(t); ok {
+		return p.(*structPlan), nil
+	}
+	p, err := buildPlan(t, map[reflect.Type]bool{})
+	if err != nil {
+		return nil, err
+	}
+	planCache.Store(t, p)
+	return p, nil
+}
+
+func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, error) {
+	if visiting[t] {
+		return nil, &MarshalError{Path: t.String(), Msg: "recursive struct types are not supported"}
+	}
+	visiting[t] = true
+	defer delete(visiting, t)
+
+	p := &structPlan{shape: &value.Object{}}
+	for _, f := range reflect.VisibleFields(t) {
+		if !f.IsExported() || f.Anonymous {
+			continue // embedded structs contribute through their visible fields
+		}
+		name, opts, skip := parseTag(f)
+		if skip {
+			continue
+		}
+		fp := fieldPlan{
+			name:     name,
+			index:    f.Index,
+			optional: opts["omitempty"],
+			nullable: f.Type.Kind() == reflect.Pointer,
+		}
+		switch {
+		case opts["date"]:
+			fp.kind = "date"
+		case opts["time"]:
+			fp.kind = "time"
+		}
+		ann, err := annotationFor(f.Type, fp.kind, visiting)
+		if err != nil {
+			return nil, err
+		}
+		if isPlainMemberName(fp.name) {
+			key := fp.name
+			if fp.optional {
+				key += "?"
+			}
+			if fp.nullable {
+				key += "*"
+			}
+			p.shape.Members = append(p.shape.Members, value.Member{Key: key, Value: ann})
+		} else {
+			// A name needing quotes cannot carry the short markers; the flags
+			// move into the object-form typedef.
+			if fp.optional || fp.nullable {
+				ann = objectFormWithFlags(ann, fp.optional, fp.nullable)
+			}
+			p.shape.Members = append(p.shape.Members, value.Member{Key: fp.name, Quoted: true, Value: ann})
+		}
+		p.fields = append(p.fields, fp)
+	}
+	return p, nil
+}
+
+func parseTag(f reflect.StructField) (name string, opts map[string]bool, skip bool) {
+	tag := f.Tag.Get("io")
+	if tag == "-" {
+		return "", nil, true
+	}
+	name = f.Name
+	opts = map[string]bool{}
+	parts := strings.Split(tag, ",")
+	if parts[0] != "" {
+		name = parts[0]
+	}
+	for _, o := range parts[1:] {
+		opts[o] = true
+	}
+	return name, opts, false
+}
+
+// objectFormWithFlags rewrites a type annotation as the object-form typedef
+// carrying explicit optional/"null" flags — the only spelling a QUOTED member
+// name can use (quoted names never strip `?`/`*` markers).
+func objectFormWithFlags(ann any, optional, nullable bool) *value.Object {
+	out := &value.Object{}
+	switch tv := ann.(type) {
+	case string:
+		out.Members = append(out.Members, value.Member{Positional: true, Value: tv})
+	case []any:
+		out.Members = append(out.Members,
+			value.Member{Positional: true, Value: "array"})
+		var elem any = "any"
+		if len(tv) == 1 {
+			elem = tv[0]
+		}
+		out.Members = append(out.Members, value.Member{Key: "of", Value: elem})
+	case *value.Object:
+		out.Members = append(out.Members,
+			value.Member{Positional: true, Value: "object"},
+			value.Member{Key: "schema", Value: tv})
+	}
+	if optional {
+		out.Members = append(out.Members, value.Member{Key: "optional", Value: true})
+	}
+	if nullable {
+		out.Members = append(out.Members, value.Member{Key: "null", Quoted: true, Value: true})
+	}
+	return out
+}
+
+// isPlainMemberName reports a name that survives the bare-key grammar with
+// optional/null markers appended (markers are stripped from BARE keys only).
+func isPlainMemberName(s string) bool {
+	if s == "" || s == "*" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		default:
+			return false
+		}
+	}
+	return !(s[0] >= '0' && s[0] <= '9')
+}
+
+// ── schema derivation ──────────────────────────────────────────────────────
+
+var (
+	bigIntType   = reflect.TypeOf((*big.Int)(nil))
+	decimalType  = reflect.TypeOf(Decimal{})
+	temporalType = reflect.TypeOf(Temporal{})
+	timeType     = reflect.TypeOf(time.Time{})
+	bytesType    = reflect.TypeOf([]byte(nil))
+	anyType      = reflect.TypeOf((*any)(nil)).Elem()
+)
+
+// annotationFor derives the IO type annotation for one Go type — the value a
+// parsed schema would hold in that member position.
+func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool) (any, error) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch {
+	case t == bigIntType.Elem():
+		return "bigint", nil
+	case t == decimalType:
+		return "decimal", nil
+	case t == timeType:
+		if kind != "" {
+			return kind, nil
+		}
+		return "datetime", nil
+	case t == temporalType, t == bytesType, t == anyType:
+		// A Temporal's kind and a []byte are value-level facts; `any` admits
+		// them (there is no `bytes` schema type in the format).
+		return "any", nil
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "string", nil
+	case reflect.Bool:
+		return "bool", nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "int", nil
+	case reflect.Float32, reflect.Float64:
+		return "number", nil
+	case reflect.Slice, reflect.Array:
+		elem, err := annotationFor(t.Elem(), "", visiting)
+		if err != nil {
+			return nil, err
+		}
+		return []any{elem}, nil
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			return nil, &MarshalError{Path: t.String(), Msg: "map keys must be strings"}
+		}
+		elem, err := annotationFor(t.Elem(), "", visiting)
+		if err != nil {
+			return nil, err
+		}
+		return &value.Object{Members: []value.Member{{Key: "*", Value: elem}}}, nil
+	case reflect.Struct:
+		sub, err := buildPlan(t, visiting)
+		if err != nil {
+			return nil, err
+		}
+		return sub.shape, nil
+	case reflect.Interface:
+		return "any", nil
+	}
+	return nil, &MarshalError{Path: t.String(), Msg: "unsupported type"}
+}
+
+// schemaDoc assembles a document with the derived schema as its header.
+func schemaDoc(shape *value.Object, sec *parser.Section) *parser.Document {
+	header := &parser.Header{
+		Schemas: map[string]any{"schema": shape},
+		Defs:    []parser.HeaderDef{{Kind: parser.DefSchema, Key: "schema", Value: shape}},
+	}
+	return &parser.Document{Header: header, Sections: []*parser.Section{sec}}
+}
+
+// ── value encoding ─────────────────────────────────────────────────────────
+
+// maxSafeInt is the largest integer the number wire type holds exactly.
+const maxSafeInt = 1 << 53
+
+func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Object, error) {
+	out := &value.Object{}
+	for _, f := range plan.fields {
+		fv := rv.FieldByIndex(f.index)
+		if f.optional && fv.IsZero() {
+			continue
+		}
+		ev, err := encodeValue(fv, f.kind, path+"."+f.name)
+		if err != nil {
+			return nil, err
+		}
+		out.Members = append(out.Members, value.Member{Key: f.name, Value: ev})
+	}
+	return out, nil
+}
+
+// encodeValue converts one Go value to the wire value model. Integer values
+// beyond 2^53 are refused rather than silently rounded.
+func encodeValue(rv reflect.Value, kind, path string) (any, error) {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return nil, nil
+		}
+		rv = rv.Elem()
+	}
+	t := rv.Type()
+	switch {
+	case t == bigIntType.Elem():
+		bi := rv.Interface().(big.Int)
+		return new(big.Int).Set(&bi), nil
+	case t == decimalType:
+		d := rv.Interface().(Decimal)
+		return Decimal{Coef: new(big.Int).Set(d.Coef), Scale: d.Scale}, nil
+	case t == timeType:
+		k := value.KindDateTime
+		switch kind {
+		case "date":
+			k = value.KindDate
+		case "time":
+			k = value.KindTime
+		}
+		return Temporal{T: rv.Interface().(time.Time).UTC(), Kind: k}, nil
+	case t == temporalType:
+		return rv.Interface().(Temporal), nil
+	case t == bytesType:
+		return append([]byte(nil), rv.Bytes()...), nil
+	}
+	switch rv.Kind() {
+	case reflect.String:
+		return rv.String(), nil
+	case reflect.Bool:
+		return rv.Bool(), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n := rv.Int()
+		if n > maxSafeInt || n < -maxSafeInt {
+			return nil, &MarshalError{Path: path, Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+		}
+		return float64(n), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n := rv.Uint()
+		if n > maxSafeInt {
+			return nil, &MarshalError{Path: path, Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+		}
+		return float64(n), nil
+	case reflect.Float32, reflect.Float64:
+		return rv.Float(), nil
+	case reflect.Slice, reflect.Array:
+		out := make([]any, rv.Len())
+		for i := range out {
+			ev, err := encodeValue(rv.Index(i), "", fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return nil, err
+			}
+			out[i] = ev
+		}
+		return out, nil
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			return nil, &MarshalError{Path: path, Msg: "map keys must be strings"}
+		}
+		keys := make([]string, 0, rv.Len())
+		for _, k := range rv.MapKeys() {
+			keys = append(keys, k.String())
+		}
+		sort.Strings(keys) // deterministic output
+		out := &value.Object{}
+		for _, k := range keys {
+			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", path+"."+k)
+			if err != nil {
+				return nil, err
+			}
+			out.Members = append(out.Members, value.Member{Key: k, Value: ev})
+		}
+		return out, nil
+	case reflect.Struct:
+		plan, err := planFor(t)
+		if err != nil {
+			return nil, err
+		}
+		return encodeStruct(rv, plan, path)
+	}
+	return nil, &MarshalError{Path: path, Msg: "unsupported type " + t.String()}
+}
+
+// isModelStruct reports the value-model structs, which marshal as VALUES, not
+// as records with fields.
+func isModelStruct(t reflect.Type) bool {
+	return t == decimalType || t == temporalType || t == timeType
+}
+
+func isStructElem(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Kind() == reflect.Struct && !isModelStruct(t)
+}

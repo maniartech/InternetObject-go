@@ -12,9 +12,42 @@ for the architecture decisions.
 
 ## Usage
 
+### Structs, the encoding/json way
+
 ```go
 import io "github.com/maniartech/InternetObject-go"
 
+type Person struct {
+    Name  string   `io:"name"`
+    Age   int      `io:"age"`
+    Email string   `io:"email,omitempty"`
+    Tags  []string `io:"tags,omitempty"`
+}
+
+text, err := io.Marshal([]Person{
+    {Name: "Alice", Age: 30},
+    {Name: "Bob", Age: 25, Email: "bob@x.io"},
+})
+// name: string, age: int, email?: string, tags?: [string]
+// ---
+// ~ Alice, 30
+// ~ Bob, 25, bob@x.io
+
+var people []Person
+err = io.Unmarshal(text, &people)
+```
+
+`Marshal` derives the schema from the struct type and writes the data positionally — the
+format's leanness for free. `Unmarshal` validates against the document's schema (faults come
+back as the `ErrorList` with designated codes) and also binds schema-less records
+(`io.Unmarshal("Alice, 30", &p)` works). A pointer field is nullable (`nil` ⇄ `N`),
+`io:"-"` skips, `io:",omitempty"` makes the member optional, and `io:",date"` / `io:",time"`
+pick a `time.Time` field's temporal kind. See
+[ADR 0003](docs/decisions/0003-struct-marshal.md).
+
+### The dynamic document model
+
+```go
 doc, err := io.Parse(`
 ~ $schema: {name: string, age: {int, min: 0}}
 ---

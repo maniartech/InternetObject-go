@@ -129,8 +129,13 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 	// record's first member is KEYED with a name the schema does not declare,
 	// the record cannot be the record itself, so the WHOLE record is the value
 	// of the first schema member. Open schemas are excluded (an undeclared key
-	// is a legal extra there) unless they declare exactly one member.
-	if len(rec.Members) > 0 && len(s.Names) > 0 && (s.Open == nil || len(s.Names) == 1) {
+	// is a legal extra there) unless they declare exactly one REAL member —
+	// the `*` wildcard entry is openness, not a member, and never absorbs.
+	declared := len(s.Names)
+	if isWildcardDef(s) {
+		declared--
+	}
+	if len(rec.Members) > 0 && declared > 0 && (s.Open == nil || declared == 1) {
 		fm := rec.Members[0]
 		if !fm.Positional && s.Defs[fm.Key] == nil && fm.Key != "*" {
 			name0 := s.Names[0]

@@ -59,17 +59,25 @@ exponent DoS, unspellable UTC datetimes, `schema: $ref` long form, `--- $$` sect
 surplus positional members skipping validation. Upstream-relevant ones are FINDINGS 10–13 plus
 the "suggested corpus cases" list.
 
+## Struct marshaling — DONE (ADR 0003)
+
+`Marshal`/`Unmarshal` at the root package: schema derived from the struct type via the `io`
+tag (json's grammar — rename, `-`, `omitempty`; pointer = nullable; `,date`/`,time` for
+`time.Time` kinds), data written positionally through the fuzz-hardened canonical writer,
+unmarshal validating against the embedded schema (ErrorList) and binding schema-less records
+positionally. Plans cached in a `sync.Map`; concurrent-safe (tested). ~1.7µs marshal /
+~1.9µs unmarshal per 100-field-record document row. The kitchen-sink round trip found and
+fixed a validation bug: the `*` wildcard counted as a declared member in ISSUE-15 absorption
+(`{*: int}` with keyed data absorbed instead of validating per member — oracle-pinned fix).
+
 ## What's next
 
-1. **Native struct marshal/unmarshal** (user-requested, in progress) — `encoding/json`-shaped
-   `Marshal`/`Unmarshal` with `io:"…"` struct tags and schema derivation from struct types; see
-   ADR 0003 (docs/decisions) for the design.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+1. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
    outranks the library.
-3. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
+2. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
    already zero-alloc per token.
-4. Retrospective for the Rust port (definition of done, item 4).
+3. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 
