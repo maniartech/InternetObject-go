@@ -5,9 +5,9 @@
 
 ## Headline
 
-**We were 2.7×–12.8× slower than `encoding/json`. One session of targeted fixes closed a
-third of that; we are now 1.8×–8.7× slower, and the remaining gap is understood, localized,
-and fixable.** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
+**We were 2.7×–12.8× slower than `encoding/json`. Two optimization passes have closed roughly
+half of that; we are now 1.8×–5.9× slower, encode has shed 54% of its allocations, and the
+remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
 document**, competitive with any JSON parser. Everything above it is where the time goes.
 
 ## The numbers
@@ -15,17 +15,25 @@ document**, competitive with any JSON parser. Everything above it is where the t
 1,000 records × 6 members (string, int, string, bool, float, string array); 64 KB of IO text
 against 114 KB of equivalent JSON, decoded into the same Go structs.
 
-| Operation | Before | **Now** | encoding/json | Gap now |
-| --------- | -----: | ------: | ------------: | ------: |
-| Unmarshal → struct | 5.92 ms · 40,830 allocs | **4.65 ms · 34,804** | 2.32 ms · 6,019 | 2.0× |
-| Marshal ← struct | 5.50 ms · 38,701 allocs | **3.43 ms · 23,698** | 0.39 ms · **2** | 8.7× |
-| Parse → dynamic | 5.19 ms · 31,073 allocs | **3.37 ms · 25,050** | 1.92 ms · 23,013 | 1.8× |
-| Validate (no JSON equivalent) | 3.33 ms | **2.10 ms** | — | — |
-| Small record (133 B) decode | 9.6 µs · 84 allocs | **9.1 µs · 70** | 2.3 µs · 11 | 4.0× |
+| Operation | Baseline | Pass 1 | **Pass 2 (now)** | encoding/json | Gap now |
+| --------- | -------: | -----: | ---------------: | ------------: | ------: |
+| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | **~5.2 ms · 34,804** | 2.55 ms · 6,019 | ~2.1× |
+| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | **2.58 ms · 17,692** | 0.43 ms · **2** | **5.9×** |
+| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | **3.37 ms · 25,050** | 1.92 ms · 23,013 | 1.8× |
+| Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | **~2.1 ms · 22,008** | — | — |
+| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | **9.1 µs · 70** | 2.3 µs · 11 | 4.0× |
 
-Throughput now: decode **13.8 MB/s**, encode **18.7 MB/s**, dynamic parse **19.1 MB/s**,
-against JSON's 49 / 290 / 60 MB/s. Run-to-run variance on this machine is roughly ±10%, so
-treat one-digit differences as noise; the ratios are not noise.
+**Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
+17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
+that is phase B of [ADR 0006](../decisions/0006-performance-architecture.md).
+
+> **Read allocation counts, not nanoseconds.** `allocs/op` is stable to ±1 across runs;
+> ns/op on this machine swings ±30% with background load (a run taken while the fuzzers were
+> active measured `encoding/json` itself 40% slower). ADR 0006 gates CI on allocations for
+> exactly this reason.
+
+Throughput on a quiet machine: decode **~12 MB/s**, encode **~25 MB/s**, dynamic parse
+**~19 MB/s**, against JSON's ~44 / ~260 / ~58 MB/s.
 
 ### Where we already win: the wire
 
@@ -40,13 +48,16 @@ plainly rather than hiding.
 
 ## Diagnosis — where the time actually goes
 
-Allocation profiles (`-memprofile`), after this session's fixes:
+Allocation profiles (`-memprofile`). The encode figures below are from *before* pass 2 and
+explain why it was done; the decode figures are current.
 
 **Encode (Marshal).** `encodeStruct` 25% — building `*value.Object` trees; `writeRecord` +
 `writeSection` **40%** — the writer builds a `[]string` of formatted parts at every nesting
 level and `strings.Join`s them, so a 1,000-record document allocates thousands of short-lived
 strings and slices. `encoding/json` reaches **2 allocations** by streaming bytes into one
-growing buffer. This single structural difference is most of the 8.7×.
+growing buffer. This single structural difference was most of the original 12.8×; pass 2
+addressed it, and `encodeStruct` — building the intermediate `*value.Object` tree — is now
+the top encode allocation site.
 
 **Decode (Unmarshal).** `Tokenize` 20% (now one sized allocation — the cost of the token
 buffer itself), `parser.addMember` 20%, `schema.assemble` 16%, reflection 7%. Decoding runs
@@ -56,7 +67,31 @@ values — where `encoding/json` does one.
 **The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
 
-## What changed this session
+## What changed — pass 2 (ADR 0006 P1 + P5)
+
+**P1 — the writer is now append-style.** One `[]byte` buffer, sized from the record count, is
+threaded through the entire per-record path; every piece is appended into it. The `[]string`
++ `strings.Join` at each nesting level is gone, along with the intermediate string per value.
+Supporting pieces: `strconv`/`time.AppendFormat`/`base64.AppendEncode`/`big.Int.Append` write
+straight into the buffer, and a small `partWriter` reproduces the "trailing empty members
+vanish, interior ones keep their comma" rule without materializing parts. The header and
+schema writers stay string-based deliberately — they run once per document, not per record.
+
+**P5 — no regexp on the hot path.** The six writer regexes became byte-class tables and hand
+scanners. Safety: the original regexes are kept **in the test file only**, and
+`write_scan_test.go` pins every scanner to its regex over a 100-case table plus a fuzz target
+that ran **10M inputs** with zero disagreements.
+
+**Also:** removed the last per-record map in the writer (the `handled` set) by reading the
+compiled schema's own map instead.
+
+**A pre-existing bug surfaced while gating this** (`FuzzParse`, verified against the previous
+writer — not a regression): with a typed wildcard schema (`*: int`), a data member whose key
+is literally `*` was hoisted into the wildcard's *schema slot*, so it was emitted ahead of
+positional members — a record spelled `"*": 0, 0`, which is unparseable. The reference keeps
+arrival order; the `*` entry is openness, not a member. Fixed in `validateObject`.
+
+## What changed — pass 1
 
 Four small, safe fixes — corpus (1,572+262) and all three fuzz layers green after each:
 
@@ -78,11 +113,12 @@ Ordered by value per unit of risk. Estimates are from the profiles, not measured
 
 | # | Change | Expected | Risk |
 | - | ------ | -------- | ---- |
-| 1 | **Writer streams into one `strings.Builder`** instead of `[]string`+`Join` at every level | Encode −50…70%; would land near 60–90 MB/s | Medium — touches the fuzz-critical writer, but corpus + 3 fuzzers gate it |
+| ~~1~~ | ~~Writer streams into one buffer~~ | **DONE (pass 2)** — encode −25% time, −25% allocs on top of pass 1 | landed; corpus + 3 fuzzers green |
 | 2 | **Validation without per-record maps** — `slots`/`processed` become slices indexed by schema position | Decode −15…25% | Low |
 | 3 | **Bind straight from the parsed tree** — `Unmarshal` currently materializes a validated *second* tree; bind during validation instead | Decode −20…30% | Medium |
 | 4 | **Don't deep-clone in `Project()`** — the dynamic path clones the whole tree just to rename positional keys | Dynamic parse −30% | Low |
-| 5 | **Tune the token-slice heuristic** (`len/4`) against real documents; over-allocation is now visible in the profile | Decode bytes −10% | Low |
+| 5 | **Encode without the intermediate tree** — `Marshal` builds a `*value.Object` tree before writing (`encodeStruct`, now the top allocation site at 25%); walking the struct straight into the buffer removes it, at the cost of a second encoding path (weigh against "one decision, one site") | Encode −30…40% | Medium |
+| 5b | **Tune the token-slice heuristic** (`len/4`) against real documents; over-allocation is now visible in the profile | Decode bytes −10% | Low |
 | 6 | **Reuse buffers across calls** (`sync.Pool` for token slices and the writer's builder) | Both −10…20% | Medium |
 | 7 | **Generated code (`iogen`)** removes reflection entirely from the struct path | Encode/decode −30…50% on top | Larger project |
 

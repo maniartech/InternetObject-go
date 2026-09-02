@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"math"
 	"math/big"
-	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
 	"github.com/maniartech/InternetObject-go/internal/parser"
@@ -28,11 +28,19 @@ var reservedSectionNames = map[string]bool{"data": true, "schema": true, "$schem
 // schemas spelled with types, keys emitted only where a name is not
 // recoverable ("extras" mode).
 func (d *Doc) String() string {
-	var parts []string
+	// One buffer for the whole document, sized from the record count so it
+	// doubles at most once or twice (ADR 0006 P1).
+	n := 0
+	for _, sec := range d.Sections {
+		n += len(sec.Records)
+	}
+	dst := make([]byte, 0, 64+64*n)
 
+	wrote := false
 	if d.Header != nil {
 		if h := d.writeHeader(); h != "" {
-			parts = append(parts, h)
+			dst = append(dst, h...)
+			wrote = true
 		}
 	}
 
@@ -44,25 +52,38 @@ func (d *Doc) String() string {
 		hasRealName := sec.Name != "" && !reservedSectionNames[sec.Name] &&
 			tokenizer.ValidSectionName(sec.Name)
 
-		if len(parts) > 0 && (hasRealName || hasNamedSchema) {
-			parts = append(parts, "") // a blank line before a named/bound section
+		if wrote {
+			dst = append(dst, '\n')
+			if hasRealName || hasNamedSchema {
+				dst = append(dst, '\n') // a blank line before a named/bound section
+			}
 		}
+		wrote = true
 		switch {
 		case hasRealName && hasNamedSchema:
-			parts = append(parts, "--- "+sec.Name+": $"+sec.SchemaName)
+			dst = append(dst, "--- "...)
+			dst = append(dst, sec.Name...)
+			dst = append(dst, ": $"...)
+			dst = append(dst, sec.SchemaName...)
 		case hasRealName:
-			parts = append(parts, "--- "+sec.Name)
+			dst = append(dst, "--- "...)
+			dst = append(dst, sec.Name...)
 		case hasNamedSchema:
-			parts = append(parts, "--- $"+sec.SchemaName)
+			dst = append(dst, "--- $"...)
+			dst = append(dst, sec.SchemaName...)
 		default:
-			parts = append(parts, "---")
+			dst = append(dst, "---"...)
 		}
 
-		if text := d.writeSection(sec); text != "" {
-			parts = append(parts, text)
+		mark := len(dst)
+		dst = append(dst, '\n')
+		body := len(dst)
+		dst = d.appendSection(dst, sec)
+		if len(dst) == body {
+			dst = dst[:mark] // the section wrote nothing; drop the newline
 		}
 	}
-	return strings.Join(parts, "\n")
+	return string(dst)
 }
 
 // SchemaText renders a compiled schema's member declarations in canonical
@@ -339,69 +360,111 @@ func (d *Doc) constraintValue(v any) string {
 }
 
 // ── sections and records ───────────────────────────────────────────────────
+//
+// The per-record path is APPEND-STYLE: one caller-owned []byte buffer is
+// threaded through the whole recursion and every piece is appended into it,
+// exactly as encoding/json's encodeState and the standard library's Append*
+// family work. The previous shape — a []string of formatted parts joined at
+// every nesting level — allocated once per value, once per level, and copied
+// the whole document at each join (ADR 0006 P1). The header and schema
+// writers above stay string-based: they run once per document, not per
+// record.
 
-func (d *Doc) writeSection(sec *parser.Section) string {
+// partWriter emits comma-separated parts into a buffer, holding back empty
+// parts so trailing ones vanish while interior ones keep their comma — the
+// streaming equivalent of trimming a []string before strings.Join.
+type partWriter struct {
+	count   int // parts committed, including flushed empties
+	pending int // empty parts held back
+}
+
+// sep writes the separator for the next part, flushing any held empties.
+func (w *partWriter) sep(dst []byte) []byte {
+	for ; w.pending > 0; w.pending-- {
+		if w.count > 0 {
+			dst = append(dst, ',', ' ')
+		}
+		w.count++
+	}
+	if w.count > 0 {
+		dst = append(dst, ',', ' ')
+	}
+	w.count++
+	return dst
+}
+
+func (w *partWriter) empty() { w.pending++ }
+
+func (d *Doc) appendSection(dst []byte, sec *parser.Section) []byte {
 	sch := d.SecSchemas[sec]
 	if sec.Collection {
-		var lines []string
+		first := true
 		for _, rec := range sec.Records {
-			if obj, ok := rec.(*value.Object); ok {
-				lines = append(lines, "~ "+d.writeBareRecord(obj, sch))
+			obj, ok := rec.(*value.Object)
+			if !ok {
+				continue
 			}
+			if !first {
+				dst = append(dst, '\n')
+			}
+			first = false
+			dst = append(dst, '~', ' ')
+			dst = d.appendBareRecord(dst, obj, sch)
 		}
-		return strings.Join(lines, "\n")
+		return dst
 	}
 	if len(sec.Records) == 0 {
-		return ""
+		return dst
 	}
 	obj, ok := sec.Records[0].(*value.Object)
 	if !ok {
-		return ""
+		return dst
 	}
-	line := d.writeBareRecord(obj, sch)
-	if line == "" {
-		return "{}" // an empty bare record must still put a record on the page
+	mark := len(dst)
+	dst = d.appendBareRecord(dst, obj, sch)
+	if len(dst) == mark {
+		dst = append(dst, '{', '}') // an empty bare record still needs a record
 	}
-	return line
+	return dst
 }
 
-// writeRecord renders one record's members, schema order first.
-func (d *Doc) writeRecord(obj *value.Object, sch *schema.Schema) string {
-	var parts []string
+// appendRecord renders one record's members, schema order first.
+func (d *Doc) appendRecord(dst []byte, obj *value.Object, sch *schema.Schema) []byte {
+	var w partWriter
 
 	if sch != nil {
-		handled := map[string]bool{}
 		for _, name := range sch.Names {
 			if name == "*" {
 				continue
 			}
 			md := sch.Defs[name]
 			if i := obj.Find(name); i >= 0 {
-				parts = append(parts, d.writeValueWithDef(obj.Members[i].Value, md))
+				dst = w.sep(dst)
+				dst = d.appendValueWithDef(dst, obj.Members[i].Value, md)
 			} else if md.Optional && !md.HasDefault {
-				parts = append(parts, "") // hold the position
+				w.empty() // hold the position; trailing ones are dropped
 			}
-			handled[name] = true
-		}
-		for len(parts) > 0 && parts[len(parts)-1] == "" {
-			parts = parts[:len(parts)-1] // trailing empties carry no information
 		}
 		for _, m := range obj.Members {
-			if !m.Positional && handled[m.Key] {
+			// "Already written above" is exactly "declared by the schema" —
+			// every name in sch.Names is emitted in that loop, and the bare
+			// wildcard is skipped there. Reading the compiled schema's own map
+			// avoids building a per-record `handled` map (ADR 0006 P2).
+			if !m.Positional && m.Key != "*" && sch.Defs[m.Key] != nil {
 				continue
 			}
 			var md *schema.MemberDef
 			if o, ok := sch.Open.(*schema.MemberDef); ok {
 				md = o
 			}
-			formatted := d.writeValueWithDef(m.Value, md)
-			if m.Positional {
-				parts = append(parts, formatted)
-			} else {
-				parts = append(parts, formatObjectKey(m.Key)+": "+formatted)
+			dst = w.sep(dst)
+			if !m.Positional {
+				dst = appendObjectKey(dst, m.Key)
+				dst = append(dst, ':', ' ')
 			}
+			dst = d.appendValueWithDef(dst, m.Value, md)
 		}
-		return strings.Join(parts, ", ")
+		return dst
 	}
 
 	// No schema: a member is positional when keyless or when its key equals
@@ -410,30 +473,29 @@ func (d *Doc) writeRecord(obj *value.Object, sch *schema.Schema) string {
 	// middle, dropped at the end.
 	for i, m := range obj.Members {
 		if m.Absent {
-			parts = append(parts, "")
+			w.empty()
 			continue
 		}
-		formatted := d.writeValue(m.Value, nil)
-		if m.Positional || m.Key == strconv.Itoa(i) {
-			parts = append(parts, formatted)
-		} else {
-			parts = append(parts, formatObjectKey(m.Key)+": "+formatted)
+		dst = w.sep(dst)
+		if !m.Positional && m.Key != strconv.Itoa(i) {
+			dst = appendObjectKey(dst, m.Key)
+			dst = append(dst, ':', ' ')
 		}
+		dst = d.appendValue(dst, m.Value, nil)
 	}
-	for len(parts) > 0 && parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
-	}
-	return strings.Join(parts, ", ")
+	return dst
 }
 
-// writeBareRecord renders a record for a BARE emit site — a `~` line or a
+// appendBareRecord renders a record for a BARE emit site — a `~` line or a
 // section's single record. A bare line that is exactly one keyless braced
 // object is ambiguous unenclosed: the re-parser absorbs those braces as the
 // record's own (ISSUE-15), schema or no schema, dropping a nesting level.
-// Enclosing applies here only; a nested object's braces come from writeValue,
+// Enclosing applies here only; a nested object's braces come from appendValue,
 // where absorption never happens.
-func (d *Doc) writeBareRecord(obj *value.Object, sch *schema.Schema) string {
-	line := d.writeRecord(obj, sch)
+func (d *Doc) appendBareRecord(dst []byte, obj *value.Object, sch *schema.Schema) []byte {
+	mark := len(dst)
+	dst = d.appendRecord(dst, obj, sch)
+
 	present, lastIsObject := 0, false
 	for _, m := range obj.Members {
 		if m.Absent {
@@ -442,25 +504,29 @@ func (d *Doc) writeBareRecord(obj *value.Object, sch *schema.Schema) string {
 		present++
 		_, lastIsObject = m.Value.(*value.Object)
 	}
-	if present == 1 && lastIsObject && strings.HasPrefix(line, "{") {
-		return "{" + line + "}"
+	if present == 1 && lastIsObject && len(dst) > mark && dst[mark] == '{' {
+		// Wrap in place: one shift, and only for this rare shape.
+		dst = append(dst, 0)
+		copy(dst[mark+1:], dst[mark:])
+		dst[mark] = '{'
+		dst = append(dst, '}')
 	}
-	return line
+	return dst
 }
 
-// writeValueWithDef renders a member value under its definition (the declared
+// appendValueWithDef renders a member value under its definition (the declared
 // temporal kind wins; a nested schema renders its object positionally).
-func (d *Doc) writeValueWithDef(v any, md *schema.MemberDef) string {
+func (d *Doc) appendValueWithDef(dst []byte, v any, md *schema.MemberDef) []byte {
 	if md == nil {
-		return d.writeValue(v, nil)
+		return d.appendValue(dst, v, nil)
 	}
 	if v == nil {
-		return "N"
+		return append(dst, 'N')
 	}
 	if t, ok := v.(value.Temporal); ok {
 		switch md.Type {
 		case "date", "time", "datetime":
-			return temporalLiteral(t, md.Type)
+			return appendTemporal(dst, t, md.Type)
 		}
 	}
 	if obj, ok := v.(*value.Object); ok {
@@ -468,50 +534,70 @@ func (d *Doc) writeValueWithDef(v any, md *schema.MemberDef) string {
 		if sch == nil && md.SchemaRef != "" {
 			sch, _ = d.Defs.SchemaOf(strings.TrimPrefix(md.SchemaRef, "$"))
 		}
-		return "{" + d.writeRecord(obj, sch) + "}"
+		dst = append(dst, '{')
+		dst = d.appendRecord(dst, obj, sch)
+		return append(dst, '}')
 	}
 	if arr, ok := v.([]any); ok {
-		var elems []string
-		for _, e := range arr {
-			elems = append(elems, d.writeValueWithDef(e, md.Of))
+		dst = append(dst, '[')
+		for i, e := range arr {
+			if i > 0 {
+				dst = append(dst, ',', ' ')
+			}
+			dst = d.appendValueWithDef(dst, e, md.Of)
 		}
-		return "[" + strings.Join(elems, ", ") + "]"
+		return append(dst, ']')
 	}
-	return d.writeValue(v, md)
+	return d.appendValue(dst, v, md)
 }
 
-// writeValue renders one value with no (or a scalar) definition in scope.
-func (d *Doc) writeValue(v any, md *schema.MemberDef) string {
+// appendValue renders one value with no (or a scalar) definition in scope.
+func (d *Doc) appendValue(dst []byte, v any, md *schema.MemberDef) []byte {
 	switch x := v.(type) {
 	case nil:
-		return "N"
+		return append(dst, 'N')
 	case bool:
 		if x {
-			return "T"
+			return append(dst, 'T')
 		}
-		return "F"
+		return append(dst, 'F')
 	case float64:
-		return ioNumber(x)
+		return appendIONumber(dst, x)
 	case *big.Int:
-		return x.String() + "n"
+		dst = x.Append(dst, 10)
+		return append(dst, 'n')
 	case value.Decimal:
-		return x.String() + "m"
+		dst = append(dst, x.String()...)
+		return append(dst, 'm')
 	case []byte:
-		return `b"` + base64.StdEncoding.EncodeToString(x) + `"`
+		dst = append(dst, 'b', '"')
+		dst = base64.StdEncoding.AppendEncode(dst, x)
+		return append(dst, '"')
 	case value.Temporal:
-		return temporalLiteral(x, "")
+		return appendTemporal(dst, x, "")
 	case string:
-		return autoString(x)
+		return appendAutoString(dst, x)
 	case *value.Object:
-		return "{" + d.writeRecord(x, nil) + "}"
+		dst = append(dst, '{')
+		dst = d.appendRecord(dst, x, nil)
+		return append(dst, '}')
 	case []any:
-		var elems []string
-		for _, e := range x {
-			elems = append(elems, d.writeValue(e, nil))
+		dst = append(dst, '[')
+		for i, e := range x {
+			if i > 0 {
+				dst = append(dst, ',', ' ')
+			}
+			dst = d.appendValue(dst, e, nil)
 		}
-		return "[" + strings.Join(elems, ", ") + "]"
+		return append(dst, ']')
 	}
-	return ""
+	return dst
+}
+
+// writeValue keeps the string form for the header path, which runs once per
+// document and reads better as a string.
+func (d *Doc) writeValue(v any, md *schema.MemberDef) string {
+	return string(d.appendValue(nil, v, md))
 }
 
 // ── scalars ────────────────────────────────────────────────────────────────
@@ -530,49 +616,216 @@ func ioNumber(f float64) string {
 	return numfmt.Format(f)
 }
 
+// appendIONumber is the append-style form: the specials are constants, and
+// the general case defers to numfmt (ADR 0006 P1 — a numfmt.Append would
+// remove the one remaining allocation here).
+func appendIONumber(dst []byte, f float64) []byte {
+	switch {
+	case math.IsNaN(f):
+		return append(dst, "NaN"...)
+	case math.IsInf(f, 1):
+		return append(dst, "Inf"...)
+	case math.IsInf(f, -1):
+		return append(dst, "-Inf"...)
+	}
+	return append(dst, numfmt.Format(f)...)
+}
+
+// appendTemporal is temporalLiteral in append form: time.AppendFormat writes
+// straight into the buffer, so no intermediate string is built.
+func appendTemporal(dst []byte, t value.Temporal, declared string) []byte {
+	u := t.T.UTC()
+	kind := declared
+	if kind == "" {
+		kind = inferTemporalKind(u)
+	}
+	switch kind {
+	case "date":
+		dst = append(dst, 'd', '"')
+		dst = u.AppendFormat(dst, "2006-01-02")
+	case "time":
+		dst = append(dst, 't', '"')
+		if u.Nanosecond() != 0 {
+			dst = u.AppendFormat(dst, "15:04:05.000")
+		} else {
+			dst = u.AppendFormat(dst, "15:04:05")
+		}
+	default:
+		dst = append(dst, 'd', 't', '"')
+		dst = u.AppendFormat(dst, "2006-01-02T15:04:05.000Z")
+	}
+	return append(dst, '"')
+}
+
+// inferTemporalKind is THE single site deciding which literal an undeclared
+// temporal is written as: the 1900-01-01 sentinel date is a time, an all-zero
+// clock is a date, anything else a datetime.
+func inferTemporalKind(u time.Time) string {
+	y, mo, day := u.Date()
+	h, mi, sec := u.Clock()
+	switch {
+	case y == 1900 && mo == 1 && day == 1:
+		return "time"
+	case h == 0 && mi == 0 && sec == 0 && u.Nanosecond() == 0:
+		return "date"
+	}
+	return "datetime"
+}
+
 // temporalLiteral renders a temporal value under the declared kind, or the
 // kind the value itself evidences when none is declared: the 1900-01-01
 // sentinel date is a time, an all-zero time is a date, anything else a
 // datetime.
 func temporalLiteral(t value.Temporal, declared string) string {
-	u := t.T.UTC()
-	kind := declared
-	if kind == "" {
-		y, mo, day := u.Date()
-		h, mi, s := u.Clock()
-		ms := u.Nanosecond() / 1e6
-		switch {
-		case y == 1900 && mo == 1 && day == 1:
-			kind = "time"
-		case h == 0 && mi == 0 && s == 0 && ms == 0:
-			kind = "date"
-		default:
-			kind = "datetime"
-		}
-	}
-	switch kind {
-	case "date":
-		return `d"` + u.Format("2006-01-02") + `"`
-	case "time":
-		if u.Nanosecond() != 0 {
-			return `t"` + u.Format("15:04:05.000") + `"`
-		}
-		return `t"` + u.Format("15:04:05") + `"`
-	default:
-		return `dt"` + u.Format("2006-01-02T15:04:05.000Z") + `"`
-	}
+	return string(appendTemporal(nil, t, declared))
 }
 
 // ── strings and keys ───────────────────────────────────────────────────────
 
-var (
-	reDateLike     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	reTimeLike     = regexp.MustCompile(`^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$`)
-	reDateTimeLike = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$`)
-	reKeyNumeric   = regexp.MustCompile(`^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$`)
-	reKeyKeyword   = regexp.MustCompile(`^(?:true|false|null|T|F|N|Inf|NaN)$`)
-	reKeyBareSafe  = regexp.MustCompile(`^[$A-Za-z_][A-Za-z0-9_. -]*$`)
-)
+// Hot-path classification is table- and scanner-based, never regexp: these
+// run on every string and every key written, and Go's RE2 engine allocates
+// match state per call (ADR 0006 P5). Each function is pinned to the regex it
+// replaced by a table-driven equivalence test in write_scan_test.go.
+
+// bareSafeKeyByte is the `[A-Za-z0-9_. -]` continuation set of the bare-key
+// grammar; the first byte additionally allows `$` but never a digit.
+var bareSafeKeyByte = func() (t [256]bool) {
+	for c := 'a'; c <= 'z'; c++ {
+		t[c] = true
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		t[c] = true
+	}
+	for c := '0'; c <= '9'; c++ {
+		t[c] = true
+	}
+	t['_'], t['.'], t[' '], t['-'] = true, true, true, true
+	return
+}()
+
+var keywordKeys = map[string]bool{
+	"true": true, "false": true, "null": true,
+	"T": true, "F": true, "N": true, "Inf": true, "NaN": true,
+}
+
+func isDigitByte(c byte) bool { return c >= '0' && c <= '9' }
+
+func allDigitsIn(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isDigitByte(s[i]) {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// isBareSafeKey replaces `^[$A-Za-z_][A-Za-z0-9_. -]*$`.
+func isBareSafeKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	if c != '$' && c != '_' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !bareSafeKeyByte[s[i]] {
+			return false
+		}
+	}
+	return true
+}
+
+// isNumericKey replaces `^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$`.
+func isNumericKey(s string) bool {
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	intDigits := 0
+	for i < len(s) && isDigitByte(s[i]) {
+		i++
+		intDigits++
+	}
+	fracDigits := 0
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && isDigitByte(s[i]) {
+			i++
+			fracDigits++
+		}
+	}
+	if intDigits == 0 && fracDigits == 0 {
+		return false
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		k := 0
+		for i < len(s) && isDigitByte(s[i]) {
+			i++
+			k++
+		}
+		if k == 0 {
+			return false
+		}
+	}
+	return i == len(s)
+}
+
+// isDateLike replaces `^\d{4}-\d{2}-\d{2}$`.
+func isDateLike(s string) bool {
+	return len(s) == 10 && s[4] == '-' && s[7] == '-' &&
+		allDigitsIn(s[0:4]) && allDigitsIn(s[5:7]) && allDigitsIn(s[8:10])
+}
+
+// isTimeLike replaces `^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$`.
+func isTimeLike(s string) bool {
+	if len(s) < 5 || s[2] != ':' || !allDigitsIn(s[0:2]) || !allDigitsIn(s[3:5]) {
+		return false
+	}
+	if len(s) == 5 {
+		return true
+	}
+	if len(s) < 8 || s[5] != ':' || !allDigitsIn(s[6:8]) {
+		return false
+	}
+	if len(s) == 8 {
+		return true
+	}
+	return s[8] == '.' && allDigitsIn(s[9:])
+}
+
+// isDateTimeLike replaces the date + `T`/space + time + optional-zone regex.
+func isDateTimeLike(s string) bool {
+	if len(s) < 16 || !isDateLike(s[:10]) || (s[10] != 'T' && s[10] != ' ') {
+		return false
+	}
+	rest := s[11:]
+	if z := len(rest) - 1; z >= 0 && rest[z] == 'Z' {
+		return isTimeLike(rest[:z])
+	}
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '+' || rest[i] == '-' {
+			return isTimeLike(rest[:i]) && isZoneOffset(rest[i:])
+		}
+	}
+	return isTimeLike(rest)
+}
+
+// isZoneOffset matches `[+-]\d{2}:?\d{2}`.
+func isZoneOffset(s string) bool {
+	if len(s) < 5 || (s[0] != '+' && s[0] != '-') {
+		return false
+	}
+	body := s[1:]
+	if len(body) == 5 && body[2] == ':' {
+		return allDigitsIn(body[0:2]) && allDigitsIn(body[3:5])
+	}
+	return len(body) == 4 && allDigitsIn(body)
+}
 
 var ambiguousWords = map[string]bool{
 	"null": true, "N": true, "true": true, "T": true, "false": true, "F": true,
@@ -610,7 +863,7 @@ func isAmbiguousString(s string) bool {
 			return true
 		}
 	}
-	return reDateLike.MatchString(s) || reTimeLike.MatchString(s) || reDateTimeLike.MatchString(s)
+	return isDateLike(s) || isTimeLike(s) || isDateTimeLike(s)
 }
 
 // refSpelling spells a `$name` schema reference. Most refs are plain words
@@ -643,82 +896,107 @@ func hasBareUnsafeControl(s string) bool {
 // escaped structural characters, raw when \n\r\t would need escaping, bare
 // otherwise.
 func autoString(s string) string {
+	return string(appendAutoString(nil, s))
+}
+
+// appendAutoString is the append-style form every record path uses.
+func appendAutoString(dst []byte, s string) []byte {
 	// A raw carriage return is newline-normalized by the reader in every
 	// unescaped spelling, so \r joins the must-quote set alongside the other
 	// controls.
 	if isAmbiguousString(s) || strings.ContainsRune(s, ',') ||
 		strings.ContainsRune(s, '\r') || hasBareUnsafeControl(s) {
-		return regularString(s)
+		return appendRegularString(dst, s)
 	}
 	if strings.ContainsAny(s, "{}[]:#\"'\\~") {
-		return openEscaped(s)
+		return appendOpenEscaped(dst, s)
 	}
 	if strings.ContainsAny(s, "\n\t") {
-		return `r"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+		dst = append(dst, 'r', '"')
+		for i := 0; i < len(s); i++ {
+			if s[i] == '"' {
+				dst = append(dst, '"')
+			}
+			dst = append(dst, s[i])
+		}
+		return append(dst, '"')
 	}
-	return s
+	return append(dst, s...)
 }
 
 // regularString spells s as a regular quoted string. Every C0 control
 // character is escaped — named where the reader names one, \u00XX otherwise —
 // so the quoted form never carries a raw control byte.
 func regularString(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 2)
-	b.WriteByte('"')
+	return string(appendRegularString(nil, s))
+}
+
+func appendRegularString(dst []byte, s string) []byte {
+	dst = append(dst, '"')
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; c {
 		case '\\':
-			b.WriteString(`\\`)
+			dst = append(dst, '\\', '\\')
 		case '"':
-			b.WriteString(`\"`)
+			dst = append(dst, '\\', '"')
 		case '\n':
-			b.WriteString(`\n`)
+			dst = append(dst, '\\', 'n')
 		case '\r':
-			b.WriteString(`\r`)
+			dst = append(dst, '\\', 'r')
 		case '\t':
-			b.WriteString(`\t`)
+			dst = append(dst, '\\', 't')
 		case '\b':
-			b.WriteString(`\b`)
+			dst = append(dst, '\\', 'b')
 		case '\f':
-			b.WriteString(`\f`)
+			dst = append(dst, '\\', 'f')
 		default:
 			if c < 0x20 {
 				const hex = "0123456789abcdef"
-				b.WriteString(`\u00`)
-				b.WriteByte(hex[c>>4])
-				b.WriteByte(hex[c&0xF])
+				dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xF])
 			} else {
-				b.WriteByte(c)
+				dst = append(dst, c)
 			}
 		}
 	}
-	b.WriteByte('"')
-	return b.String()
+	return append(dst, '"')
 }
 
 func openEscaped(s string) string {
-	var b strings.Builder
+	return string(appendOpenEscaped(nil, s))
+}
+
+func appendOpenEscaped(dst []byte, s string) []byte {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch c {
 		case '{', '}', '[', ']', ':', '#', '"', '\'', '\\', '~':
-			b.WriteByte('\\')
+			dst = append(dst, '\\')
 		}
-		b.WriteByte(c)
+		dst = append(dst, c)
 	}
-	return b.String()
+	return dst
 }
 
 // formatObjectKey quotes a key whose bare spelling would not read back as
 // that key: numerics, keywords, and anything outside the identifier-like set.
 func formatObjectKey(key string) string {
-	bareSafe := reKeyBareSafe.MatchString(key) &&
-		!strings.HasSuffix(key, " ") && !strings.Contains(key, "---")
-	if reKeyNumeric.MatchString(key) || reKeyKeyword.MatchString(key) || !bareSafe {
-		return regularString(key)
+	return string(appendObjectKey(nil, key))
+}
+
+// keyIsBare reports whether a key can be written unquoted — THE key-quoting
+// decision, made once and shared by both spellings.
+func keyIsBare(key string) bool {
+	return isBareSafeKey(key) &&
+		!strings.HasSuffix(key, " ") && !strings.Contains(key, "---") &&
+		!isNumericKey(key) && !keywordKeys[key]
+}
+
+// appendObjectKey is formatObjectKey in append form.
+func appendObjectKey(dst []byte, key string) []byte {
+	if keyIsBare(key) {
+		return append(dst, key...)
 	}
-	return key
+	return appendRegularString(dst, key)
 }
 
 // isSpaceByte reports ASCII whitespace — the word separators a bare run can

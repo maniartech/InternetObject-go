@@ -225,6 +225,15 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			vfail(errs.DuplicateMember)
 		}
 		md := s.Defs[name]
+		if name == "*" && isWildcardDef(s) {
+			// The `*` entry is OPENNESS, not a member named `*`. A data key
+			// that happens to be `*` is an ordinary extra: it must keep its
+			// arrival position, not be hoisted into schema order ahead of
+			// positional members — which produced a record the writer could
+			// only spell as unparseable `"*": 0, 0` (found by the byte fuzzer;
+			// the reference keeps arrival order).
+			md = nil
+		}
 		if md == nil {
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
