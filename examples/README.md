@@ -15,6 +15,14 @@ go run ./examples/01-parse
 | [05-runtime-schema](05-runtime-schema/main.go) | Runtime schemas: compile once with `ParseSchema`, then `UnmarshalWith` / `ValidateWith` / `MarshalWith` / `ParseWith` / `StreamOptions.Schema` | shipped |
 | [PROPOSED.md](PROPOSED.md) | The full native surface from [ADR 0004](../docs/decisions/0004-native-api-design.md): embeddable bases, documents/sections/collections, typed definitions, `With` functions, `iogen` | design |
 
+## One verb per direction
+
+`Marshal`/`Unmarshal` convert Go values ⇄ IO text (as in `encoding/json`); `Parse`/`String`
+convert IO text ⇄ this module's own `Document` and `Schema` (as in `url.Parse`);  `Stream`
+reads incrementally; `Validate` checks without producing text. `…With(…, s)` runs any of them
+against an explicit schema. No `Load`, `Read`, `Decode` or `Write` anywhere — see
+[ADR 0004 D0](../docs/decisions/0004-native-api-design.md).
+
 ## The design in one idea
 
 **A gradient, not a framework.** Plain structs and package functions always work; embedded

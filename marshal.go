@@ -104,7 +104,7 @@ func Marshal(v any) (string, error) {
 	if cerr != nil {
 		return "", &MarshalError{Path: "$", Msg: "derived schema does not compile: " + cerr.Code}
 	}
-	return doc.Write(), nil
+	return doc.String(), nil
 }
 
 // MarshalError is a binding fault found while marshaling: the field path and

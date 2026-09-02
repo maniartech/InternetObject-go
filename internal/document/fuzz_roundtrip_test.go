@@ -1,7 +1,7 @@
 // Round-trip property fuzzer (io-test-cases PORTING-NOTES.md part 3).
 //
 // Generates random documents from the VALUE side and asserts, for every one:
-//   - Write does not panic,
+//   - String does not panic,
 //   - the output re-parses with zero errors (the highest-yield property),
 //   - the projected value survives exactly (strict comparator — none of the
 //     corpus comparator's cross-type leniency, which could mask data loss),
@@ -362,8 +362,8 @@ func runFuzzSeed(t *testing.T, seed uint64, rounds int) (failures int) {
 		doc := genFuzzDoc(r)
 		original := doc.Project()
 
-		text := doc.Write()
-		back := Load(text)
+		text := doc.String()
+		back := Parse(text)
 		if len(back.Errors) > 0 {
 			codes := make([]string, len(back.Errors))
 			for i, e := range back.Errors {
@@ -379,7 +379,7 @@ func runFuzzSeed(t *testing.T, seed uint64, rounds int) (failures int) {
 			failures++
 			continue
 		}
-		if second := back.Write(); second != text {
+		if second := back.String(); second != text {
 			t.Errorf("seed %#x round %d: not idempotent:\n  first=%q\n  second=%q", seed, round, text, second)
 			failures++
 		}

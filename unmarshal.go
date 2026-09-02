@@ -20,7 +20,7 @@ import (
 // positionally by field order and by key for named members, so
 // `Unmarshal("Alice, 30", &p)` works without a header.
 func Unmarshal(src string, v any) error {
-	return bindDoc(document.Load(src), v)
+	return bindDoc(document.Parse(src), v)
 }
 
 // bindDoc binds a loaded document into v — the shared tail of Unmarshal and

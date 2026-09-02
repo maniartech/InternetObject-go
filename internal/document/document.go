@@ -23,15 +23,15 @@ type Doc struct {
 
 // Load parses and validates one document, binding each section to the schema
 // its own header names.
-func Load(src string) *Doc { return load(src, nil) }
+func Parse(src string) *Doc { return parse(src, nil) }
 
-// LoadWith parses and validates one document against an ALREADY COMPILED
+// ParseWith parses and validates one document against an ALREADY COMPILED
 // schema, which overrides whatever the document's own header would bind (ADR
 // 0004 D5: attached > header > tag-derived). The header is still read, so
 // `@variables` and `$refs` it defines stay resolvable inside records.
-func LoadWith(src string, override *schema.Schema) *Doc { return load(src, override) }
+func ParseWith(src string, override *schema.Schema) *Doc { return parse(src, override) }
 
-func load(src string, override *schema.Schema) *Doc {
+func parse(src string, override *schema.Schema) *Doc {
 	pdoc := parser.Parse(src)
 	defs := newDefs(pdoc.Header)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
@@ -150,7 +150,7 @@ func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
 // CompileSchemaString parses a schema definition string and compiles it — the
 // schemaDef pipeline stage, used by the conformance suite and (later) the
 // public API.
-func CompileSchemaString(src string) (*schema.Schema, *errs.Error) {
+func ParseSchema(src string) (*schema.Schema, *errs.Error) {
 	doc := parser.Parse(src)
 	if len(doc.Errors) > 0 {
 		e := doc.Errors[0]

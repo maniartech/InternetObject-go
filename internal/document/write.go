@@ -24,10 +24,10 @@ import (
 // reservedSectionNames are the parser defaults a writer treats as no name.
 var reservedSectionNames = map[string]bool{"data": true, "schema": true, "$schema": true}
 
-// Write renders the loaded document in canonical form: header included,
+// String renders the loaded document in canonical form: header included,
 // schemas spelled with types, keys emitted only where a name is not
 // recoverable ("extras" mode).
-func (d *Doc) Write() string {
+func (d *Doc) String() string {
 	var parts []string
 
 	if d.Header != nil {

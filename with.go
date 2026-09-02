@@ -29,7 +29,7 @@ func ParseWith(src string, s *Schema) (*Document, error) {
 	if s == nil {
 		return nil, ErrorList{{Code: "invalid-schema", Line: 1, Col: 1}}
 	}
-	doc := document.LoadWith(src, s.s)
+	doc := document.ParseWith(src, s.s)
 	return &Document{doc: doc}, toErrorList(doc.Errors)
 }
 
@@ -43,7 +43,7 @@ func UnmarshalWith(src string, v any, s *Schema) error {
 	if s == nil {
 		return &UnmarshalError{Path: "$", Msg: "nil schema"}
 	}
-	return bindDoc(document.LoadWith(src, s.s), v)
+	return bindDoc(document.ParseWith(src, s.s), v)
 }
 
 // MarshalWith renders v as an Internet Object document using s as the schema:
@@ -108,7 +108,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 		return "", err
 	}
 	pdoc := &parser.Document{Sections: []*parser.Section{sec}}
-	return document.NewWithSchema(pdoc, s.s).Write(), nil
+	return document.NewWithSchema(pdoc, s.s).String(), nil
 }
 
 // Schema returns the schema a section of the parsed document was validated

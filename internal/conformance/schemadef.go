@@ -17,7 +17,7 @@ import (
 
 // RunSchemaDefCase runs one schemaDef-kind case.
 func RunSchemaDefCase(row SuiteRow) []string {
-	compiled, cerr := document.CompileSchemaString(row.SchemaDef)
+	compiled, cerr := document.ParseSchema(row.SchemaDef)
 	var codes []string
 	if cerr != nil {
 		codes = []string{cerr.Code}

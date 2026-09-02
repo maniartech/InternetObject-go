@@ -12,7 +12,7 @@ import (
 // the schema as the reserved default `$schema`, the data as the body.
 func RunValidationCase(row SuiteRow) []string {
 	src := "~ $schema: { " + row.Schema + " }\n---\n" + row.Input + "\n"
-	doc := document.Load(src)
+	doc := document.Parse(src)
 	var codes []string
 	for _, e := range doc.Errors {
 		codes = append(codes, e.Code)

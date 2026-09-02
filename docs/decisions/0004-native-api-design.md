@@ -22,6 +22,33 @@ Every capability therefore exists at every level of a gradient:
 
 Same engine, same designated codes, same wire text at every level.
 
+## D0. One verb per direction — the vocabulary law
+
+Named after review feedback (2026-09-02) that the surface said `Parse` in one place and
+`Unmarshal` in another without explaining which was which. The rule, which every name in the
+module now follows:
+
+| Verb pair | Converts | Precedent |
+| --------- | -------- | --------- |
+| `Marshal` / `Unmarshal` | Go value ⇄ IO text | `encoding/json` |
+| `Parse` / `String` | IO text ⇄ this module's own types (`Document`, `Schema`) | `url.Parse` / `URL.String` |
+| `Stream` | incremental reading, record by record | — |
+| `Validate` | check a value, produce no text | — |
+
+Two suffixes modify a verb without replacing it: `…With(…, s *Schema)` performs the same
+operation against an explicitly supplied schema; `…As[T](…)` performs it producing Go values
+of type `T`. So `ParseWith` and `UnmarshalWith` are the runtime-schema forms of exactly the
+two base verbs, and `StreamAs[T]` is typed streaming.
+
+**Banned from the public surface**: `Load`, `Read`, `Decode`, `Write`, `Get…`/`Set…`-style
+alternatives to the four verbs, and any `…IO` suffix (the package name already says it).
+Internals follow the same law — `document.Parse`/`ParseWith`/`ParseSchema` and `Doc.String()`
+replaced the former `Load`/`LoadWith`/`CompileSchemaString`/`Write`.
+
+Consequences for the proposed surface: the document base's method is `d.Unmarshal(text)`, not
+`d.Load(text)`; generated types get `Marshal()`/`Unmarshal()` methods, not
+`MarshalIO`/`UnmarshalIO`.
+
 ## D1. Four embeddable bases — and deliberately not five
 
 `io.Object` (record), `io.Document` (multi-section), `io.Collection[T]` (rows + row faults),

@@ -12,6 +12,28 @@
 // This implementation passes the complete shared conformance corpus
 // (io-test-cases): tokenizer, parser, schema, validation, serializer,
 // document, streaming and regression suites.
+//
+// # Vocabulary
+//
+// Every name in this package follows one rule, so the verb tells you what
+// kind of thing you get back:
+//
+//	Marshal / Unmarshal   Go value  ⇄ IO text   (like encoding/json)
+//	Parse    / String     IO text   ⇄ this package's own types,
+//	                      Document and Schema   (like url.Parse / URL.String)
+//	Stream                incremental reading, one record at a time
+//	Validate              check a value; produce no text
+//
+// Two suffixes modify any of them without changing the verb:
+//
+//	…With(…, s *Schema)   the same operation against an explicitly supplied
+//	                      schema instead of a derived or embedded one
+//	…As[T](…)             the same operation producing Go values of type T
+//
+// So Parse gives you a *Document to navigate, Unmarshal fills your struct,
+// and ParseWith / UnmarshalWith are those two against a runtime schema. There
+// is no Load, Read, Decode or Write in the public surface: one verb per
+// direction, everywhere.
 package internetobject
 
 import (
@@ -82,7 +104,7 @@ type Document struct {
 // ErrorList); the Document is still returned, holding every record that
 // survived — the format's accumulate-and-continue promise.
 func Parse(src string) (*Document, error) {
-	doc := document.Load(src)
+	doc := document.Parse(src)
 	return &Document{doc: doc}, toErrorList(doc.Errors)
 }
 
@@ -106,7 +128,7 @@ func (d *Document) Errors() []Error {
 // always re-parses to the same value, and writing it again yields the same
 // text.
 func (d *Document) String() string {
-	return d.doc.Write()
+	return d.doc.String()
 }
 
 // Schema is a compiled schema definition.
@@ -118,7 +140,7 @@ type Schema struct {
 // "name: string, age: {int, min: 0}". Compilation fails fast: the error is
 // an ErrorList holding the one designated fault.
 func ParseSchema(def string) (*Schema, error) {
-	s, cerr := document.CompileSchemaString(def)
+	s, cerr := document.ParseSchema(def)
 	if cerr != nil {
 		return nil, ErrorList{{Code: cerr.Code, Line: int(cerr.Line), Col: int(cerr.Col)}}
 	}

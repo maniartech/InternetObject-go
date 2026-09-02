@@ -6,6 +6,13 @@
 > sections/collections/definitions + runtime-schema functions, (3) `iogen`.
 > Everything below delegates to the same corpus-hardened engine — no second implementation.
 
+## Vocabulary
+
+Every name follows ADR 0004 D0 — one verb per direction: `Marshal`/`Unmarshal` for Go
+values ⇄ text, `Parse`/`String` for text ⇄ this module's own `Document` and `Schema`,
+`Stream` for incremental reading, `Validate` for checking. The `…With(…, s)` suffix supplies
+an explicit schema; `…As[T]` produces typed values.
+
 ## The gradient
 
 Every capability exists at three levels; the higher ones are optional sugar:
@@ -39,14 +46,14 @@ err = io.Set(&e2, "age", 50)         // same engine, zero ceremony
 
 ```go
 type Dashboard struct {
-    io.Document                      // document base: Load/Marshal/Header/Var
+    io.Document                      // document base: Unmarshal/Marshal/Header/Var
     Defs    AppDefs                 `io:"header"`
     Joinees io.Collection[Employee] `io:"joinees"`   // rows + row faults
     Stats   Stats                   `io:"stats"`     // single-record section
 }
 
 d := io.New[Dashboard]()
-err := d.Load(text)                  // multi-section binding, ErrorList on faults
+err := d.Unmarshal(text)             // multi-section binding, ErrorList on faults
 for _, e := range d.Joinees.Items() {}   // the good rows
 for _, re := range d.Joinees.Errors() {} // row 7: expected-integer (accumulate-and-continue)
 d.Joinees.Add(emp)                   // validates on insert
@@ -112,8 +119,8 @@ name-binding contract.
 //go:generate iogen -in user.io -pkg model
 u, err := model.NewUser("Alice", 30)         // cannot construct an invalid value
 err  = u.SetAge(131)                         // typed, compile-checked name, engine-checked value
-text, _ := u.MarshalIO()                     // static binding, no reflection
+text, _ := u.Marshal()                       // static binding, no reflection
 ```
 
 Generated code contains zero semantic logic (the 1-1 rule) and ships with generated
-differential tests: `MarshalIO ≡ io.Marshal`, setter verdicts ≡ `io.Validate`.
+differential tests: `u.Marshal() ≡ io.Marshal(u)`, setter verdicts ≡ `io.Validate`.
