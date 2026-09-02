@@ -56,7 +56,7 @@ func bindDoc(doc *document.Doc, v any) error {
 		return bindInto(elem, records[0], "$")
 
 	default:
-		return setValue(elem, doc.Project(), pathAt{parent: "$", index: -1})
+		return setValue(elem, doc.Project(), rootPath)
 	}
 }
 

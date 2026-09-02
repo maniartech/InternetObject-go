@@ -5,9 +5,9 @@
 
 ## Headline
 
-**We were 2.7×–12.8× slower than `encoding/json`. Three optimization passes have closed most
-of it: decode is now 1.56× and the dynamic parse 1.73×, with encode still the outlier at
-5.7×. The remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
+**We were 2.7×–12.8× slower than `encoding/json`. Four optimization passes have closed most
+of it: decode is 1.56×, the dynamic parse 1.73× and encode 3.2×, with encode having shed
+**90% of its allocations**. The remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
 document**, competitive with any JSON parser. Everything above it is where the time goes.
 
 ## The numbers
@@ -15,17 +15,17 @@ document**, competitive with any JSON parser. Everything above it is where the t
 1,000 records × 6 members (string, int, string, bool, float, string array); 64 KB of IO text
 against 114 KB of equivalent JSON, decoded into the same Go structs.
 
-| Operation | Baseline | Pass 1 | Pass 2 | **Pass 3 (now)** | encoding/json | Gap now |
-| --------- | -------: | -----: | -----: | ---------------: | ------------: | ------: |
-| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms · 34,804 | **3.19 ms · 23,861** | 2.05 ms · 6,019 | **1.56×** |
-| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | **2.16 ms · 17,849** | 0.38 ms · **2** | 5.7× |
-| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms · 25,050 | **3.30 ms · 21,953** | 1.91 ms · 23,013 | 1.73× |
-| Validate (no JSON equivalent) | 3.33 ms · — | 2.10 ms | ~2.1 ms · 22,008 | **1.65 ms · 17,009** | — | — |
-| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs · 70 | **8.6 µs · 61** | 2.3 µs · 11 | 3.7× |
+| Operation | Baseline | Pass 1 | Pass 2 | Pass 3 | **Pass 4 (now)** | encoding/json | Gap now |
+| --------- | -------: | -----: | -----: | -----: | ---------------: | ------------: | ------: |
+| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms | 3.19 ms · 23,861 | **3.19 ms · 23,861** | 2.05 ms · 6,019 | **1.56×** |
+| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | 2.16 ms · 17,849 | **1.80 ms · 3,922** | 0.35 ms · **2** | **3.2×** |
+| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms | 3.30 ms · 21,953 | **3.30 ms · 21,953** | 1.91 ms · 23,013 | 1.73× |
+| Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | **1.65 ms · 17,009** | 1.65 ms · 17,009 | — | — |
+| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | **8.6 µs · 61** | 8.6 µs · 61 | 2.0 µs · 11 | 3.7× |
 
-**Cumulative: decode 1.9× faster than baseline with 42% fewer allocations; encode 2.5×
-faster with 54% fewer. The dynamic parse now allocates FEWER objects than `encoding/json`
-does (21,953 vs 23,013)** — it is still slower per operation, but no longer by churn.
+**Cumulative: encode is 3.1× faster than baseline with 90% fewer allocations (38,701 →
+3,922) and runs at 35 MB/s; decode is 1.9× faster with 42% fewer. The dynamic parse
+allocates FEWER objects than `encoding/json` does** (21,953 vs 23,013).
 
 **Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
 17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
@@ -70,6 +70,32 @@ values — where `encoding/json` does one.
 
 **The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
+
+## What changed — pass 4 (roadmap item 5 + numfmt.Append)
+
+**Encode without the intermediate tree.** The general path built a `*value.Object` tree and
+handed it to the writer — one interface box per scalar member, 47% of encode's allocations,
+for values the writer consumed and discarded. `marshal_fast.go` walks the struct straight
+into the output buffer for types that are simple enough (a struct, or slice of structs, whose
+members are scalars or slices of scalars, declaring no `schema` constraints); anything else
+falls back to the tree.
+
+**This is a second traversal, NOT a second implementation of the format.** Every spelling
+decision — string quoting, number and temporal formatting, key quoting — is made by exported
+helpers in `internal/document`, the same ones the tree path calls. And the two are held
+byte-identical by construction: `IO_NO_FAST_PATH=1` forces the tree, so
+`TestFastPathMatchesTreePath` encodes the same values both ways and compares, backed by a
+fuzz target (2.3M executions, zero divergences) and refusal-parity tests.
+
+The differential test earned its keep immediately: it found that a zero-value `Decimal`
+(nil coefficient) **panicked** on both paths — a real robustness bug in a value a caller can
+trivially hold. Fixed at the one site, `Decimal.String`.
+
+**`numfmt.Append`.** Number formatting built a string through a `strings.Builder` that the
+writer then copied; it now writes into the caller's buffer with stack scratch space. Worth
+~3,900 allocations per document on its own.
+
+Result: encode 17,849 → **3,922 allocations** and 24 → 35 MB/s.
 
 ## What changed — pass 3 (ADR 0006 P2 + P7 partial)
 

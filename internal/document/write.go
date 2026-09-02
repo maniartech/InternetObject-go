@@ -628,7 +628,7 @@ func appendIONumber(dst []byte, f float64) []byte {
 	case math.IsInf(f, -1):
 		return append(dst, "-Inf"...)
 	}
-	return append(dst, numfmt.Format(f)...)
+	return numfmt.Append(dst, f)
 }
 
 // appendTemporal is temporalLiteral in append form: time.AppendFormat writes
@@ -1004,3 +1004,24 @@ func appendObjectKey(dst []byte, key string) []byte {
 func isSpaceByte(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }
+
+// ── exported spelling helpers ──────────────────────────────────────────────
+//
+// These are THE sites that decide how a value is spelled. A caller that walks
+// Go values directly (the marshaler's fast path) appends through these, so
+// there is exactly one implementation of every quoting, number and temporal
+// rule no matter which traversal produced the value (ADR 0006 roadmap item 5).
+
+// AppendString appends a string in its leanest safe spelling.
+func AppendString(dst []byte, s string) []byte { return appendAutoString(dst, s) }
+
+// AppendNumber appends a float64 in IO spelling.
+func AppendNumber(dst []byte, f float64) []byte { return appendIONumber(dst, f) }
+
+// AppendTemporalValue appends a temporal under the declared kind ("" to infer).
+func AppendTemporalValue(dst []byte, t value.Temporal, declared string) []byte {
+	return appendTemporal(dst, t, declared)
+}
+
+// AppendKey appends an object key, quoted only when it must be.
+func AppendKey(dst []byte, key string) []byte { return appendObjectKey(dst, key) }

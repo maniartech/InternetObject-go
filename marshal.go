@@ -37,6 +37,12 @@ func Marshal(v any) (string, error) {
 		rv = rv.Elem()
 	}
 
+	// Simple types skip the intermediate tree entirely; the spelling rules are
+	// the same shared helpers either way (see marshal_fast.go).
+	if text, took, err := marshalFast(rv); took {
+		return text, err
+	}
+
 	var pdoc *parser.Document
 	switch {
 	case rv.Kind() == reflect.Struct && !isModelStruct(rv.Type()):
@@ -88,7 +94,7 @@ func Marshal(v any) (string, error) {
 		pdoc = schemaDoc(plan.shape, sec)
 
 	default:
-		ev, err := encodeValue(rv, "", pathAt{parent: "$", index: -1})
+		ev, err := encodeValue(rv, "", rootPath)
 		if err != nil {
 			return "", err
 		}
@@ -126,6 +132,7 @@ type structPlan struct {
 	shape    *value.Object  // the derived schema shape, as parsed text would be
 	compiled *schema.Schema // the shape, compiled once
 	validate bool           // any field (own or nested) carries a `schema` tag
+	fastOK   bool           // every member can be written without the tree
 }
 
 type fieldPlan struct {
@@ -224,6 +231,7 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		return nil, &MarshalError{Path: t.String(), Msg: "derived schema does not compile: " + cerr.Code}
 	}
 	p.compiled = compiled
+	p.fastOK = fastEligible(t, p)
 	return p, nil
 }
 
@@ -417,10 +425,17 @@ type pathAt struct {
 	index  int // -1 when this is a named member rather than an element
 }
 
-// recordPath spells the position of the i-th record of a collection. It is
-// built ONCE per record; that record's scalar members then travel as
-// (parent, name) pairs that never join, so only an actual fault pays for a
-// full path (ADR 0006 P1).
+// rootPath is the document root — the parent of every top-level record.
+var rootPath = pathAt{parent: "$", index: -1}
+
+// recordPath spells the position of the i-th record of a collection: ONE
+// join per record. Its members then travel as pathAt{parent, name} values,
+// which cost nothing to build, so only an actual fault pays for a full path.
+//
+// Measured, after trying the alternatives: a linked list of parent pointers
+// escapes (+6,000 allocs on encode), and joining lazily per level turns one
+// join per record into one per member (+9,500 on decode). One join per
+// record is the floor without a path-free error API.
 func recordPath(i int) string { return "$[" + strconv.Itoa(i) + "]" }
 
 func (p pathAt) String() string {
@@ -440,6 +455,16 @@ func (p pathAt) String() string {
 func (p pathAt) at(name string) pathAt { return pathAt{parent: p.String(), name: name, index: -1} }
 func (p pathAt) elem(i int) pathAt     { return pathAt{parent: p.String(), index: i} }
 func (p pathAt) of(name string) pathAt { return pathAt{parent: p.parent, name: name, index: p.index} }
+
+// intOverflowMsg and uintOverflowMsg are shared by both encode paths so the
+// two report a refusal identically.
+func intOverflowMsg(n int64) string {
+	return fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)
+}
+
+func uintOverflowMsg(n uint64) string {
+	return fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)
+}
 
 // maxSafeInt is the largest integer the number wire type holds exactly.
 const maxSafeInt = 1 << 53
@@ -476,7 +501,11 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		return new(big.Int).Set(&bi), nil
 	case t == decimalType:
 		d := rv.Interface().(Decimal)
-		return Decimal{Coef: new(big.Int).Set(d.Coef), Scale: d.Scale}, nil
+		coef := new(big.Int)
+		if d.Coef != nil {
+			coef.Set(d.Coef)
+		}
+		return Decimal{Coef: coef, Scale: d.Scale}, nil
 	case t == timeType:
 		k := value.KindDateTime
 		switch kind {
@@ -499,13 +528,13 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		n := rv.Int()
 		if n > maxSafeInt || n < -maxSafeInt {
-			return nil, &MarshalError{Path: at.String(), Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+			return nil, &MarshalError{Path: at.String(), Msg: intOverflowMsg(n)}
 		}
 		return float64(n), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		n := rv.Uint()
 		if n > maxSafeInt {
-			return nil, &MarshalError{Path: at.String(), Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+			return nil, &MarshalError{Path: at.String(), Msg: uintOverflowMsg(n)}
 		}
 		return float64(n), nil
 	case reflect.Float32, reflect.Float64:

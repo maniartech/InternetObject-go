@@ -66,6 +66,12 @@ type Decimal struct {
 // String renders the decimal's exact digits at its scale — the canonical
 // spelling, shared by the writer and the corpus comparator.
 func (d Decimal) String() string {
+	if d.Coef == nil {
+		// The zero value of the struct is a legitimate value a caller can
+		// hold (`var d Decimal`); it reads as zero at its scale rather than
+		// panicking on the nil coefficient.
+		d.Coef = new(big.Int)
+	}
 	digits := new(big.Int).Abs(d.Coef).String()
 	sign := ""
 	if d.Coef.Sign() < 0 {
