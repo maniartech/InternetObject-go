@@ -251,6 +251,82 @@ plausibly beats the fastest JSON libraries, because it removes reflection entire
 cannot remove JSON's per-record key parsing — which is exactly the structural advantage the
 Internet Object format was designed to have.
 
+## Beyond the roadmap — where the remaining headroom is
+
+P1–P10 above take us to roughly parity with `encoding/json`. Parity is not leadership, and
+the techniques that go past it are mostly **not** general Go tricks — they are things this
+format can do *because* it is schema-first, which a JSON library cannot copy.
+
+### The format's own advantages, unexploited so far
+
+**F1. Compile the schema into a decode program.** For a bound section every record has the
+same shape, so the schema can compile once into a flat instruction list — "read string into
+field 0, read int into field 1, …" — executed with no reflection, no per-value type switch
+and no map lookups. protobuf-go's fast path and `easyjson` work exactly this way. It applies
+to the *dynamic* path too, not only to generated code, and it composes with P10 rather than
+competing with it. **Biggest single remaining win; est. decode −40…60%.**
+
+**F2. Decode a collection column-wise.** Every row shares one schema, so the type dispatch
+can be hoisted out of the inner loop: decode all of member 0, then all of member 1. Branch
+prediction stops thrashing and the hot loop becomes monomorphic. **JSON cannot do this** —
+each object re-declares its own keys, so a JSON decoder must re-dispatch per value. This is
+the clearest structural advantage the format has, and nothing in the ecosystem competes with
+it.
+
+**F3. Decode records in parallel.** A `~`-collection is embarrassingly parallel at record
+granularity, and the record boundaries are trivially findable (the streaming framer already
+does it). Split, decode on N goroutines, reassemble in order. Near-linear on multicore for
+large documents; JSON's nesting makes safe splitting far harder. Gate it behind a size
+threshold — for small documents the goroutine overhead loses.
+
+**F4. Lazy materialization.** Tokenize, then materialize only the members the caller actually
+touches (`gjson`'s model, but schema-aware so it is typed rather than string-scraping). For
+"read three fields out of a large record" workloads this is an order of magnitude, not a
+percentage.
+
+### API-level provisions (they need new surface, hence ADR-level decisions)
+
+**F5. `[]byte` and `io.Writer` entry points.** Today `Marshal` returns a `string`, which costs
+one full copy of the document at the end, and `Parse` takes a `string`, which costs a copy for
+any caller holding `[]byte`. Adding `AppendMarshal(dst []byte, v any) []byte` and an
+`io.Writer`-based encoder removes both, and lets callers stream to a socket or file without
+materializing the document at all. Same for a `[]byte` reader entry point.
+
+**F6. A reusable `Decoder`/`Encoder` object.** P6 pools buffers per call; a caller-held
+decoder can hold the token slice, the slab and the output buffer across *many* documents —
+the right shape for servers, and the standard library's own answer (`json.Decoder`).
+
+**F7. Zero-copy strings.** A decoded string that needs no unescaping (the common case) can be
+a sub-slice of the source rather than a copy. It requires documenting that values alias the
+input buffer and must not outlive it — a real API contract change, so it is a decision, not a
+tweak.
+
+### Deliberately not doing (and the condition that would change that)
+
+- **SIMD scanning.** `simdjson` reaches multi-GB/s by vectorizing the scan. Our tokenizer is
+  already **~1% of decode time**, so vectorizing it would buy nothing today. Revisit only if
+  the scan ever exceeds ~15% of a profile.
+- **JIT / pervasive `unsafe`** (the `sonic` approach). Fast, but unmaintainable for a
+  specification implementation and hostile to the fuzz-and-corpus discipline that makes this
+  port trustworthy. The isolated-helper rule in the non-negotiables stands.
+- **Hand-written assembly.** Same reasoning, plus it would need per-architecture fallbacks.
+
+### Operational, not code
+
+**F8. GC tuning guidance in the docs** — allocation-heavy pipelines benefit from `GOGC` and
+`GOMEMLIMIT` tuning; document it rather than guessing on the user's behalf.
+**F9. Benchmark against the modern bar** — `json/v2`, `go-json`, `sonic`, plus CBOR and
+MessagePack libraries, so "leading" is a measured claim about the field rather than about
+`encoding/json` alone.
+
+### Honest ceiling
+
+Some gap is inherent: we validate against a schema, preserve decimals/bigints/temporal kinds,
+and produce designated error codes — none of which a JSON decoder does. Against a *validating*
+JSON stack (decode + JSON Schema) the comparison already favors us today. F1–F4 are what make
+"fastest" defensible against a plain JSON decoder; F5–F7 are what make it true in real
+services, where copies and per-request allocation dominate.
+
 ## Sequencing note
 
 P1–P5 are independent of ADR 0005 (the error model) except in one place: adding positions to
