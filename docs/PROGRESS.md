@@ -94,12 +94,12 @@ definitions (reference validates; FINDINGS corpus-gap list updated).
 1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+3. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
    outranks the library.
-2. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
+4. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
    already zero-alloc per token.
-3. Retrospective for the Rust port (definition of done, item 4).
+5. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 
