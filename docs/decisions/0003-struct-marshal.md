@@ -81,7 +81,42 @@ step). Binding faults — a type that cannot hold the value, an unsupported fiel
 ordinary Go errors carrying the field path (`people[2].age: cannot store 3.5 in int`). The
 conformance contract governs the wire, not Go's reflect layer.
 
-### D5. Implementation notes
+### D5. Constraints live in a `schema` tag holding the format's own syntax
+
+Added 2026-09-02 (user request). The `io` tag keeps json's exact grammar; constraints get a
+second tag — mirroring the `json:` + `validate:` convention — whose value is the member's IO
+type annotation **verbatim**, parsed and compiled by the same single compile site the wire
+format uses (designated codes, every constraint, zero new syntax):
+
+```go
+type User struct {
+    Name string `io:"name" schema:"{string, minLen: 2, maxLen: 50}"`
+    Age  int    `io:"age"  schema:"int, min: 0, max: 130"`   // braces optional
+    Role string `io:"role,omitempty" schema:"{string, choices: [admin, user]}"`
+}
+```
+
+- The tag's annotation replaces the derived one and appears in the marshaled header, so what
+  you write is what the wire carries. `?`/`*` still come from `omitempty` and pointer-ness.
+- A bad tag fails at the type's FIRST use with the designated code (compiled at plan build).
+- `$Ref`/`@var` inside a tag has no definition context and resolves to
+  undefined-schema/undefined-variable — refs are a document feature, not a tag feature.
+
+### D6. Validation: at the boundary automatically, on demand after mutations
+
+Go cannot intercept a plain field assignment, so "validate on mutation" is spelled:
+
+- **`Marshal` auto-validates** whenever the type (or any nested type) carries a `schema` tag
+  — it can never emit a document that fails its own header. Faults return as the `ErrorList`
+  with designated codes, like every wire-level fault.
+- **`Validate(v)`** runs the same check on demand — mutate freely, validate when it matters.
+- **`SchemaFor[T]()`** returns the derived schema; `Schema.String()` renders it in canonical
+  syntax (round-trips through `ParseSchema`).
+
+Untagged types skip the marshal-time check (they are valid by construction); `Validate` still
+works on them.
+
+### D7. Implementation notes
 
 - Marshal builds the SHAPE (`*value.Object` trees) and reuses `schema.Compile` and the
   canonical document writer — the fuzz-hardened round-trip guarantees apply to marshaled

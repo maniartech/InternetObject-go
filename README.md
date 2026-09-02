@@ -42,8 +42,27 @@ format's leanness for free. `Unmarshal` validates against the document's schema 
 back as the `ErrorList` with designated codes) and also binds schema-less records
 (`io.Unmarshal("Alice, 30", &p)` works). A pointer field is nullable (`nil` ⇄ `N`),
 `io:"-"` skips, `io:",omitempty"` makes the member optional, and `io:",date"` / `io:",time"`
-pick a `time.Time` field's temporal kind. See
-[ADR 0003](docs/decisions/0003-struct-marshal.md).
+pick a `time.Time` field's temporal kind.
+
+Constraints go in a `schema` tag whose value is the format's own annotation syntax — no
+second mini-language to learn, and the tag text is exactly what the marshaled header carries:
+
+```go
+type User struct {
+    Name string `io:"name" schema:"{string, minLen: 2, maxLen: 50}"`
+    Age  int    `io:"age"  schema:"int, min: 0, max: 130"`
+    Role string `io:"role,omitempty" schema:"{string, choices: [admin, user]}"`
+}
+
+_, err := io.Marshal(User{Name: "A", Age: 300})
+// ErrorList: mismatched-min-len; mismatched-max — Marshal can never emit a
+// document that fails its own schema.
+
+err = io.Validate(u)          // the same check on demand, after mutations
+s, _ := io.SchemaFor[User]()  // the derived schema; s.String() renders it
+```
+
+See [ADR 0003](docs/decisions/0003-struct-marshal.md).
 
 ### The dynamic document model
 

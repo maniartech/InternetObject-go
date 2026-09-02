@@ -70,6 +70,13 @@ positionally. Plans cached in a `sync.Map`; concurrent-safe (tested). ~1.7µs ma
 fixed a validation bug: the `*` wildcard counted as a declared member in ISSUE-15 absorption
 (`{*: int}` with keyed data absorbed instead of validating per member — oracle-pinned fix).
 
+Constraints (ADR 0003 D5–D6): the `schema` struct tag holds the member's IO annotation
+verbatim (`schema:"{int, min: 0, max: 130}"`, braces optional), compiled by the one compile
+site at plan build (bad tag = designated code at first use). Marshal auto-validates whenever
+the type carries constraints; `Validate(v)` runs the check on demand (the Go spelling of
+"validate on mutation" — field assignment cannot be intercepted); `SchemaFor[T]()` +
+`Schema.String()` expose the derived schema (String round-trips through ParseSchema).
+
 ## What's next
 
 1. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case

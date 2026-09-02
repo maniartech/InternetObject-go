@@ -11,6 +11,7 @@ import (
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/parser"
+	"github.com/maniartech/InternetObject-go/internal/schema"
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
@@ -46,6 +47,11 @@ func Marshal(v any) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if plan.validate {
+			if err := checkRecords(plan, []any{rec}); err != nil {
+				return "", err
+			}
+		}
 		pdoc = schemaDoc(plan.shape, &parser.Section{Name: "data", Records: []any{rec}})
 
 	case rv.Kind() == reflect.Slice && isStructElem(rv.Type().Elem()):
@@ -72,6 +78,11 @@ func Marshal(v any) (string, error) {
 				return "", err
 			}
 			sec.Records = append(sec.Records, rec)
+		}
+		if plan.validate {
+			if err := checkRecords(plan, sec.Records); err != nil {
+				return "", err
+			}
 		}
 		pdoc = schemaDoc(plan.shape, sec)
 
@@ -109,8 +120,10 @@ func (e *MarshalError) Error() string { return e.Path + ": " + e.Msg }
 // ── field plans ────────────────────────────────────────────────────────────
 
 type structPlan struct {
-	fields []fieldPlan
-	shape  *value.Object // the derived schema shape, compile-ready
+	fields   []fieldPlan
+	shape    *value.Object  // the derived schema shape, as parsed text would be
+	compiled *schema.Schema // the shape, compiled once
+	validate bool           // any field (own or nested) carries a `schema` tag
 }
 
 type fieldPlan struct {
@@ -163,7 +176,16 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		case opts["time"]:
 			fp.kind = "time"
 		}
-		ann, err := annotationFor(f.Type, fp.kind, visiting)
+		var ann any
+		var err error
+		if tag, ok := f.Tag.Lookup("schema"); ok {
+			// The `schema` tag holds the member's IO type annotation verbatim
+			// — exactly what a schema would carry after `name:`.
+			ann, err = annotationShape(tag, t.String()+"."+f.Name)
+			p.validate = true
+		} else {
+			ann, err = annotationFor(f.Type, fp.kind, visiting, &p.validate)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +208,44 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		}
 		p.fields = append(p.fields, fp)
 	}
+	compiled, cerr := schema.Compile(p.shape, "")
+	if cerr != nil {
+		return nil, &MarshalError{Path: t.String(), Msg: "derived schema does not compile: " + cerr.Code}
+	}
+	p.compiled = compiled
 	return p, nil
+}
+
+// annotationShape parses a `schema` struct tag: the member's type annotation
+// in the format's own syntax (`{int, min: 0, max: 130}`, `[string]`, `$Ref`,
+// `{string, choices: [a, b]}`). An unbraced constraint list is braced for
+// convenience, so `schema:"int, min: 0"` also works. The shape is compiled
+// immediately so a bad tag fails at the type's first use with the designated
+// code.
+func annotationShape(tag, fieldPath string) (any, error) {
+	text := strings.TrimSpace(tag)
+	if text == "" {
+		return nil, &MarshalError{Path: fieldPath, Msg: "empty schema tag"}
+	}
+	if text[0] != '{' && text[0] != '[' && strings.ContainsRune(text, ',') {
+		text = "{" + text + "}"
+	}
+	pdoc := parser.Parse("x: " + text)
+	if len(pdoc.Errors) > 0 {
+		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + pdoc.Errors[0].Code}
+	}
+	var rec *value.Object
+	if len(pdoc.Sections) == 1 && len(pdoc.Sections[0].Records) == 1 {
+		rec, _ = pdoc.Sections[0].Records[0].(*value.Object)
+	}
+	if rec == nil || len(rec.Members) != 1 || rec.Members[0].Key != "x" {
+		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: not a single type annotation"}
+	}
+	shape := rec.Members[0].Value
+	if _, cerr := schema.Compile(&value.Object{Members: []value.Member{{Key: "x", Value: shape}}}, ""); cerr != nil {
+		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + cerr.Code}
+	}
+	return shape, nil
 }
 
 func parseTag(f reflect.StructField) (name string, opts map[string]bool, skip bool) {
@@ -265,8 +324,9 @@ var (
 )
 
 // annotationFor derives the IO type annotation for one Go type — the value a
-// parsed schema would hold in that member position.
-func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool) (any, error) {
+// parsed schema would hold in that member position. tagged is set when the
+// subtree carries a `schema` tag anywhere, so the owning plan validates.
+func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool, tagged *bool) (any, error) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -296,7 +356,7 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool) 
 	case reflect.Float32, reflect.Float64:
 		return "number", nil
 	case reflect.Slice, reflect.Array:
-		elem, err := annotationFor(t.Elem(), "", visiting)
+		elem, err := annotationFor(t.Elem(), "", visiting, tagged)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +365,7 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool) 
 		if t.Key().Kind() != reflect.String {
 			return nil, &MarshalError{Path: t.String(), Msg: "map keys must be strings"}
 		}
-		elem, err := annotationFor(t.Elem(), "", visiting)
+		elem, err := annotationFor(t.Elem(), "", visiting, tagged)
 		if err != nil {
 			return nil, err
 		}
@@ -314,6 +374,9 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool) 
 		sub, err := buildPlan(t, visiting)
 		if err != nil {
 			return nil, err
+		}
+		if sub.validate {
+			*tagged = true
 		}
 		return sub.shape, nil
 	case reflect.Interface:

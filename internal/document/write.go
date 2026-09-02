@@ -65,6 +65,14 @@ func (d *Doc) Write() string {
 	return strings.Join(parts, "\n")
 }
 
+// SchemaText renders a compiled schema's member declarations in canonical
+// syntax — the text between the braces of `{…}`, also valid as a schema-only
+// document header.
+func SchemaText(s *schema.Schema) string {
+	d := &Doc{Defs: newDefs(nil)}
+	return d.writeSchemaBody(s)
+}
+
 // ── header ─────────────────────────────────────────────────────────────────
 
 func (d *Doc) writeHeader() string {
