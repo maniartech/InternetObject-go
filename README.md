@@ -6,7 +6,7 @@ conformance corpus (`io-test-cases`) with the specification (`io-specs`) as the 
 
 **Status: the full conformance corpus passes** — all eight suites, 1,572 cases
 (tokenizer 262 · parser 195 · schema 160 · validation 538 · serializer 148 · document 100 ·
-streaming 118 · regression 51), against `io-test-cases` commit `0fc0af8`. See
+streaming 118 · regression 51), against `io-test-cases` commit `e6f288c`. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for the live scoreboard and [docs/decisions/](docs/decisions/)
 for the architecture decisions.
 

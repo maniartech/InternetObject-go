@@ -33,6 +33,21 @@ func Load(src string) *Doc {
 		return doc
 	}
 
+	// A malformed literal in a header definition is fatal — the reference
+	// throws invalid-number/invalid-bigint/… while reading the header, so a
+	// deferred error there never survives into a "clean" document (found by
+	// the byte fuzzer: `~A:0B---` parsed clean holding an ErrorValue).
+	if pdoc.Header != nil {
+		var herrs []errs.Error
+		for _, def := range pdoc.Header.Defs {
+			surfaceDeferred(def.Value, &herrs)
+		}
+		if len(herrs) > 0 {
+			doc.Errors = append(doc.Errors, herrs[0])
+			return doc
+		}
+	}
+
 	for _, sec := range pdoc.Sections {
 		sch, cerr := sectionSchema(sec, defs)
 		if cerr != nil {
@@ -71,6 +86,11 @@ func Load(src string) *Doc {
 				continue
 			}
 			sec.Records[i] = validated
+			// A deferred malformed-literal that flowed through an untyped
+			// (`any`) subtree survives validation unmasked; the reference
+			// throws its code (typed members mask with expected-* instead —
+			// ISSUE-23). Surface it like the schema-less route does.
+			surfaceDeferred(validated, &doc.Errors)
 		}
 	}
 	return doc
@@ -117,43 +137,57 @@ type docDefs struct {
 	header   *parser.Header
 	compiled map[string]*schema.Schema
 	failed   map[string]*errs.Error
+	inline   *schema.Schema // the compiled bare-expression header schema
 }
 
 func newDefs(h *parser.Header) *docDefs {
 	return &docDefs{header: h, compiled: map[string]*schema.Schema{}, failed: map[string]*errs.Error{}}
 }
 
-// SchemaOf resolves and compiles the named schema.
+// SchemaOf resolves and compiles the named schema, chasing `$ref` aliases. A
+// self- or mutually-referential alias chain is invalid-definition — the
+// reference crashes with a bare stack overflow here (upstream finding), and a
+// designated code is the non-crashing spelling of that behavior.
 func (d *docDefs) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 	name = strings.TrimPrefix(name, "$")
-	if s, ok := d.compiled[name]; ok {
+	seen := map[string]bool{}
+	for {
+		if s, ok := d.compiled[name]; ok {
+			return s, nil
+		}
+		if e, ok := d.failed[name]; ok {
+			return nil, e
+		}
+		if seen[name] {
+			e := &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
+			d.failed[name] = e
+			return nil, e
+		}
+		seen[name] = true
+		var shape any
+		if d.header != nil {
+			if v, ok := d.header.Schemas[name]; ok {
+				shape = v
+			}
+		}
+		if shape == nil {
+			e := &errs.Error{Code: errs.UndefinedSchema, Line: 1, Col: 1}
+			d.failed[name] = e
+			return nil, e
+		}
+		// A named schema may itself be a `$ref` to another one.
+		if ref, ok := shape.(string); ok && strings.HasPrefix(ref, "$") {
+			name = strings.TrimPrefix(ref, "$")
+			continue
+		}
+		s, cerr := schema.Compile(shape, "")
+		if cerr != nil {
+			d.failed[name] = cerr
+			return nil, cerr
+		}
+		d.compiled[name] = s
 		return s, nil
 	}
-	if e, ok := d.failed[name]; ok {
-		return nil, e
-	}
-	var shape any
-	if d.header != nil {
-		if v, ok := d.header.Schemas[name]; ok {
-			shape = v
-		}
-	}
-	if shape == nil {
-		e := &errs.Error{Code: errs.UndefinedSchema, Line: 1, Col: 1}
-		d.failed[name] = e
-		return nil, e
-	}
-	// A named schema may itself be a `$ref` to another one.
-	if ref, ok := shape.(string); ok && strings.HasPrefix(ref, "$") {
-		return d.SchemaOf(ref[1:])
-	}
-	s, cerr := schema.Compile(shape, "")
-	if cerr != nil {
-		d.failed[name] = cerr
-		return nil, cerr
-	}
-	d.compiled[name] = s
-	return s, nil
 }
 
 // Var resolves a variable by (sigil-less) name, chasing @-references so a
@@ -194,15 +228,16 @@ func sectionSchema(sec *parser.Section, defs *docDefs) (*schema.Schema, *errs.Er
 		return defs.SchemaOf("schema")
 	}
 	if defs.header.Inline != nil {
-		if s, ok := defs.compiled[""]; ok {
-			return s, nil
+		// The inline schema is cached on its own field — the compiled map is
+		// keyed by declared names, and "" is a legal declared name (`~ $: x`).
+		if defs.inline == nil {
+			s, cerr := schema.Compile(defs.header.Inline, "")
+			if cerr != nil {
+				return nil, cerr
+			}
+			defs.inline = s
 		}
-		s, cerr := schema.Compile(defs.header.Inline, "")
-		if cerr != nil {
-			return nil, cerr
-		}
-		defs.compiled[""] = s
-		return s, nil
+		return defs.inline, nil
 	}
 	return nil, nil
 }

@@ -385,7 +385,13 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			if !allowed["schema"] {
 				fail(errs.UnknownMember)
 			}
-			md.Schema = compileSchema(m.Value, path)
+			// `schema: $Name` is a reference like the short form `a: $Name`
+			// (resolved lazily at validation); anything else must be a shape.
+			if ref, ok := m.Value.(string); ok && strings.HasPrefix(ref, "$") {
+				md.SchemaRef = ref
+			} else {
+				md.Schema = compileSchema(m.Value, path)
+			}
 		default:
 			if !allowed[key] {
 				fail(errs.UnknownMember)

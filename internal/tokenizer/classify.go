@@ -15,6 +15,30 @@ import "unicode"
 //	suffixes m/n can only mean "number", so a run that carries one and does
 //	not decode is an error, not a string.
 
+// WordReadsNonString reports whether a bare, whitespace-free word would read
+// back as something other than ordinary text: a keyword, a number in any
+// form, or a claimed-and-broken literal. It is the writer's quote-this test,
+// answered by the reader's own classifier so the two can never disagree.
+func WordReadsNonString(w string) bool {
+	if w == "" {
+		return false
+	}
+	k, _, _ := classifyWord(w)
+	return k != KindString
+}
+
+// WordIsBrokenClaim reports whether a bare word is a claimed-and-broken
+// numeric literal (rule 2) — an error even in the middle of an open-string
+// run, where an ordinary number would just join the run. The writer quotes
+// any string containing one.
+func WordIsBrokenClaim(w string) bool {
+	if w == "" {
+		return false
+	}
+	k, _, _ := classifyWord(w)
+	return k == KindError
+}
+
 // classifyWord classifies one non-empty word. A CodeNone/KindString result
 // means "ordinary text" — the scanner then continues the open-string run.
 func classifyWord(w string) (Kind, Sub, Code) {
@@ -188,6 +212,15 @@ func isDigitsDots(s string) bool {
 	return hasDigit
 }
 
+// maxBigIntExponent bounds a bigint literal's exponent: 1e1000000n (a
+// million-digit integer) decodes in milliseconds, while an unbounded
+// exponent is a denial of service — `1e1444444440n` would materialize 1.4
+// billion digits. The reference has no designed bound either: it grinds for
+// minutes and then throws V8's bare "Maximum BigInt size exceeded" (an
+// uncoded error — upstream finding). Beyond the bound the claim is broken:
+// invalid-bigint.
+const maxBigIntExponent = 1_000_000
+
 // isBigIntForm: digit+ [("e"|"E") ["+"] digit+] — integers only, and only a
 // non-negative exponent (12e5n is 1200000n; 12e-5n cannot be an integer).
 func isBigIntForm(s string) bool {
@@ -211,11 +244,15 @@ func isBigIntForm(s string) bool {
 		i++
 	}
 	k = 0
+	exp := 0
 	for i < n && s[i] >= '0' && s[i] <= '9' {
+		if exp <= maxBigIntExponent {
+			exp = exp*10 + int(s[i]-'0')
+		}
 		i++
 		k++
 	}
-	return k > 0 && i == n
+	return k > 0 && i == n && exp <= maxBigIntExponent
 }
 
 // isDecimalForm: digit+ ["." digit+] — a decimal requires a leading digit
@@ -249,4 +286,19 @@ func isDecimalForm(s string) bool {
 // digits, hyphen and underscore. There is no quoted form.
 func isSectionNameRune(r rune) bool {
 	return r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsDigit(r)
+}
+
+// ValidSectionName reports whether name satisfies the section-name grammar —
+// the writer's "can this name be spelled at all?" test, answered by the
+// scanner's own rule.
+func ValidSectionName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !isSectionNameRune(r) {
+			return false
+		}
+	}
+	return true
 }

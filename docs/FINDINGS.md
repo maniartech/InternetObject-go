@@ -80,6 +80,50 @@ Status legend: **open** = not yet reported/resolved upstream.
   (pinned by `serializer/quoting.io`) though it reads back fine bare.
 - **This port**: matches the corpus/writer rule.
 
+## 10. The reference writer emits bare strings containing control characters — open, data loss
+
+- io-js2's `needsQuoting` tests whitespace with `/\s/`, which does not match `\b`, NUL, ESC or
+  other C0 controls, so a string like `"\b00000"` writes bare. On re-read the control byte
+  splits the word and the remainder `00000` re-reads as the NUMBER 0 — silent corruption.
+- **This port**: any C0 control other than `\n\r\t` forces the regular quoted spelling, and the
+  quoted spelling escapes the full C0 range (`\b`, `\f`, `\u00XX`). Found by the byte fuzzer.
+
+## 11. Schema alias cycles crash the reference with a bare stack overflow — open, rule-10 violation
+
+- `~ $a: $b` + `~ $b: $a` (or `~ $a: $a`) throws `RangeError: Maximum call stack size
+  exceeded` — an error without a designated code (PORTING-NOTES rule 10 calls this class out).
+- **This port**: chases alias chains iteratively and reports `invalid-definition`, the same
+  code variable-reference cycles carry.
+
+## 12. Datetimes whose UTC instant is unspellable round-trip into rejection — open, data loss
+
+- The reference accepts `dt"0000-01-01T00:00:00+01:00"` (instant in year −1) and its
+  serialization emits the JS extended-year form `-000001-…` — which its own reader throws on
+  (`invalid-datetime`). Writer emits what reader rejects.
+- **This port**: a datetime whose UTC instant falls outside years 0000–9999 is
+  `invalid-datetime` at parse.
+
+## 13. An unbounded bigint exponent is a denial of service — open
+
+- `1e10000000n` materializes ten million digits (seconds and gigabytes; scales linearly);
+  beyond V8's BigInt cap the reference throws the uncoded `Maximum BigInt size exceeded`.
+- **This port**: the exponent is bounded at 1e6 (a million-digit integer decodes in
+  milliseconds); beyond it the claim is broken — `invalid-bigint`. Deliberate divergence,
+  needs an upstream decision on the designed bound.
+
+## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
+
+- A malformed literal in a HEADER definition is fatal (`~ A: 0B` → `invalid-number`); no case
+  covers headers, so an implementation can defer-and-mask it silently.
+- Surplus positional members under an open schema must be validated (`a, *` with `1, @x` →
+  `undefined-variable`), not passed through raw.
+- A deferred literal error nested under an `any`-typed subtree must surface
+  (`x\n---\n{A: 0B}` → `invalid-number`).
+- `schema: $Ref` in the long-form object typedef is a reference, same as the short form.
+- `--- $$` (a `$`-named schema selector), a `*`-only header, `~ ,` records with trailing
+  holes, and strings containing `\r` (which every unescaped spelling newline-normalizes) all
+  round-trip through the canonical writer.
+
 ## Go-specific notes (not upstream defects)
 
 - **Lone UTF-16 surrogates.** JS strings can hold a lone surrogate from `\uD83D`; Go strings

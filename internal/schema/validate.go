@@ -175,8 +175,10 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 		}
 	}
 
-	// Surplus positional values: fatal against a closed schema, raw
-	// pass-through under an open one.
+	// Surplus positional values: fatal against a closed schema; under an open
+	// one each is validated like any undeclared member (the wildcard's def or
+	// bare `any`), so @-references resolve and a typed wildcard constrains —
+	// raw pass-through here skipped both (fuzzer-found, oracle-pinned).
 	if positional {
 		for ; i < len(rec.Members); i++ {
 			m := rec.Members[i]
@@ -189,7 +191,20 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
 			}
-			extras = append(extras, value.Member{Positional: true, Value: m.Value})
+			md := undeclaredMemberDef("", s.Open)
+			mv := m.Value
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						f, ok := r.(valFail)
+						if !ok {
+							panic(r)
+						}
+						acc = append(acc, f.err)
+					}
+				}()
+				extras = append(extras, value.Member{Positional: true, Value: validateMember(mv, true, md, defs)})
+			}()
 		}
 	}
 

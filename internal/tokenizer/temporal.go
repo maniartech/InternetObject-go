@@ -34,29 +34,38 @@ func parseTemporal(s string, sub Sub) (temporal, bool) {
 			return t, false
 		}
 		rest := s[n:]
-		if rest == "" {
-			return t, true
-		}
-		if rest[0] == 'T' {
-			rest = rest[1:]
-			// the zone begins at the first Z, + or - (time content is only
-			// digits, colons and a dot)
-			zi := len(rest)
-			for i := 0; i < len(rest); i++ {
-				if rest[i] == 'Z' || rest[i] == '+' || rest[i] == '-' {
-					zi = i
-					break
+		if rest != "" {
+			if rest[0] == 'T' {
+				rest = rest[1:]
+				// the zone begins at the first Z, + or - (time content is only
+				// digits, colons and a dot)
+				zi := len(rest)
+				for i := 0; i < len(rest); i++ {
+					if rest[i] == 'Z' || rest[i] == '+' || rest[i] == '-' {
+						zi = i
+						break
+					}
 				}
+				if !parseTimeString(rest[:zi], &t) {
+					return t, false
+				}
+				rest = rest[zi:]
 			}
-			if !parseTimeString(rest[:zi], &t) {
+			if rest != "" && !parseZone(rest, &t) {
 				return t, false
 			}
-			rest = rest[zi:]
-			if rest == "" {
-				return t, true
+		}
+		// A nonzero offset can carry the UTC instant outside the four-digit
+		// years the wire format can spell (0000 with +01:00 lands in year
+		// -1); such a datetime is invalid rather than unwritable. The
+		// reference accepts it and then emits `-000001-…`, which its own
+		// reader rejects — an upstream finding, not behavior to reproduce.
+		if t.hasOff && t.offMin != 0 {
+			if y := t.timeValue(SubDateTime).UTC().Year(); y < 0 || y > 9999 {
+				return t, false
 			}
 		}
-		return t, parseZone(rest, &t)
+		return t, true
 	}
 }
 

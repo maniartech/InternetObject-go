@@ -11,6 +11,7 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
@@ -37,7 +38,11 @@ func (d *Doc) Write() string {
 
 	for _, sec := range d.Sections {
 		hasNamedSchema := sec.SchemaName != "" && sec.SchemaName != "schema"
-		hasRealName := sec.Name != "" && !reservedSectionNames[sec.Name]
+		// A name the section-name grammar cannot spell is unwritable; it can
+		// only have been borrowed from a schema selector (`--- $$` names the
+		// section "$"), and the selector-only spelling reproduces that.
+		hasRealName := sec.Name != "" && !reservedSectionNames[sec.Name] &&
+			tokenizer.ValidSectionName(sec.Name)
 
 		if len(parts) > 0 && (hasRealName || hasNamedSchema) {
 			parts = append(parts, "") // a blank line before a named/bound section
@@ -86,7 +91,7 @@ func (d *Doc) writeHeader() string {
 		switch def.Kind {
 		case parser.DefSchema:
 			if ref, ok := def.Value.(string); ok && strings.HasPrefix(ref, "$") {
-				lines = append(lines, "~ $"+def.Key+": "+ref)
+				lines = append(lines, "~ $"+def.Key+": "+refSpelling(ref))
 				continue
 			}
 			s, cerr := d.Defs.SchemaOf(def.Key)
@@ -123,7 +128,7 @@ func (d *Doc) writeSchemaBody(s *schema.Schema) string {
 			parts = append(parts, "*")
 		}
 	default:
-		if s.Open != nil && len(parts) > 0 {
+		if s.Open != nil {
 			parts = append(parts, "*")
 		}
 	}
@@ -166,9 +171,9 @@ func (d *Doc) memberDeclaration(name string, md *schema.MemberDef) string {
 func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 	if md.SchemaRef != "" {
 		if md.Type == "array" {
-			return "array, of: " + md.SchemaRef
+			return "array, of: " + refSpelling(md.SchemaRef)
 		}
-		return "object, schema: " + md.SchemaRef
+		return "object, schema: " + refSpelling(md.SchemaRef)
 	}
 	if md.Type == "object" && md.Schema != nil {
 		return "object, schema: " + d.nestedSchemaAnnotation(md.Schema)
@@ -201,9 +206,9 @@ func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 func (d *Doc) memberAnnotation(md *schema.MemberDef) string {
 	if md.SchemaRef != "" {
 		if md.Type == "array" {
-			return "[" + md.SchemaRef + "]"
+			return "[" + refSpelling(md.SchemaRef) + "]"
 		}
-		return md.SchemaRef
+		return refSpelling(md.SchemaRef)
 	}
 	if md.Type == "object" && md.Schema != nil {
 		return d.nestedSchemaAnnotation(md.Schema)
@@ -248,7 +253,7 @@ func (d *Doc) nestedSchemaAnnotation(s *schema.Schema) string {
 
 func (d *Doc) arrayElemAnnotation(of *schema.MemberDef) string {
 	if of.SchemaRef != "" {
-		return of.SchemaRef
+		return refSpelling(of.SchemaRef)
 	}
 	if of.Type == "object" && of.Schema != nil {
 		return d.nestedSchemaAnnotation(of.Schema)
@@ -301,7 +306,7 @@ func (d *Doc) constraintValue(v any) string {
 	case nil:
 		return "null"
 	case string:
-		return `"` + strings.ReplaceAll(strings.ReplaceAll(x, `\`, `\\`), `"`, `\"`) + `"`
+		return regularString(x)
 	case bool:
 		if x {
 			return "T"
@@ -333,7 +338,7 @@ func (d *Doc) writeSection(sec *parser.Section) string {
 		var lines []string
 		for _, rec := range sec.Records {
 			if obj, ok := rec.(*value.Object); ok {
-				lines = append(lines, "~ "+d.writeRecord(obj, sch))
+				lines = append(lines, "~ "+d.writeBareRecord(obj, sch))
 			}
 		}
 		return strings.Join(lines, "\n")
@@ -345,7 +350,7 @@ func (d *Doc) writeSection(sec *parser.Section) string {
 	if !ok {
 		return ""
 	}
-	line := d.writeRecord(obj, sch)
+	line := d.writeBareRecord(obj, sch)
 	if line == "" {
 		return "{}" // an empty bare record must still put a record on the page
 	}
@@ -393,7 +398,13 @@ func (d *Doc) writeRecord(obj *value.Object, sch *schema.Schema) string {
 
 	// No schema: a member is positional when keyless or when its key equals
 	// its own index; every other name is unrecoverable and must be written.
+	// An absent member is a HOLE, not a null: held as an empty slot in the
+	// middle, dropped at the end.
 	for i, m := range obj.Members {
+		if m.Absent {
+			parts = append(parts, "")
+			continue
+		}
 		formatted := d.writeValue(m.Value, nil)
 		if m.Positional || m.Key == strconv.Itoa(i) {
 			parts = append(parts, formatted)
@@ -401,13 +412,30 @@ func (d *Doc) writeRecord(obj *value.Object, sch *schema.Schema) string {
 			parts = append(parts, formatObjectKey(m.Key)+": "+formatted)
 		}
 	}
-	line := strings.Join(parts, ", ")
-	// A record that is exactly one positional object value is ambiguous
-	// unenclosed — the braces would read as the record's own. Enclose it.
-	if len(obj.Members) == 1 && obj.Members[0].Positional {
-		if _, isObj := obj.Members[0].Value.(*value.Object); isObj {
-			return "{" + line + "}"
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, ", ")
+}
+
+// writeBareRecord renders a record for a BARE emit site — a `~` line or a
+// section's single record. A bare line that is exactly one keyless braced
+// object is ambiguous unenclosed: the re-parser absorbs those braces as the
+// record's own (ISSUE-15), schema or no schema, dropping a nesting level.
+// Enclosing applies here only; a nested object's braces come from writeValue,
+// where absorption never happens.
+func (d *Doc) writeBareRecord(obj *value.Object, sch *schema.Schema) string {
+	line := d.writeRecord(obj, sch)
+	present, lastIsObject := 0, false
+	for _, m := range obj.Members {
+		if m.Absent {
+			continue
 		}
+		present++
+		_, lastIsObject = m.Value.(*value.Object)
+	}
+	if present == 1 && lastIsObject && strings.HasPrefix(line, "{") {
+		return "{" + line + "}"
 	}
 	return line
 }
@@ -530,36 +558,17 @@ func temporalLiteral(t value.Temporal, declared string) string {
 // ── strings and keys ───────────────────────────────────────────────────────
 
 var (
-	reNumericLooking = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
-	reBasePrefix     = regexp.MustCompile(`^[+-]?0[xXoObB]`)
-	reSuffixClaim    = regexp.MustCompile(`^[+-]?[0-9.]+[mn]$`)
-	reDateLike       = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	reTimeLike       = regexp.MustCompile(`^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$`)
-	reDateTimeLike   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$`)
-	reKeyNumeric     = regexp.MustCompile(`^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$`)
-	reKeyKeyword     = regexp.MustCompile(`^(?:true|false|null|T|F|N|Inf|NaN)$`)
-	reKeyBareSafe    = regexp.MustCompile(`^[$A-Za-z_][A-Za-z0-9_. -]*$`)
+	reDateLike     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	reTimeLike     = regexp.MustCompile(`^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$`)
+	reDateTimeLike = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$`)
+	reKeyNumeric   = regexp.MustCompile(`^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$`)
+	reKeyKeyword   = regexp.MustCompile(`^(?:true|false|null|T|F|N|Inf|NaN)$`)
+	reKeyBareSafe  = regexp.MustCompile(`^[$A-Za-z_][A-Za-z0-9_. -]*$`)
 )
 
 var ambiguousWords = map[string]bool{
 	"null": true, "N": true, "true": true, "T": true, "false": true, "F": true,
 	"Inf": true, "+Inf": true, "-Inf": true, "NaN": true, "undefined": true,
-}
-
-// readsBackAsANumber is the writer's half of the reader's two numeric rules:
-// quote when the bare text would read back as a number (rule 1) or as a
-// claimed-and-broken literal (rule 2) — and not otherwise.
-func readsBackAsANumber(s string) bool {
-	if s == "" {
-		return false
-	}
-	if reBasePrefix.MatchString(s) {
-		return true
-	}
-	if reSuffixClaim.MatchString(s) {
-		return true
-	}
-	return reNumericLooking.MatchString(s)
 }
 
 func isAmbiguousString(s string) bool {
@@ -572,33 +581,104 @@ func isAmbiguousString(s string) bool {
 	if strings.Contains(s, "---") {
 		return true
 	}
-	if readsBackAsANumber(s) {
+	// The reader's own word classifier answers "would this read back as a
+	// keyword, a number, or a broken numeric claim?" — the writer quotes
+	// whenever it would, so the two can never disagree on a bare word.
+	if tokenizer.WordReadsNonString(s) {
 		return true
+	}
+	// A claimed-and-broken word (`2.5e1n`) errors even mid-run, where an
+	// ordinary numeric word would just join the open string.
+	for _, w := range strings.Fields(s) {
+		if tokenizer.WordIsBrokenClaim(w) {
+			return true
+		}
 	}
 	return reDateLike.MatchString(s) || reTimeLike.MatchString(s) || reDateTimeLike.MatchString(s)
 }
 
+// refSpelling spells a `$name` schema reference. Most refs are plain words
+// and read back bare; one carrying quote, space or structural characters is
+// spelled as a quoted string — the compiler cannot see quotedness, so the
+// string `"$x"` compiles to the same reference `$x` does.
+func refSpelling(ref string) string {
+	if !strings.ContainsAny(ref, " \t\n\r") && autoString(ref) == ref {
+		return ref
+	}
+	return regularString(ref)
+}
+
+// hasBareUnsafeControl reports a C0 control character other than \n\r\t —
+// characters that survive neither a bare word, an open string, nor a raw
+// string (a raw \b splits the word and the remainder re-reads as a number:
+// silent data loss, found by the fuzzer). Such strings must be quoted with
+// escapes.
+func hasBareUnsafeControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\n' && c != '\r' && c != '\t' {
+			return true
+		}
+	}
+	return false
+}
+
 // autoString picks the leanest spelling that reads back as the same string:
-// quoted when ambiguous or comma-carrying, open with escaped structural
-// characters, raw when control characters would need escaping, bare
+// quoted when ambiguous, comma-carrying or control-carrying, open with
+// escaped structural characters, raw when \n\r\t would need escaping, bare
 // otherwise.
 func autoString(s string) string {
-	if isAmbiguousString(s) || strings.ContainsRune(s, ',') {
+	// A raw carriage return is newline-normalized by the reader in every
+	// unescaped spelling, so \r joins the must-quote set alongside the other
+	// controls.
+	if isAmbiguousString(s) || strings.ContainsRune(s, ',') ||
+		strings.ContainsRune(s, '\r') || hasBareUnsafeControl(s) {
 		return regularString(s)
 	}
 	if strings.ContainsAny(s, "{}[]:#\"'\\~") {
 		return openEscaped(s)
 	}
-	if strings.ContainsAny(s, "\n\r\t") {
+	if strings.ContainsAny(s, "\n\t") {
 		return `r"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
 	return s
 }
 
+// regularString spells s as a regular quoted string. Every C0 control
+// character is escaped — named where the reader names one, \u00XX otherwise —
+// so the quoted form never carries a raw control byte.
 func regularString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.NewReplacer("\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(s)
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		default:
+			if c < 0x20 {
+				const hex = "0123456789abcdef"
+				b.WriteString(`\u00`)
+				b.WriteByte(hex[c>>4])
+				b.WriteByte(hex[c&0xF])
+			} else {
+				b.WriteByte(c)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func openEscaped(s string) string {
@@ -620,7 +700,7 @@ func formatObjectKey(key string) string {
 	bareSafe := reKeyBareSafe.MatchString(key) &&
 		!strings.HasSuffix(key, " ") && !strings.Contains(key, "---")
 	if reKeyNumeric.MatchString(key) || reKeyKeyword.MatchString(key) || !bareSafe {
-		return `"` + strings.ReplaceAll(strings.ReplaceAll(key, `\`, `\\`), `"`, `\"`) + `"`
+		return regularString(key)
 	}
 	return key
 }

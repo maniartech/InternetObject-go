@@ -6,7 +6,7 @@ are `io-test-cases/PORTING-NOTES.md`.
 
 ## Current state — THE FULL CORPUS IS GREEN
 
-Every suite passes, against `io-test-cases` commit `0fc0af8` (still untagged upstream — ADR 0007
+Every suite passes, against `io-test-cases` commit `e6f288c` (still untagged upstream — ADR 0007
 D5 remains open; when `v1.0.0` lands, move the pin in
 `internal/conformance/corpus.go` and re-run):
 
@@ -37,19 +37,39 @@ internal/value         the value model + IsScalar predicate + corpus equality
 internal/conformance   the corpus harness (all six comparators)
 ```
 
+## Fuzzing — DONE, all layers green
+
+Three layers, all clean after fixing what they found:
+
+- **Property fuzzer** (`internal/document/fuzz_roundtrip_test.go`, PORTING-NOTES part 3):
+  deterministic 8-seed value generator → write → re-parse → strict value compare →
+  idempotence. Quick gate (8×400) runs in every `go test`; the PORTING-NOTES gate is
+  `IO_FUZZ_SOAK=1` (8×3,000; `IO_FUZZ_ROUNDS` deepens it). **Green at 240,000 documents.**
+- **Byte fuzzer** (`fuzz_test.go`): coverage-guided `go test -fuzz=FuzzParse` — never panic;
+  a CLEAN parse's output re-parses cleanly and idempotently. **Green at 63M execs / 10 min.**
+- **Stream fuzzer** (`FuzzStream`): never panic; whole-buffer vs per-byte chunking yield
+  identical item sequences. **Green at 57M execs / 5 min.**
+  Regression inputs live in `testdata/fuzz/`.
+
+The fuzzers found ~15 real bugs AFTER the full corpus was green — writer enclosure at bare emit
+sites, control-character and `\r` strings written bare, exponent-suffix quoting (writer now asks
+the reader's own classifier), absent holes written as `N`, `*`-only headers dropped, deferred
+literal errors masked in headers and under `any`, schema alias cycle stack overflow, bigint
+exponent DoS, unspellable UTC datetimes, `schema: $ref` long form, `--- $$` section names,
+surplus positional members skipping validation. Upstream-relevant ones are FINDINGS 10–13 plus
+the "suggested corpus cases" list.
+
 ## What's next
 
-1. **Public API ADR + surface** — design the Go-idiomatic public package at the module root
-   (`Parse`/`Load` returning `(value, error)`, errors slice for accumulate-and-continue, the
-   live-vs-JSON projection pair, streaming via `iter.Seq`). The format work is done; nothing
-   above `internal/` exists yet.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (now 12 items) belongs in
-   io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output outranks the library.
-3. **Property fuzzer** (PORTING-NOTES part 3) — round-trip properties over generated documents;
-   the corpus is the floor, not the ceiling.
-4. **Performance pass** — now allowed (phases are done): benchmarks, allocation audit,
-   profile-guided tuning. The tokenizer is already zero-alloc per token.
-5. Retrospective for the Rust port (definition of done, item 4).
+1. **Native struct marshal/unmarshal** (user-requested, in progress) — `encoding/json`-shaped
+   `Marshal`/`Unmarshal` with `io:"…"` struct tags and schema derivation from struct types; see
+   ADR 0003 (docs/decisions) for the design.
+2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+   suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
+   outranks the library.
+3. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
+   already zero-alloc per token.
+4. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 
