@@ -166,6 +166,16 @@ Status legend: **open** = not yet reported/resolved upstream.
   (`CONFORMANCE.md:176-177`), so no conformance rule can assert which member failed. A
   structured field would serve every port; today each one invents its own or omits it.
 
+## 20. A data member keyed `*` is hoisted into the wildcard's slot — open (this port; reference unaffected)
+
+- Under a typed wildcard schema (`*: int`), a record carrying a member whose key is literally
+  `*` bound to the wildcard DEFINITION rather than being treated as an ordinary extra, so it
+  was emitted in schema order — ahead of positional members — producing `"*": 0, 0`, which
+  the reader rejects (positional-after-keyed). The reference keeps arrival order
+  (`{"1":0,"*":0}`), confirming the `*` entry is openness, not a member.
+- **This port**: fixed in `validateObject`. Found by the byte fuzzer, not by the corpus — no
+  case combines a typed wildcard with a literal `*` data key. Worth a corpus case.
+
 ## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
 
 - A malformed literal in a HEADER definition is fatal (`~ A: 0B` → `invalid-number`); no case
