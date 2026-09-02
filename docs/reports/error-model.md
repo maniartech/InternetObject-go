@@ -4,6 +4,14 @@
 caller reaches them. Sources: `io-js2/src/**`, `io-go/**`, `io-specs/streaming/error-model.md`,
 `io-test-cases/CONFORMANCE.md`. Every claim below was verified against the code.
 
+> **Status update (2026-09-02): every defect below is FIXED**, implemented as
+> [ADR 0005](../decisions/0005-error-model.md). Errors now carry a real position, a
+> structural path, a category and a record index; the failed-record marker is exported as
+> `io.ErrorItem` with an `io.IsError` predicate; `Value()` and `Records()` agree. Measured
+> cost: +5% allocations, +9% bytes on decode (8 bytes per member) — the price of positions,
+> and ADR 0006 phase B more than recovers it. The report is kept as written because the
+> analysis, and the reason the drift went unnoticed, remain the useful record.
+
 ## Verdict
 
 **The collection *mechanism* is sound and matches the reference: we accumulate rather than

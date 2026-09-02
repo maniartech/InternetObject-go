@@ -42,8 +42,12 @@ var absent = absentType{}
 
 type valFail struct{ err errs.Error }
 
+// vfail raises a member fault. It carries NO position: the recover sites in
+// validateObject know which member and record the fault belongs to and stamp
+// it there (ADR 0005 D2), which is why every validation error used to report
+// a fabricated 1:1.
 func vfail(code string) {
-	panic(valFail{errs.Error{Code: code, Line: 1, Col: 1}})
+	panic(valFail{errs.Error{Code: code, RecordIndex: -1}})
 }
 
 // ValidateRecord validates one record. accumulate selects the collection
@@ -51,7 +55,14 @@ func vfail(code string) {
 // prevailing fault). The validated record is returned when there are no
 // errors.
 func ValidateRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) (*value.Object, []errs.Error) {
-	out, acc, fatal := validateObject(rec, s, defs)
+	return ValidateRecordAt(rec, s, defs, accumulate, "$")
+}
+
+// ValidateRecordAt is ValidateRecord with the structural path this record
+// occupies, so faults report where they are (ADR 0005 D3): "$" for a bare
+// record, "$[2]" for the third record of a collection.
+func ValidateRecordAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path string) (*value.Object, []errs.Error) {
+	out, acc, fatal := validateObject(rec, s, defs, path)
 	switch {
 	case fatal != nil && accumulate:
 		return nil, append(acc, *fatal)
@@ -68,7 +79,7 @@ func ValidateRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) (*
 // validateObject implements the record/object algorithm. It returns the
 // validated object, the accumulated member errors, and the fatal membership
 // error (which aborted processing) if any.
-func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
+func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
 	// Validated members: schema-order slots first, then extras by arrival.
 	slots := make(map[string]any, len(s.Names))
 	var extras []value.Member
@@ -80,21 +91,22 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			if !ok {
 				panic(r)
 			}
-			fatal = &f.err
+			e := locate(f.err, path, "", rec, nil)
+			fatal = &e
 			out = nil
 		}
 	}()
 
 	// try validates one member, converting a member-level failure into an
 	// accumulated error.
-	try := func(name string, f func() any) {
+	try := func(name string, m *value.Member, f func() any) {
 		defer func() {
 			if r := recover(); r != nil {
 				f, ok := r.(valFail)
 				if !ok {
 					panic(r)
 				}
-				acc = append(acc, f.err)
+				acc = append(acc, locate(f.err, path, name, rec, m))
 				processed[name] = true
 			}
 		}()
@@ -116,12 +128,14 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			}
 			md := s.Defs[name]
 			val, present := any(nil), false
+			var mp *value.Member
 			if lookup {
 				if i := rec.Find(name); i >= 0 {
 					val, present = rec.Members[i].Value, true
+					mp = &rec.Members[i]
 				}
 			}
-			try(name, func() any { return validateMember(val, present, md, defs) })
+			try(name, mp, func() any { return validateMember(val, present, md, defs) })
 		}
 	}
 
@@ -140,7 +154,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 		fm := rec.Members[0]
 		if !fm.Positional && s.Defs[fm.Key] == nil && fm.Key != "*" {
 			name0 := s.Names[0]
-			try(name0, func() any { return validateMember(rec, true, s.Defs[name0], defs) })
+			try(name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
 			processed[name0] = true
 			fillMissing(false)
 			return assemble(s, slots, extras), acc, nil
@@ -167,17 +181,17 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 				if md.Optional && !md.HasDefault {
 					continue
 				}
-				try(name, func() any { return validateMember(nil, false, md, defs) })
+				try(name, nil, func() any { return validateMember(nil, false, md, defs) })
 				continue
 			}
-			try(name, func() any { return validateMember(m.Value, true, md, defs) })
+			try(name, &rec.Members[i], func() any { return validateMember(m.Value, true, md, defs) })
 		} else {
 			// entirely missing — absence treatment, but leave an optional
 			// member unprocessed so a later keyed value may still fill it
 			if md.Optional && !md.HasDefault {
 				continue
 			}
-			try(name, func() any { return validateMember(nil, false, md, defs) })
+			try(name, nil, func() any { return validateMember(nil, false, md, defs) })
 		}
 	}
 
@@ -241,7 +255,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 			md = undeclaredMemberDef(name, s.Open)
 			processed[name] = true
 			mv := m.Value
-			try(name, func() any { return validateMember(mv, true, md, defs) })
+			try(name, &rec.Members[i], func() any { return validateMember(mv, true, md, defs) })
 			if v, ok := slots[name]; ok {
 				extras = append(extras, value.Member{Key: name, Value: v})
 				delete(slots, name)
@@ -250,7 +264,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 		}
 		processed[name] = true
 		mv := m.Value
-		try(name, func() any { return validateMember(mv, true, md, defs) })
+		try(name, &rec.Members[i], func() any { return validateMember(mv, true, md, defs) })
 	}
 
 	fillMissing(true)
@@ -302,6 +316,31 @@ func absorptionLoops(key string, s *Schema, defs Defs) bool {
 		cur = next
 	}
 	return false
+}
+
+// locate fills in a fault's structural context: the path it occurred at, and
+// the position of the value it is about. A fault with no value to point at —
+// a member that is missing entirely — is reported at the record, exactly as
+// the reference does (ADR 0005 D2). A position already set by the tokenizer
+// (a deferred literal error) is never overwritten.
+func locate(e errs.Error, path, name string, rec *value.Object, m *value.Member) errs.Error {
+	if e.Path == "" {
+		e.Path = path
+		if name != "" && name != "*" {
+			e.Path = path + "." + name
+		}
+	}
+	if e.Category == "" {
+		e.Category = errs.CategoryOf(e.Code)
+	}
+	if e.Line == 0 {
+		if m != nil && m.Line != 0 {
+			e.Line, e.Col = m.Line, m.Col
+		} else if rec != nil {
+			e.Line, e.Col = rec.Line, rec.Col
+		}
+	}
+	return e
 }
 
 // isWildcardDef reports whether the "*" entry in Names is the typed-open
@@ -416,7 +455,7 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 		return validateObjectMember(val, md, defs)
 	default: // any
 		if ev, ok := val.(value.ErrorValue); ok {
-			vfail(ev.Code) // a deferred malformed literal surfaces as itself
+			panic(valFail{errs.Error{Code: ev.Code, Line: ev.Line, Col: ev.Col}}) // a deferred malformed literal surfaces as itself
 		}
 		if md.AnyOf != nil {
 			for _, alt := range md.AnyOf {
@@ -766,7 +805,7 @@ func validateObjectMember(val any, md *MemberDef, defs Defs) any {
 	if sch == nil {
 		return obj // a bare `object` member constrains nothing
 	}
-	v, acc, fatal := validateObject(obj, sch, defs)
+	v, acc, fatal := validateObject(obj, sch, defs, md.Path)
 	if fatal != nil {
 		panic(valFail{*fatal})
 	}

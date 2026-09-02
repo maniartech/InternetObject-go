@@ -116,18 +116,29 @@ forever; absorption now detects the cycle and reports the natural `unknown-membe
   and `Value()`/`Records()` disagree about faulted rows. Recommends ADR 0005 BEFORE ADR 0004
   phase 1, since one plumbing change (a position on `value.Member`) fixes most of it.
 
+## Error model — SHIPPED (ADR 0005)
+
+Errors now carry `{Code, Category, Path, RecordIndex, Line, Col}`: a validation fault reports
+`expected-integer at $[1].age (4:8)` where it used to say `1:1`. The plumbing was one change
+— positions on `value.Member`/`value.Object`, stamped by the parser from tokens it already
+held — plus enrichment at the validator's recover sites, so no `vfail` call site changed.
+Also: the streaming category is carried instead of dropped (a spec MUST), the failed-record
+marker is exported as `io.ErrorItem` with a type-based `io.IsError` (data cannot forge it),
+`Value()`/`Records()` agree about faulted rows, and `ErrorList` gained `Codes`/`Has`/
+`errors.Is`. Nine dedicated tests gate all of it — the corpus asserts codes only, in every
+implementation, so these are the ONLY gate that exists for positions (FINDINGS #16).
+
 ## What's next
 
-1. **ADR 0005 — the error model** (recommended first; see the report above).
-2. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
+1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
-3. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
    outranks the library.
 4. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
    already zero-alloc per token.
-5. Retrospective for the Rust port (definition of done, item 4).
+4. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 

@@ -6,7 +6,6 @@ import (
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/parser"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Runtime schemas (ADR 0004 D5). A schema is data: it may be derived from Go
@@ -139,10 +138,9 @@ func (d *Document) Records() []any {
 	var out []any
 	for _, sec := range d.doc.Sections {
 		for _, rec := range sec.Records {
-			if _, bad := rec.(value.ErrorNode); bad {
-				out = append(out, nil)
-				continue
-			}
+			// A faulted row keeps its place and carries its marker, exactly
+			// as Value() reports it — the two projections must agree
+			// (ADR 0005 D4). Test a row with IsError.
 			out = append(out, parser.ProjectValue(rec))
 		}
 	}

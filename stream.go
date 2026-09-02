@@ -3,6 +3,7 @@ package internetobject
 import (
 	"io"
 	"iter"
+	"strconv"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 )
@@ -58,7 +59,14 @@ func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
 			for _, it := range items {
 				si := StreamItem{Index: it.RecordIndex, SchemaName: it.SchemaName, Value: it.Value}
 				if it.Err != nil {
-					si.Err = &Error{Code: it.Err.Code, Line: 1, Col: 1}
+					// The reader already classified this fault; carrying the
+					// category is a spec MUST (io-specs/streaming/error-model)
+					// and it used to be dropped here (ADR 0005 D1).
+					si.Err = &Error{
+						Code: it.Err.Code, Category: it.Err.Category,
+						Path:        "$[" + strconv.Itoa(it.RecordIndex) + "]",
+						RecordIndex: it.RecordIndex,
+					}
 					si.Value = nil
 				}
 				if !yield(si, nil) {

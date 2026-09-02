@@ -25,6 +25,10 @@ import (
 // comparison ignores it (see Equal), serialization does not.
 type Object struct {
 	Members []Member
+	// Line, Col locate the object's first token, 1-based. An absence fault
+	// (a member that is missing entirely) has no value to point at and is
+	// reported here instead — the reference does the same (ADR 0005 D2).
+	Line, Col int32
 }
 
 // Member is one object member. A positional member has no key of its own —
@@ -35,6 +39,10 @@ type Member struct {
 	Positional bool // no key was written
 	Absent     bool // an empty comma slot: a positional hole with no value
 	Value      any
+	// Line, Col locate this member's VALUE, 1-based — where a validation
+	// fault about it is reported. Zero when the member was not parsed from
+	// source (built by a marshaler, or an empty comma slot).
+	Line, Col int32
 }
 
 // Find returns the index of the first keyed member with the given key, or -1.
@@ -92,7 +100,11 @@ type Temporal struct {
 // ErrorNode marks a record that failed to parse or validate inside a
 // collection: the fault was reported and the surrounding records survived.
 type ErrorNode struct {
-	Code string
+	Code        string
+	Category    string
+	Path        string
+	RecordIndex int
+	Line, Col   int32
 }
 
 // ErrorValue is a malformed VALUE literal (a bad datetime, bigint, decimal or

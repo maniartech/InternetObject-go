@@ -330,6 +330,9 @@ func recordEnd(t tokenizer.Token) bool {
 // named "0" (the non-record-root promotion).
 func (p *parser) parseRecord() any {
 	obj := &value.Object{}
+	if t, ok := p.peek(); ok {
+		obj.Line, obj.Col = t.Line, t.Col // where an absence fault is reported
+	}
 	sawComma := false
 	expectMember := true // a comma while a member is still expected separates nothing
 	pendingComma := false
@@ -398,8 +401,16 @@ func (p *parser) parseMember(obj *value.Object) {
 			key := p.s.StringValue(t)
 			quoted := t.Sub != tokenizer.SubOpenString
 			p.i += 2
+			// A fault about this member is reported at its VALUE, so the
+			// value's first token is what the member records (ADR 0005 D2).
+			vt := ct
+			if nt, ok := p.peek(); ok {
+				vt = nt
+			}
 			v := p.parseMemberValue(ct)
-			p.addMember(obj, value.Member{Key: key, Quoted: quoted, Value: v}, t)
+			p.addMember(obj, value.Member{
+				Key: key, Quoted: quoted, Value: v, Line: vt.Line, Col: vt.Col,
+			}, t)
 			return
 		case tokenizer.KindNumber, tokenizer.KindBigInt, tokenizer.KindDecimal,
 			tokenizer.KindBoolean, tokenizer.KindNull, tokenizer.KindDateTime, tokenizer.KindBinary:
@@ -413,7 +424,9 @@ func (p *parser) parseMember(obj *value.Object) {
 		// A structured value (array/object) cannot name a member.
 		p.die(errs.UnexpectedToken, nt)
 	}
-	p.addMember(obj, value.Member{Positional: true, Quoted: quotedVal, Value: v}, t)
+	p.addMember(obj, value.Member{
+		Positional: true, Quoted: quotedVal, Value: v, Line: t.Line, Col: t.Col,
+	}, t)
 }
 
 // addMember appends m, rejecting a duplicate member name (quoting does not
@@ -506,7 +519,7 @@ func deferrable(c tokenizer.Code) bool {
 // braces — a leading, doubled or trailing comma separates nothing and is
 // skipped.
 func (p *parser) parseObject(open tokenizer.Token) any {
-	obj := &value.Object{}
+	obj := &value.Object{Line: open.Line, Col: open.Col}
 	expectMember := true
 	pendingComma := false
 	for {

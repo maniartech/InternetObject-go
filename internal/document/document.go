@@ -6,6 +6,7 @@
 package document
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/maniartech/InternetObject-go/internal/errs"
@@ -73,8 +74,15 @@ func parse(src string, override *schema.Schema) *Doc {
 			// literal errors surface as themselves.
 			for i, rec := range sec.Records {
 				if verr := resolveVars(rec, defs); verr != nil {
-					doc.Errors = append(doc.Errors, *verr)
-					sec.Records[i] = value.ErrorNode{Code: verr.Code}
+					e := *verr
+					if e.Category == "" {
+						e.Category = errs.CategoryOf(e.Code)
+					}
+					if sec.Collection {
+						e.RecordIndex, e.Path = i, "$["+strconv.Itoa(i)+"]"
+					}
+					doc.Errors = append(doc.Errors, e)
+					sec.Records[i] = errorNodeFor(e)
 					if !sec.Collection {
 						return doc
 					}
@@ -89,10 +97,18 @@ func parse(src string, override *schema.Schema) *Doc {
 			if !ok {
 				continue // an ErrorNode from parse recovery stays as it is
 			}
-			validated, verrs := schema.ValidateRecord(obj, sch, defs, sec.Collection)
+			path := "$"
+			recIndex := -1
+			if sec.Collection {
+				path, recIndex = "$["+strconv.Itoa(i)+"]", i
+			}
+			validated, verrs := schema.ValidateRecordAt(obj, sch, defs, sec.Collection, path)
 			if len(verrs) > 0 {
+				for j := range verrs {
+					verrs[j].RecordIndex = recIndex
+				}
 				doc.Errors = append(doc.Errors, verrs...)
-				sec.Records[i] = value.ErrorNode{Code: verrs[0].Code}
+				sec.Records[i] = errorNodeFor(verrs[0])
 				if !sec.Collection {
 					return doc // a bare record fails fast
 				}
@@ -107,6 +123,16 @@ func parse(src string, override *schema.Schema) *Doc {
 		}
 	}
 	return doc
+}
+
+// errorNodeFor is THE conversion from an accumulated fault to the marker that
+// stands in for the failed record inside projected data (ADR 0005 D4), so the
+// marker and the error list can never disagree about what went wrong.
+func errorNodeFor(e errs.Error) value.ErrorNode {
+	return value.ErrorNode{
+		Code: e.Code, Category: e.Category, Path: e.Path,
+		RecordIndex: e.RecordIndex, Line: e.Line, Col: e.Col,
+	}
 }
 
 // NewUnvalidated wraps a hand-built parser.Document for WRITING: each section
