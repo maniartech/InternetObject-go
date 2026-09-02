@@ -218,8 +218,12 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 	case reflect.Slice:
 		if arr, ok := v.([]any); ok {
 			out := reflect.MakeSlice(t, len(arr), len(arr))
+			parent := "" // built once for the whole array, not per element
 			for i, e := range arr {
-				if err := setValue(out.Index(i), e, pathAt{parent: at.String(), index: i}); err != nil {
+				if parent == "" {
+					parent = at.String()
+				}
+				if err := setValue(out.Index(i), e, pathAt{parent: parent, index: i}); err != nil {
 					return err
 				}
 			}

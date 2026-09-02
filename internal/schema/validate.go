@@ -177,7 +177,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 			try(0, name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
 			slots[0].processed = true
 			fillMissing(false)
-			return assemble(s, slots, extras), acc, nil
+			return assemble(rec, s, slots, extras), acc, nil
 		}
 	}
 
@@ -291,7 +291,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 	}
 
 	fillMissing(true)
-	return assemble(s, slots, extras), acc, nil
+	return assemble(rec, s, slots, extras), acc, nil
 }
 
 // absorptionLoops reports whether applying the lone-object absorption rule
@@ -375,7 +375,16 @@ func isWildcardDef(s *Schema) bool {
 
 // assemble builds the validated object: declared members in schema order,
 // then extras in arrival order.
-func assemble(s *Schema, slots []memberSlot, extras []value.Member) *value.Object {
+func assemble(rec *value.Object, s *Schema, slots []memberSlot, extras []value.Member) *value.Object {
+	// A validated record is ALWAYS a fresh object, never the parsed one with
+	// its members renamed. Reusing it saves two allocations per record and
+	// was tried: the absorption rule can make a record a member of itself, or
+	// of an ancestor, so writing validated values back builds a reference
+	// cycle that the writer then walks forever. The byte fuzzer found both
+	// shapes (`$P: {A: $P}` and the mutual `B: {B}`) within seconds. Detecting
+	// the cycle safely costs more than the two allocations are worth; the
+	// right fix for the tree's cost is not to build a tree at all on the
+	// decode path (ADR 0006 P3), not to alias this one.
 	n := len(extras)
 	for i := range slots {
 		if slots[i].filled {
@@ -824,11 +833,37 @@ func validateArray(val any, md *MemberDef, defs Defs) any {
 	if md.Of == nil {
 		return arr // an untyped array constrains nothing, nulls included
 	}
-	out := make([]any, len(arr))
+	// Validate in place. The element validators return the value they were
+	// given (they check, they do not transform), so a second slice would be a
+	// copy of the first — one allocation per array, per record. Only when an
+	// element genuinely changes (a default, a resolved @reference) is a value
+	// written back, and it is written into the slice the parser already built,
+	// which nothing else references once validation returns (ADR 0006 P3).
 	for i, e := range arr {
-		out[i] = validateMember(e, true, md.Of, defs)
+		if v := validateMember(e, true, md.Of, defs); !sameValue(v, e) {
+			arr[i] = v
+		}
 	}
-	return out
+	return arr
+}
+
+// sameValue reports whether validation handed back the identical interface
+// value it was given — the common case, and cheaper than assuming it did not.
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case string:
+		y, ok := b.(string)
+		return ok && x == y
+	case float64:
+		y, ok := b.(float64)
+		return ok && x == y
+	case bool:
+		y, ok := b.(bool)
+		return ok && x == y
+	case nil:
+		return b == nil
+	}
+	return false
 }
 
 func validateObjectMember(val any, md *MemberDef, defs Defs) any {
