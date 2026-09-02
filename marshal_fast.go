@@ -73,10 +73,16 @@ func fastScalarType(t reflect.Type) bool {
 // appendFastRecord writes one struct as a record body: members in plan order,
 // `omitempty` holes held back so trailing ones vanish — the same rule the
 // tree writer applies.
-func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, path string) ([]byte, error) {
+func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, at pathAt) ([]byte, error) {
 	written, pending := 0, 0
-	for _, f := range plan.fields {
-		fv := rv.FieldByIndex(f.index)
+	for i := range plan.fields {
+		f := &plan.fields[i]
+		var fv reflect.Value
+		if f.at >= 0 {
+			fv = rv.Field(f.at) // depth-1: no index walk
+		} else {
+			fv = rv.FieldByIndex(f.index)
+		}
 		if f.omitZero && fv.IsZero() {
 			pending++ // a hole: only emitted if a later member follows
 			continue
@@ -92,11 +98,62 @@ func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, path strin
 		}
 		written++
 		var err error
-		if dst, err = appendFastValue(dst, fv, f.kind, pathAt{parent: path, name: f.name, index: -1}); err != nil {
+		if dst, err = appendKind(dst, fv, f.enc, f.elem, f.kind, at.member(f.name)); err != nil {
 			return nil, err
 		}
 	}
 	return dst, nil
+}
+
+// appendKind writes one value using the shape the plan already decided, so
+// nothing re-derives a reflect.Type per record.
+func appendKind(dst []byte, rv reflect.Value, k, elem encKind, tkind string, at pathAt) ([]byte, error) {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return append(dst, 'N'), nil
+		}
+		rv = rv.Elem()
+	}
+	switch k {
+	case encString:
+		return document.AppendString(dst, rv.String()), nil
+	case encBool:
+		if rv.Bool() {
+			return append(dst, 'T'), nil
+		}
+		return append(dst, 'F'), nil
+	case encInt:
+		n := rv.Int()
+		if n > maxSafeInt || n < -maxSafeInt {
+			return nil, &MarshalError{Path: at.String(), Msg: intOverflowMsg(n)}
+		}
+		return document.AppendNumber(dst, float64(n)), nil
+	case encUint:
+		n := rv.Uint()
+		if n > maxSafeInt {
+			return nil, &MarshalError{Path: at.String(), Msg: uintOverflowMsg(n)}
+		}
+		return document.AppendNumber(dst, float64(n)), nil
+	case encFloat:
+		return document.AppendNumber(dst, rv.Float()), nil
+	case encSlice:
+		if rv.Type() == bytesType {
+			break // []byte is binary, not an array of numbers
+		}
+		dst = append(dst, '[')
+		for i := 0; i < rv.Len(); i++ {
+			if i > 0 {
+				dst = append(dst, ',', ' ')
+			}
+			var err error
+			if dst, err = appendKind(dst, rv.Index(i), elem, encOther, "", at.elem(i)); err != nil {
+				return nil, err
+			}
+		}
+		return append(dst, ']'), nil
+	}
+	// The remaining kinds are rare enough to keep the reflective form.
+	return appendFastValue(dst, rv, tkind, at)
 }
 
 // appendFastValue writes one Go value through the shared spelling helpers.
@@ -161,7 +218,7 @@ func appendFastValue(dst []byte, rv reflect.Value, kind string, at pathAt) ([]by
 				dst = append(dst, ',', ' ')
 			}
 			var err error
-			if dst, err = appendFastValue(dst, rv.Index(i), "", pathAt{parent: at.String(), index: i}); err != nil {
+			if dst, err = appendFastValue(dst, rv.Index(i), "", at.elem(i)); err != nil {
 				return nil, err
 			}
 		}
@@ -214,17 +271,17 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 	dst = append(dst, '\n', '-', '-', '-', '\n')
 
 	if !collection {
-		if dst, err = appendFastRecord(dst, rv, plan, "$"); err != nil {
+		if dst, err = appendFastRecord(dst, rv, plan, rootPath); err != nil {
 			return "", true, err
 		}
 		return string(dst), true, nil
 	}
 	for i := 0; i < rv.Len(); i++ {
 		ev := rv.Index(i)
-		path := recordPath(i)
+		path := rootPath.record(i)
 		for ev.Kind() == reflect.Pointer {
 			if ev.IsNil() {
-				return "", true, &MarshalError{Path: path, Msg: "a collection record cannot be nil"}
+				return "", true, &MarshalError{Path: path.String(), Msg: "a collection record cannot be nil"}
 			}
 			ev = ev.Elem()
 		}

@@ -23,10 +23,15 @@ against 114 KB of equivalent JSON, decoded into the same Go structs.
 | Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | **1.65 ms · 17,009** | 1.65 ms · 17,009 | — | — |
 | Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | **8.6 µs · 61** | 8.6 µs · 61 | 2.0 µs · 11 | 3.7× |
 
-**Cumulative: decode is 3.6× faster than baseline with 90% fewer allocations (40,830 →
-4,060) — and is now FASTER than `encoding/json` (1.65 ms vs 2.40 ms) while allocating less
-(4,060 vs 6,019). Encode is 3.1× faster with 90% fewer allocations.** The dynamic parse also
-allocates fewer objects than `encoding/json` (21,953 vs 23,013).
+**Both directions now beat `encoding/json` on the typed path.** Decode: 3.6× faster than
+baseline, 40,830 → 4,060 allocations, and 1.65 ms against JSON's 2.40 ms with fewer
+allocations (4,060 vs 6,019). Encode: **15× faster than baseline, 38,701 → 22 allocations**,
+and 0.37 ms against JSON's 0.42 ms. The dynamic parse also allocates fewer objects than
+`encoding/json` (21,953 vs 23,013).
+
+Encode still moves fewer bytes per second than JSON (173 vs 273 MB/s) while finishing
+sooner, because the IO document is 56% of the JSON one — the format's own advantage showing
+up in the wall clock.
 
 **Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
 17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
@@ -71,6 +76,35 @@ values — where `encoding/json` does one.
 
 **The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
+
+## What changed — pass 6 (encode: the last of the per-value work)
+
+Encode went from 3,922 allocations to **22**, and from 1.80 ms to 0.37 ms, in four steps —
+each one found by a profile, not by guesswork:
+
+1. **Error paths were 99.4% of the remaining allocations.** `pathAt.String` (86%) and
+   `recordPath` (13%) built a location string for every field of every record, on the happy
+   path, and threw it away. `pathAt` now carries four parts flat — root, record index, member
+   name, element index — and joins them only when a fault is actually reported.
+2. **`strings.ContainsAny` rebuilds a 256-bit ASCII set on every call**, and the writer called
+   it several times per string, each rescanning. One table-driven pass now collects every
+   character fact at once.
+3. **Type dispatch per value.** `runtime.ifaceeq` and `reflect.Elem` were re-deriving each
+   field's type on every record; the plan already knew it. Field kinds are now compiled into
+   the plan once (ADR 0006 F1) and the encoder switches on a `uint8`.
+4. **Whole-string numeric checks are gated on word starts.** Only text where some word begins
+   with a digit, sign or point can read back as a number, a broken claim or a temporal — most
+   real text skips those checks entirely. And integer-valued floats now spell straight through
+   `strconv.AppendInt`, with `FuzzFastPathEqualsGeneral` (13M executions) holding that
+   identical to the full ECMAScript algorithm.
+
+Three writer bugs surfaced while gating this, all PRE-EXISTING and each verified against the
+previous writer before fixing: a header name containing a control character was written raw;
+a value that is exactly a BOM was written bare and then skipped on re-read (the writer used
+`unicode.IsSpace`, the reader treats U+FEFF as whitespace — one decision, two sites, now
+one); and a `@variable` name containing a comma was written unescaped, because values handle
+commas by quoting and a bare name cannot. Header names now escape against the reader's own
+terminator set.
 
 ## What changed — pass 5 (ADR 0007: lazy, token-backed decoding)
 

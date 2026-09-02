@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
 	"github.com/maniartech/InternetObject-go/internal/parser"
@@ -827,43 +828,96 @@ func isZoneOffset(s string) bool {
 	return len(body) == 4 && allDigitsIn(body)
 }
 
-var ambiguousWords = map[string]bool{
-	"null": true, "N": true, "true": true, "T": true, "false": true, "F": true,
-	"Inf": true, "+Inf": true, "-Inf": true, "NaN": true, "undefined": true,
+// Deciding how to spell a string used to call strings.ContainsAny,
+// ContainsRune and Contains several times over — each rescanning the string,
+// and ContainsAny rebuilding a 256-bit ASCII set on EVERY call, which the CPU
+// profile showed as roughly half of encode time. One table-driven pass now
+// collects every fact at once, and the whole-string checks (keyword, numeric,
+// temporal) run only when the cheap pass has not already decided.
+const (
+	clStruct = 1 << iota // structural: needs open-escaping
+	clQuote              // comma, CR, or a C0 control: must be quoted
+	clRaw                // newline or tab: the raw spelling covers it
+	clSpace              // ASCII whitespace: a word boundary
+	clDigit              // a digit: only then can a numeric claim exist
+	clDash               // a hyphen: only then can the text contain "---"
+)
+
+var strClass = func() (t [256]byte) {
+	for _, c := range []byte(`{}[]:#"'\~`) {
+		t[c] |= clStruct
+	}
+	t[','] |= clQuote
+	t['\r'] |= clQuote
+	for c := 0; c < 0x20; c++ {
+		if c != '\n' && c != '\r' && c != '\t' {
+			t[c] |= clQuote // a raw control ends the run on re-read
+		}
+	}
+	t['\n'] |= clRaw
+	t['\t'] |= clRaw
+	for _, c := range []byte{' ', '\t', '\n', '\r', '\v', '\f'} {
+		t[c] |= clSpace
+	}
+	for c := '0'; c <= '9'; c++ {
+		t[c] |= clDigit
+	}
+	t['-'] |= clDash
+	return
+}()
+
+// ambiguousWord reports the words that read back as something other than
+// themselves. A switch compiles to a length-and-prefix test, which beats
+// hashing a map key for every string written.
+func ambiguousWord(s string) bool {
+	switch s {
+	case "null", "N", "true", "T", "false", "F",
+		"Inf", "+Inf", "-Inf", "NaN", "undefined":
+		return true
+	}
+	return false
 }
 
-func isAmbiguousString(s string) bool {
-	if s == "" || ambiguousWords[s] {
+// wouldNotReadBack reports whether the bare text would read back as anything
+// other than this string: a keyword, a number, a broken numeric claim, or a
+// temporal literal. These need the whole string, so they run only when the
+// character-class pass has not already forced quoting.
+func wouldNotReadBack(s string, flags byte, numStart bool) bool {
+	if ambiguousWord(s) {
 		return true
 	}
-	if strings.TrimSpace(s) != s {
-		return true
+	if !numStart {
+		// No word begins with a digit, sign or point, so the text cannot read
+		// back as a number, a broken numeric claim or a temporal literal.
+		return false
 	}
-	if strings.Contains(s, "---") {
-		return true
-	}
-	// The reader's own word classifier answers "would this read back as a
-	// keyword, a number, or a broken numeric claim?" — the writer quotes
-	// whenever it would, so the two can never disagree on a bare word.
+	// The reader's own classifier answers the numeric question, so writer and
+	// reader can never disagree about a bare word.
 	if tokenizer.WordReadsNonString(s) {
 		return true
 	}
 	// A claimed-and-broken word (`2.5e1n`) errors even mid-run, where an
-	// ordinary numeric word would just join the open string. Scanned in
-	// place: strings.Fields here allocated a slice for every string written.
-	for i := 0; i < len(s); {
-		for i < len(s) && isSpaceByte(s[i]) {
-			i++
-		}
-		start := i
-		for i < len(s) && !isSpaceByte(s[i]) {
-			i++
-		}
-		if start < i && tokenizer.WordIsBrokenClaim(s[start:i]) {
-			return true
+	// ordinary numeric word would just join the open string. Only text with a
+	// digit AND a word boundary can hide one.
+	if flags&clDigit != 0 && flags&clSpace != 0 {
+		for i := 0; i < len(s); {
+			for i < len(s) && strClass[s[i]]&clSpace != 0 {
+				i++
+			}
+			start := i
+			for i < len(s) && strClass[s[i]]&clSpace == 0 {
+				i++
+			}
+			if start < i && tokenizer.WordIsBrokenClaim(s[start:i]) {
+				return true
+			}
 		}
 	}
-	return isDateLike(s) || isTimeLike(s) || isDateTimeLike(s)
+	// A temporal literal always contains digits.
+	if flags&clDigit != 0 {
+		return isDateLike(s) || isTimeLike(s) || isDateTimeLike(s)
+	}
+	return false
 }
 
 // refSpelling spells a `$name` schema reference. Most refs are plain words
@@ -891,27 +945,66 @@ func hasBareUnsafeControl(s string) bool {
 	return false
 }
 
-// autoString picks the leanest spelling that reads back as the same string:
-// quoted when ambiguous, comma-carrying or control-carrying, open with
-// escaped structural characters, raw when \n\r\t would need escaping, bare
-// otherwise.
+// autoString picks the leanest spelling that reads back as the same string.
 func autoString(s string) string {
 	return string(appendAutoString(nil, s))
 }
 
-// appendAutoString is the append-style form every record path uses.
+// appendAutoString is the append-style form every record path uses: quoted
+// when the text is ambiguous or carries a character a bare run cannot hold,
+// open with escaped structural characters, raw when only a newline or tab
+// needs covering, bare otherwise.
 func appendAutoString(dst []byte, s string) []byte {
-	// A raw carriage return is newline-normalized by the reader in every
-	// unescaped spelling, so \r joins the must-quote set alongside the other
-	// controls.
-	if isAmbiguousString(s) || strings.ContainsRune(s, ',') ||
-		strings.ContainsRune(s, '\r') || hasBareUnsafeControl(s) {
+	if s == "" {
 		return appendRegularString(dst, s)
 	}
-	if strings.ContainsAny(s, "{}[]:#\"'\\~") {
-		return appendOpenEscaped(dst, s)
+
+	// One pass collects every character fact, including whether any WORD
+	// starts with a character that could begin a number. Only such text can
+	// read back as a number, a broken claim or a temporal, so everything else
+	// skips those whole-string checks entirely — which is most real text.
+	var flags byte
+	numStart := false
+	atWordStart := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		cl := strClass[c]
+		flags |= cl
+		if atWordStart && (cl&clDigit != 0 || c == '+' || c == '-' || c == '.') {
+			numStart = true
+		}
+		atWordStart = cl&clSpace != 0
 	}
-	if strings.ContainsAny(s, "\n\t") {
+
+	// Untrimmed text must be quoted — which is a fact about the EDGES, not
+	// about containing a space: testing `flags&clSpace` ran a whole TrimSpace
+	// over every string with a space in the middle. Only a multi-byte edge
+	// needs the Unicode-aware check.
+	if strClass[s[0]]&clSpace != 0 || strClass[s[len(s)-1]]&clSpace != 0 {
+		flags |= clQuote
+	} else if s[0] >= utf8.RuneSelf || s[len(s)-1] >= utf8.RuneSelf {
+		// Multi-byte edges ask the READER's whitespace rule, not
+		// unicode.IsSpace: the two disagree (U+FEFF), and a value the reader
+		// would skip must never be written bare.
+		first, _ := utf8.DecodeRuneInString(s)
+		last, _ := utf8.DecodeLastRuneInString(s)
+		if tokenizer.IsSpaceRune(first) || tokenizer.IsSpaceRune(last) {
+			flags |= clQuote
+		}
+	}
+	if flags&clDash != 0 && strings.Contains(s, "---") {
+		flags |= clQuote
+	}
+	if flags&clQuote == 0 && wouldNotReadBack(s, flags, numStart) {
+		flags |= clQuote
+	}
+
+	switch {
+	case flags&clQuote != 0:
+		return appendRegularString(dst, s)
+	case flags&clStruct != 0:
+		return appendOpenEscaped(dst, s)
+	case flags&clRaw != 0:
 		dst = append(dst, 'r', '"')
 		for i := 0; i < len(s); i++ {
 			if s[i] == '"' {
@@ -1005,10 +1098,38 @@ func appendControlEscape(dst []byte, c byte) []byte {
 	return append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xF])
 }
 
-// headerName spells a `@variable` or plain definition name, which is read
-// back as an open-string run and therefore needs the same escaping.
+// headerName spells a `@variable` or `$schema` name. Such a name is read back
+// as a bare run and CANNOT be quoted, so every character that would end that
+// run — the reader's own terminator set, whitespace, a `---`, a backslash or
+// a control — is escaped instead. Values do not share this path: they have
+// quoting available and use it (a comma, for instance, forces a quoted
+// string rather than an escape).
 func headerName(name string) string {
-	return string(appendOpenEscaped(nil, name))
+	var dst []byte
+	for i := 0; i < len(name); {
+		c := name[i]
+		if c < utf8.RuneSelf {
+			switch {
+			case c == '\\' || tokenizer.IsTerminatorByte(c) || c == ' ':
+				dst = append(dst, '\\', c)
+			case c < 0x20:
+				dst = appendControlEscape(dst, c)
+			case c == '-' && i+2 < len(name) && name[i+1] == '-' && name[i+2] == '-':
+				dst = append(dst, '\\', c)
+			default:
+				dst = append(dst, c)
+			}
+			i++
+			continue
+		}
+		r, w := utf8.DecodeRuneInString(name[i:])
+		if tokenizer.IsSpaceRune(r) {
+			dst = append(dst, '\\') // the rune itself then flows as content
+		}
+		dst = append(dst, name[i:i+w]...)
+		i += w
+	}
+	return string(dst)
 }
 
 // formatObjectKey quotes a key whose bare spelling would not read back as

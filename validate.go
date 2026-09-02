@@ -46,7 +46,7 @@ func validateAgainst(v any, override *schema.Schema) error {
 		if err != nil {
 			return err
 		}
-		rec, err := encodeStruct(rv, plan, "$")
+		rec, err := encodeStruct(rv, plan, rootPath)
 		if err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func validateAgainst(v any, override *schema.Schema) error {
 			if ev.Kind() != reflect.Struct {
 				return &MarshalError{Path: "$", Msg: "a collection record cannot be nil"}
 			}
-			rec, err := encodeStruct(ev, plan, "$")
+			rec, err := encodeStruct(ev, plan, rootPath)
 			if err != nil {
 				return err
 			}

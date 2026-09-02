@@ -51,6 +51,12 @@ var isTermByte = [256]bool{
 	'"': true, '\'': true, '#': true,
 }
 
+// IsTerminatorByte reports whether c ends a bare value run wherever it
+// appears. The writer asks this so a name it must spell bare — a `@variable`
+// or `$schema` key, which cannot be quoted — is escaped against exactly the
+// characters this reader stops at, with no second copy of the list.
+func IsTerminatorByte(c byte) bool { return isTermByte[c] }
+
 // isASCIISpace covers U+0000..U+0020 — all whitespace per the spec.
 func isASCIISpace(c byte) bool { return c <= 0x20 }
 
@@ -65,6 +71,13 @@ func isUniSpace(r rune) bool {
 }
 
 func isSpaceRune(r rune) bool { return r <= 0x20 || isUniSpace(r) }
+
+// IsSpaceRune reports whether the READER treats r as whitespace. The writer
+// asks this rather than unicode.IsSpace, because the two disagree — U+FEFF is
+// whitespace here and not there, so a value that is exactly a BOM was written
+// bare and then skipped on re-read, losing it (found by the byte fuzzer). One
+// decision, one site.
+func IsSpaceRune(r rune) bool { return isSpaceRune(r) }
 
 type scanner struct {
 	src  string

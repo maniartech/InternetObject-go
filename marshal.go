@@ -50,7 +50,7 @@ func Marshal(v any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		rec, err := encodeStruct(rv, plan, "$")
+		rec, err := encodeStruct(rv, plan, rootPath)
 		if err != nil {
 			return "", err
 		}
@@ -73,10 +73,10 @@ func Marshal(v any) (string, error) {
 		sec := &parser.Section{Name: "data", Collection: true}
 		for i := 0; i < rv.Len(); i++ {
 			ev := rv.Index(i)
-			path := recordPath(i)
+			path := rootPath.record(i)
 			for ev.Kind() == reflect.Pointer {
 				if ev.IsNil() {
-					return "", &MarshalError{Path: path, Msg: "a collection record cannot be nil"}
+					return "", &MarshalError{Path: path.String(), Msg: "a collection record cannot be nil"}
 				}
 				ev = ev.Elem()
 			}
@@ -135,12 +135,70 @@ type structPlan struct {
 	fastOK   bool           // every member can be written without the tree
 }
 
+// encKind is a field's wire shape, decided ONCE when the plan is built. The
+// encoder switches on it instead of comparing reflect.Types per value, which
+// the CPU profile showed as runtime.ifaceeq plus reflect.Elem on every member
+// of every record (ADR 0006 F1: compile the shape, then execute it).
+type encKind uint8
+
+const (
+	encOther encKind = iota
+	encString
+	encBool
+	encInt
+	encUint
+	encFloat
+	encBigInt
+	encDecimal
+	encTime
+	encTemporal
+	encBytes
+	encSlice
+)
+
+// encKindOf classifies a type once, at plan-build time.
+func encKindOf(t reflect.Type) encKind {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t {
+	case bigIntElemType:
+		return encBigInt
+	case decimalType:
+		return encDecimal
+	case timeType:
+		return encTime
+	case temporalType:
+		return encTemporal
+	case bytesType:
+		return encBytes
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return encString
+	case reflect.Bool:
+		return encBool
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return encInt
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return encUint
+	case reflect.Float32, reflect.Float64:
+		return encFloat
+	case reflect.Slice, reflect.Array:
+		return encSlice
+	}
+	return encOther
+}
+
 type fieldPlan struct {
 	name     string
 	index    []int // reflect index path (embedded fields included)
-	optional bool  // ,optional or ,omitempty: the member compiles as `name?`
-	omitZero bool  // ,omitempty only: the zero value is left off the wire
-	nullable bool  // pointer field
+	at       int   // the single index when index has depth 1, else -1
+	enc      encKind
+	elem     encKind // for encSlice: the element's kind
+	optional bool    // ,optional or ,omitempty: the member compiles as `name?`
+	omitZero bool    // ,omitempty only: the zero value is left off the wire
+	nullable bool    // pointer field
 	kind     string
 }
 
@@ -177,6 +235,7 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		fp := fieldPlan{
 			name:  name,
 			index: f.Index,
+			at:    -1,
 			// `optional` is the schema fact (the member may be absent — IO's
 			// `name?`); `omitempty` is the json-familiar encoding behavior
 			// (skip the zero value on output), which requires optionality.
@@ -219,6 +278,17 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 				ann = objectFormWithFlags(ann, fp.optional, fp.nullable)
 			}
 			p.shape.Members = append(p.shape.Members, value.Member{Key: fp.name, Quoted: true, Value: ann})
+		}
+		if len(f.Index) == 1 {
+			fp.at = f.Index[0] // the common case: one cheap field lookup
+		}
+		fp.enc = encKindOf(f.Type)
+		if fp.enc == encSlice {
+			ft := f.Type
+			for ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			fp.elem = encKindOf(ft.Elem())
 		}
 		p.fields = append(p.fields, fp)
 	}
@@ -334,12 +404,15 @@ func isPlainMemberName(s string) bool {
 // ── schema derivation ──────────────────────────────────────────────────────
 
 var (
-	bigIntType   = reflect.TypeOf((*big.Int)(nil))
-	decimalType  = reflect.TypeOf(Decimal{})
-	temporalType = reflect.TypeOf(Temporal{})
-	timeType     = reflect.TypeOf(time.Time{})
-	bytesType    = reflect.TypeOf([]byte(nil))
-	anyType      = reflect.TypeOf((*any)(nil)).Elem()
+	bigIntType = reflect.TypeOf((*big.Int)(nil))
+	// bigIntElemType is big.Int itself, hoisted out of the hot path: calling
+	// bigIntType.Elem() per value showed up in the profile.
+	bigIntElemType = reflect.TypeOf(big.Int{})
+	decimalType    = reflect.TypeOf(Decimal{})
+	temporalType   = reflect.TypeOf(Temporal{})
+	timeType       = reflect.TypeOf(time.Time{})
+	bytesType      = reflect.TypeOf([]byte(nil))
+	anyType        = reflect.TypeOf((*any)(nil)).Elem()
 )
 
 // annotationFor derives the IO type annotation for one Go type — the value a
@@ -415,46 +488,63 @@ func schemaDoc(shape *value.Object, sec *parser.Section) *parser.Document {
 
 // ── value encoding ─────────────────────────────────────────────────────────
 
-// pathAt names a position in the value being encoded WITHOUT building the
-// string: encoding is the hot path and a fault is rare, so the parent, the
-// member name and the array index travel separately and are joined only when
-// an error is actually reported.
+// pathAt names a position in the value being encoded or decoded WITHOUT
+// building the string. Errors are rare and paths are only for errors, so
+// every part travels separately and they are joined exactly once, in
+// String(), when a fault is actually reported.
+//
+// This shape was arrived at by measurement, and the two failures are worth
+// recording: a linked list of parent POINTERS escapes (+6,000 allocations on
+// encode), and joining lazily at each level turns one join per record into
+// one per member (+9,500 on decode). Carrying the four parts flat is what
+// finally cost nothing — before it, path building was 99.4% of encode's
+// remaining allocations, all of it discarded (ADR 0006 P1).
 type pathAt struct {
-	parent string
-	name   string
-	index  int // -1 when this is a named member rather than an element
+	root  string // the enclosing path, "$" at the top
+	rec   int    // record index within a collection, -1 when not in one
+	name  string // member name, "" when none
+	index int    // element index within the member, -1 when not an element
 }
 
-// rootPath is the document root — the parent of every top-level record.
-var rootPath = pathAt{parent: "$", index: -1}
-
-// recordPath spells the position of the i-th record of a collection: ONE
-// join per record. Its members then travel as pathAt{parent, name} values,
-// which cost nothing to build, so only an actual fault pays for a full path.
-//
-// Measured, after trying the alternatives: a linked list of parent pointers
-// escapes (+6,000 allocs on encode), and joining lazily per level turns one
-// join per record into one per member (+9,500 on decode). One join per
-// record is the floor without a path-free error API.
-func recordPath(i int) string { return "$[" + strconv.Itoa(i) + "]" }
+// rootPath is the document root: the parent of every top-level record.
+var rootPath = pathAt{root: "$", rec: -1, index: -1}
 
 func (p pathAt) String() string {
-	switch {
-	case p.index >= 0:
-		return p.parent + "[" + strconv.Itoa(p.index) + "]"
-	case p.name != "":
-		return p.parent + "." + p.name
+	// Sized once: the parts are short and this runs only on a fault.
+	var b strings.Builder
+	b.Grow(len(p.root) + len(p.name) + 12)
+	b.WriteString(p.root)
+	if p.rec >= 0 {
+		b.WriteByte('[')
+		b.WriteString(strconv.Itoa(p.rec))
+		b.WriteByte(']')
 	}
-	return p.parent
+	if p.name != "" {
+		b.WriteByte('.')
+		b.WriteString(p.name)
+	}
+	if p.index >= 0 {
+		b.WriteByte('[')
+		b.WriteString(strconv.Itoa(p.index))
+		b.WriteByte(']')
+	}
+	return b.String()
 }
 
-// at and elem name a child position. They take the child's name or index
-// ALONGSIDE the parent rather than materializing a joined string, so walking
-// a record's scalar members allocates nothing; only descending into a nested
-// container (or reporting an actual fault) pays for a join.
-func (p pathAt) at(name string) pathAt { return pathAt{parent: p.String(), name: name, index: -1} }
-func (p pathAt) elem(i int) pathAt     { return pathAt{parent: p.String(), index: i} }
-func (p pathAt) of(name string) pathAt { return pathAt{parent: p.parent, name: name, index: p.index} }
+// record names the i-th record of a collection.
+func (p pathAt) record(i int) pathAt { p.rec = i; return p }
+
+// member names a member inside p.
+func (p pathAt) member(name string) pathAt { p.name = name; p.index = -1; return p }
+
+// elem names the i-th element of p's member.
+func (p pathAt) elem(i int) pathAt { p.index = i; return p }
+
+// deeper descends past what the flat form can express — a nested object or
+// map — by joining ONCE and starting fresh. Only containers pay for this.
+func (p pathAt) deeper() pathAt {
+	return pathAt{root: p.String(), rec: -1, index: -1}
+}
 
 // intOverflowMsg and uintOverflowMsg are shared by both encode paths so the
 // two report a refusal identically.
@@ -469,14 +559,14 @@ func uintOverflowMsg(n uint64) string {
 // maxSafeInt is the largest integer the number wire type holds exactly.
 const maxSafeInt = 1 << 53
 
-func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Object, error) {
+func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*value.Object, error) {
 	out := &value.Object{Members: make([]value.Member, 0, len(plan.fields))}
 	for _, f := range plan.fields {
 		fv := rv.FieldByIndex(f.index)
 		if f.omitZero && fv.IsZero() {
 			continue
 		}
-		ev, err := encodeValue(fv, f.kind, pathAt{parent: path, name: f.name, index: -1})
+		ev, err := encodeValue(fv, f.kind, at.member(f.name))
 		if err != nil {
 			return nil, err
 		}
@@ -542,7 +632,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	case reflect.Slice, reflect.Array:
 		out := make([]any, rv.Len())
 		for i := range out {
-			ev, err := encodeValue(rv.Index(i), "", pathAt{parent: at.String(), index: i})
+			ev, err := encodeValue(rv.Index(i), "", at.elem(i))
 			if err != nil {
 				return nil, err
 			}
@@ -560,7 +650,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		sort.Strings(keys) // deterministic output
 		out := &value.Object{}
 		for _, k := range keys {
-			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", pathAt{parent: at.String(), name: k, index: -1})
+			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", at.deeper().member(k))
 			if err != nil {
 				return nil, err
 			}
@@ -572,7 +662,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return encodeStruct(rv, plan, at.String())
+		return encodeStruct(rv, plan, at.deeper())
 	}
 	return nil, &MarshalError{Path: at.String(), Msg: "unsupported type " + t.String()}
 }

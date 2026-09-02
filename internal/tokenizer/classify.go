@@ -212,14 +212,16 @@ func isDigitsDots(s string) bool {
 	return hasDigit
 }
 
-// maxBigIntExponent bounds a bigint literal's exponent: 1e1000000n (a
-// million-digit integer) decodes in milliseconds, while an unbounded
-// exponent is a denial of service — `1e1444444440n` would materialize 1.4
-// billion digits. The reference has no designed bound either: it grinds for
-// minutes and then throws V8's bare "Maximum BigInt size exceeded" (an
-// uncoded error — upstream finding). Beyond the bound the claim is broken:
-// invalid-bigint.
-const maxBigIntExponent = 1_000_000
+// maxBigIntExponent bounds a bigint literal's exponent. An unbounded one is
+// a denial of service — `1e1444444440n` would materialize 1.4 billion digits
+// — and the reference has no designed bound either: it grinds and then throws
+// V8's bare "Maximum BigInt size exceeded", an uncoded error (FINDINGS #13).
+//
+// Measured on this machine: 1e4 is instant, 1e5 costs ~1ms, 1e6 costs ~2.8s
+// and was still enough for a fuzz worker to be killed. 10,000 digits is far
+// beyond any real datum and decodes in microseconds, so that is the bound;
+// beyond it the marker is a broken claim, which is invalid-bigint.
+const maxBigIntExponent = 10_000
 
 // isBigIntForm: digit+ [("e"|"E") ["+"] digit+] — integers only, and only a
 // non-negative exponent (12e5n is 1200000n; 12e-5n cannot be an integer).

@@ -28,6 +28,20 @@ func Append(dst []byte, f float64) []byte {
 	case f == 0:
 		return append(dst, '0') // covers -0: ECMAScript renders it "0"
 	}
+	// Integers are most of real data, and for |f| below 2^53 the ECMAScript
+	// algorithm's answer is exactly the plain digits — its k <= n <= 21 branch
+	// with no zero padding. Spelling those directly skips the Ryū round trip
+	// and the digit reconstruction entirely. The equivalence is not assumed:
+	// appendGeneral below is the algorithm, and TestFastPathEqualsGeneral
+	// plus FuzzFastPathEqualsGeneral hold the two identical.
+	if f == math.Trunc(f) && math.Abs(f) < 1<<53 {
+		return strconv.AppendInt(dst, int64(f), 10)
+	}
+	return appendGeneral(dst, f)
+}
+
+// appendGeneral is the ECMAScript Number::toString algorithm, unabridged.
+func appendGeneral(dst []byte, f float64) []byte {
 	neg := math.Signbit(f)
 	if neg {
 		f = -f

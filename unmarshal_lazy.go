@@ -273,10 +273,11 @@ var errUnsupportedLazy = &UnmarshalError{Path: "$", Msg: "unsupported by the laz
 // lazyFault builds a designated wire fault positioned at the offending token.
 func lazyFault(code string, f *document.Framed, m parser.RawMember, recIndex int, name string) error {
 	tok := f.Stream.Tokens[m.Tok]
-	path := recordPath(recIndex)
+	at := rootPath.record(recIndex)
 	if name != "" {
-		path += "." + name
+		at = at.member(name)
 	}
+	path := at.String()
 	return ErrorList{{
 		Code: code, Category: errs.CategoryOf(code), Path: path,
 		RecordIndex: recIndex, Line: int(tok.Line), Col: int(tok.Col),

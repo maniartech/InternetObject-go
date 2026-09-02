@@ -46,7 +46,7 @@ func bindDoc(doc *document.Doc, v any) error {
 		records := allRecords(doc)
 		out := reflect.MakeSlice(elem.Type(), len(records), len(records))
 		for i, rec := range records {
-			if err := bindInto(out.Index(i), rec, recordPath(i)); err != nil {
+			if err := bindInto(out.Index(i), rec, rootPath.record(i)); err != nil {
 				return err
 			}
 		}
@@ -59,7 +59,7 @@ func bindDoc(doc *document.Doc, v any) error {
 			return &UnmarshalError{Path: "$",
 				Msg: fmt.Sprintf("document holds %d records; unmarshal into a slice", len(records))}
 		}
-		return bindInto(elem, records[0], "$")
+		return bindInto(elem, records[0], rootPath)
 
 	default:
 		return setValue(elem, doc.Project(), rootPath)
@@ -89,7 +89,7 @@ func allRecords(doc *document.Doc) []*value.Object {
 }
 
 // bindInto binds one record to a struct value (through pointers).
-func bindInto(rv reflect.Value, rec *value.Object, path string) error {
+func bindInto(rv reflect.Value, rec *value.Object, at pathAt) error {
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			rv.Set(reflect.New(rv.Type().Elem()))
@@ -98,15 +98,15 @@ func bindInto(rv reflect.Value, rec *value.Object, path string) error {
 	}
 	plan, err := planFor(rv.Type())
 	if err != nil {
-		return &UnmarshalError{Path: path, Msg: err.Error()}
+		return &UnmarshalError{Path: at.String(), Msg: err.Error()}
 	}
-	return bindStruct(rv, rec, plan, path)
+	return bindStruct(rv, rec, plan, at)
 }
 
 // bindStruct maps a record's members onto struct fields: keyed members by
 // member name, positional members by position (the schema-less form). Members
 // with no matching field are ignored, like encoding/json.
-func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, path string) error {
+func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, at pathAt) error {
 	// One pass over the record, no per-record maps: a keyed member finds its
 	// field through the plan's name index (built once per type), a positional
 	// one through its own position. Binding runs per record, so the two maps
@@ -127,7 +127,7 @@ func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, path stri
 			continue // a member with no field: ignored, as encoding/json does
 		}
 		f := plan.fields[fi]
-		if err := setValue(rv.FieldByIndex(f.index), m.Value, pathAt{parent: path, name: f.name, index: -1}); err != nil {
+		if err := setValue(rv.FieldByIndex(f.index), m.Value, at.member(f.name)); err != nil {
 			return err
 		}
 	}
@@ -224,12 +224,8 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 	case reflect.Slice:
 		if arr, ok := v.([]any); ok {
 			out := reflect.MakeSlice(t, len(arr), len(arr))
-			parent := "" // built once for the whole array, not per element
 			for i, e := range arr {
-				if parent == "" {
-					parent = at.String()
-				}
-				if err := setValue(out.Index(i), e, pathAt{parent: parent, index: i}); err != nil {
+				if err := setValue(out.Index(i), e, at.elem(i)); err != nil {
 					return err
 				}
 			}
@@ -248,7 +244,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 					key = strconv.Itoa(i)
 				}
 				ev := reflect.New(t.Elem()).Elem()
-				if err := setValue(ev, m.Value, pathAt{parent: at.String(), name: key, index: -1}); err != nil {
+				if err := setValue(ev, m.Value, at.deeper().member(key)); err != nil {
 					return err
 				}
 				out.SetMapIndex(reflect.ValueOf(key), ev)
@@ -258,7 +254,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 		}
 	case reflect.Struct:
 		if obj, ok := v.(*value.Object); ok {
-			return bindInto(rv, obj, at.String())
+			return bindInto(rv, obj, at.deeper())
 		}
 	}
 	return typeMismatch(at, v, t)

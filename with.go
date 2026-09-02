@@ -66,7 +66,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		rec, err := encodeStruct(rv, plan, "$")
+		rec, err := encodeStruct(rv, plan, rootPath)
 		if err != nil {
 			return "", err
 		}
@@ -84,10 +84,10 @@ func MarshalWith(v any, s *Schema) (string, error) {
 		sec.Collection = true
 		for i := 0; i < rv.Len(); i++ {
 			ev := rv.Index(i)
-			path := recordPath(i)
+			path := rootPath.record(i)
 			for ev.Kind() == reflect.Pointer {
 				if ev.IsNil() {
-					return "", &MarshalError{Path: path, Msg: "a collection record cannot be nil"}
+					return "", &MarshalError{Path: path.String(), Msg: "a collection record cannot be nil"}
 				}
 				ev = ev.Elem()
 			}
