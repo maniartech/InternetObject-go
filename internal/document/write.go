@@ -120,7 +120,7 @@ func (d *Doc) writeHeader() string {
 		switch def.Kind {
 		case parser.DefSchema:
 			if ref, ok := def.Value.(string); ok && strings.HasPrefix(ref, "$") {
-				lines = append(lines, "~ $"+def.Key+": "+refSpelling(ref))
+				lines = append(lines, "~ $"+headerName(def.Key)+": "+refSpelling(ref))
 				continue
 			}
 			s, cerr := d.Defs.SchemaOf(def.Key)
@@ -128,9 +128,9 @@ func (d *Doc) writeHeader() string {
 				continue
 			}
 			body := d.writeSchemaBody(s)
-			lines = append(lines, "~ $"+def.Key+": {"+body+"}")
+			lines = append(lines, "~ $"+headerName(def.Key)+": {"+body+"}")
 		case parser.DefVar:
-			lines = append(lines, "~ @"+def.Key+": "+d.writeValue(def.Value, nil))
+			lines = append(lines, "~ @"+headerName(def.Key)+": "+d.writeValue(def.Value, nil))
 		default:
 			lines = append(lines, "~ "+formatObjectKey(def.Key)+": "+d.writeValue(def.Value, nil))
 		}
@@ -970,11 +970,45 @@ func appendOpenEscaped(dst []byte, s string) []byte {
 		c := s[i]
 		switch c {
 		case '{', '}', '[', ']', ':', '#', '"', '\'', '\\', '~':
-			dst = append(dst, '\\')
+			dst = append(dst, '\\', c)
+			continue
+		}
+		// A control character written raw ENDS the run on re-read, silently
+		// truncating the value (the same defect as FINDINGS #10, and open
+		// strings process the full escape set, so an escape round-trips).
+		if c < 0x20 {
+			dst = appendControlEscape(dst, c)
+			continue
 		}
 		dst = append(dst, c)
 	}
 	return dst
+}
+
+// appendControlEscape spells one C0 control character — named where the
+// reader names one, `\u00XX` otherwise. Shared by the quoted and open
+// spellings so the two never disagree about an escape.
+func appendControlEscape(dst []byte, c byte) []byte {
+	switch c {
+	case '\n':
+		return append(dst, '\\', 'n')
+	case '\r':
+		return append(dst, '\\', 'r')
+	case '\t':
+		return append(dst, '\\', 't')
+	case '\b':
+		return append(dst, '\\', 'b')
+	case '\f':
+		return append(dst, '\\', 'f')
+	}
+	const hex = "0123456789abcdef"
+	return append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xF])
+}
+
+// headerName spells a `@variable` or plain definition name, which is read
+// back as an open-string run and therefore needs the same escaping.
+func headerName(name string) string {
+	return string(appendOpenEscaped(nil, name))
 }
 
 // formatObjectKey quotes a key whose bare spelling would not read back as

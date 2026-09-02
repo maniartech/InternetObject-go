@@ -20,6 +20,12 @@ import (
 // positionally by field order and by key for named members, so
 // `Unmarshal("Alice, 30", &p)` works without a header.
 func Unmarshal(src string, v any) error {
+	// Simple shapes decode straight from token spans, with no value tree
+	// built at all (ADR 0007). Anything else — and anything the lazy path is
+	// not certain about — takes the general path below.
+	if took, err := unmarshalLazy(src, v); took {
+		return err
+	}
 	return bindDoc(document.Parse(src), v)
 }
 

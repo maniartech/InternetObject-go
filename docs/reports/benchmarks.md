@@ -5,9 +5,9 @@
 
 ## Headline
 
-**We were 2.7×–12.8× slower than `encoding/json`. Four optimization passes have closed most
-of it: decode is 1.56×, the dynamic parse 1.73× and encode 3.2×, with encode having shed
-**90% of its allocations**. The remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
+**We were 2.7×–12.8× slower than `encoding/json`. Five optimization passes closed it: typed
+decoding is now FASTER than `encoding/json` and allocates less, encode is within 3.2×, and
+both have shed ~90% of their allocations. What remains is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
 document**, competitive with any JSON parser. Everything above it is where the time goes.
 
 ## The numbers
@@ -17,15 +17,16 @@ against 114 KB of equivalent JSON, decoded into the same Go structs.
 
 | Operation | Baseline | Pass 1 | Pass 2 | Pass 3 | **Pass 4 (now)** | encoding/json | Gap now |
 | --------- | -------: | -----: | -----: | -----: | ---------------: | ------------: | ------: |
-| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms | 3.19 ms · 23,861 | **3.19 ms · 23,861** | 2.05 ms · 6,019 | **1.56×** |
+| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms | 3.19 ms · 23,861 | **1.65 ms · 4,060** | 2.40 ms · 6,019 | **0.69× — faster** |
 | Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | 2.16 ms · 17,849 | **1.80 ms · 3,922** | 0.35 ms · **2** | **3.2×** |
 | Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms | 3.30 ms · 21,953 | **3.30 ms · 21,953** | 1.91 ms · 23,013 | 1.73× |
 | Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | **1.65 ms · 17,009** | 1.65 ms · 17,009 | — | — |
 | Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | **8.6 µs · 61** | 8.6 µs · 61 | 2.0 µs · 11 | 3.7× |
 
-**Cumulative: encode is 3.1× faster than baseline with 90% fewer allocations (38,701 →
-3,922) and runs at 35 MB/s; decode is 1.9× faster with 42% fewer. The dynamic parse
-allocates FEWER objects than `encoding/json` does** (21,953 vs 23,013).
+**Cumulative: decode is 3.6× faster than baseline with 90% fewer allocations (40,830 →
+4,060) — and is now FASTER than `encoding/json` (1.65 ms vs 2.40 ms) while allocating less
+(4,060 vs 6,019). Encode is 3.1× faster with 90% fewer allocations.** The dynamic parse also
+allocates fewer objects than `encoding/json` (21,953 vs 23,013).
 
 **Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
 17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
@@ -70,6 +71,28 @@ values — where `encoding/json` does one.
 
 **The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
+
+## What changed — pass 5 (ADR 0007: lazy, token-backed decoding)
+
+The decode path no longer builds a value tree. The header is parsed once for
+its schema; the data records are **framed** — key, token span, and the
+tokenizer's own Kind and Sub — and each member is decoded straight into its Go
+field. A decoded string is a substring of the source, so binding one allocates
+nothing, and the type check and the decode are the same step: a non-numeric
+token for an `int` member IS `expected-integer`, reported at that token's line
+and column.
+
+**Decode: 23,861 → 4,060 allocations, 3.19 ms → 1.65 ms — past `encoding/json`
+on both.**
+
+Safety, in the same shape as the encode fast path: the lazy route takes only
+what it is certain of (a struct or slice of structs, a schema of plain typed
+members, no constraints, defaults, choices, references or variables) and
+otherwise falls back to the path that has always run — so the fallback is the
+specification. `IO_NO_LAZY=1` forces it, and a differential fuzzer (4.6M
+executions) holds the two to identical values and identical designated codes.
+Framing itself is held to the parser by a second differential fuzzer (36M
+executions), which found five real divergences during development.
 
 ## What changed — pass 4 (roadmap item 5 + numfmt.Append)
 

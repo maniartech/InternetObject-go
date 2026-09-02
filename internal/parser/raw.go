@@ -45,6 +45,9 @@ type RawMember struct {
 	Absent bool
 }
 
+// Positional reports whether the member was written without a key.
+func (m RawMember) Positional() bool { return m.Key == "" }
+
 // IsContainer reports whether the member's value is a braced object or a
 // bracketed array rather than a single scalar token.
 func (m RawMember) IsContainer() bool {
@@ -139,6 +142,21 @@ func FrameData(s *tokenizer.Stream) (*RawDoc, bool) {
 		return nil, false
 	}
 	return d, true
+}
+
+// FrameSpan frames the members inside an arbitrary token range — the inside
+// of a container, re-framed on demand by a binder that has decided to descend
+// into it. It allocates one slice for the result; the document-level arena is
+// not involved.
+func FrameSpan(s *tokenizer.Stream, from, end int32) ([]RawMember, bool) {
+	if from > end || int(end) > len(s.Tokens) {
+		return nil, false
+	}
+	out, ok := frameMembers(s, nil, int(from), int(end))
+	if !ok {
+		return nil, false
+	}
+	return out, true
 }
 
 // unwrapLoneObject reports the inside of a record that consists of exactly
