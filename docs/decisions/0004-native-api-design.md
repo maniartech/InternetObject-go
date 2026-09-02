@@ -101,6 +101,14 @@ service). The engine already treats a schema as data, so:
   `io` tags remain the NAME-binding contract in all cases (they say which field is which
   member); an attached schema replaces the constraint/type layer entirely — no merging, so
   there is exactly one authority per load.
+- **The three combinations, spelled out** (`schema` tags are always optional):
+
+  | `schema` tags | runtime schema | who validates |
+  | ------------- | -------------- | ------------- |
+  | none | none | types only (derived from the Go field types) |
+  | none | attached/fetched | **the runtime schema** — the expected common case: name-only tags, constraints live in a registry/file/service (examples/05) |
+  | present | none | the tag constraints (design-time) |
+  | present | attached | the runtime schema wins outright; tag constraints are ignored for that load — never merged |
 
 ## D6. Code generation (`iogen`) — Level 2, schema-first
 
