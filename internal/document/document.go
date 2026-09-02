@@ -21,8 +21,17 @@ type Doc struct {
 	SecSchemas map[*parser.Section]*schema.Schema
 }
 
-// Load parses and validates one document.
-func Load(src string) *Doc {
+// Load parses and validates one document, binding each section to the schema
+// its own header names.
+func Load(src string) *Doc { return load(src, nil) }
+
+// LoadWith parses and validates one document against an ALREADY COMPILED
+// schema, which overrides whatever the document's own header would bind (ADR
+// 0004 D5: attached > header > tag-derived). The header is still read, so
+// `@variables` and `$refs` it defines stay resolvable inside records.
+func LoadWith(src string, override *schema.Schema) *Doc { return load(src, override) }
+
+func load(src string, override *schema.Schema) *Doc {
 	pdoc := parser.Parse(src)
 	defs := newDefs(pdoc.Header)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
@@ -49,10 +58,14 @@ func Load(src string) *Doc {
 	}
 
 	for _, sec := range pdoc.Sections {
-		sch, cerr := sectionSchema(sec, defs)
-		if cerr != nil {
-			doc.Errors = append(doc.Errors, *cerr)
-			return doc // a broken binding is fatal, like a thrown compile error
+		sch := override
+		if sch == nil {
+			var cerr *errs.Error
+			sch, cerr = sectionSchema(sec, defs)
+			if cerr != nil {
+				doc.Errors = append(doc.Errors, *cerr)
+				return doc // a broken binding is fatal, like a thrown compile error
+			}
 		}
 		doc.SecSchemas[sec] = sch
 		if sch == nil {
@@ -111,6 +124,27 @@ func NewUnvalidated(pdoc *parser.Document) (*Doc, *errs.Error) {
 		doc.SecSchemas[sec] = sch
 	}
 	return doc, nil
+}
+
+// NewWithSchema wraps a hand-built parser.Document for WRITING against an
+// already-compiled schema: every section binds to it (records emit
+// positionally) and it is written as the document header. Records are not
+// re-validated here — the caller validates.
+func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
+	header := &parser.Header{
+		Schemas: map[string]any{"schema": s},
+		Defs:    []parser.HeaderDef{{Kind: parser.DefSchema, Key: "schema", Value: s}},
+	}
+	pdoc.Header = header
+	defs := newDefs(header)
+	// The name is already compiled; seeding the cache IS the statement that
+	// this schema needs no shape to resolve.
+	defs.compiled["schema"] = s
+	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
+	for _, sec := range pdoc.Sections {
+		doc.SecSchemas[sec] = s
+	}
+	return doc
 }
 
 // CompileSchemaString parses a schema definition string and compiles it — the

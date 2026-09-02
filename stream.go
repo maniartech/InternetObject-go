@@ -28,6 +28,11 @@ type StreamOptions struct {
 	Definitions string
 	// DefaultSchema is the fallback default-schema name, e.g. "$Person".
 	DefaultSchema string
+	// Schema is an already-compiled schema (from ParseSchema, SchemaFor, or
+	// another document) that every record is validated against. It outranks
+	// the in-stream header and DefaultSchema, and is never re-parsed — the
+	// runtime-schema route for streams.
+	Schema *Schema
 }
 
 // Stream reads Internet Object records from r incrementally, yielding one
@@ -41,10 +46,14 @@ func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
 		o = *opts
 	}
 	return func(yield func(StreamItem, error) bool) {
-		reader := document.NewReader(document.StreamOptions{
+		ropts := document.StreamOptions{
 			Definitions:   o.Definitions,
 			DefaultSchema: o.DefaultSchema,
-		})
+		}
+		if o.Schema != nil {
+			ropts.Schema = o.Schema.s
+		}
+		reader := document.NewReader(ropts)
 		emit := func(items []document.Item) bool {
 			for _, it := range items {
 				si := StreamItem{Index: it.RecordIndex, SchemaName: it.SchemaName, Value: it.Value}

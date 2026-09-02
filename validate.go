@@ -18,7 +18,21 @@ import (
 // story: mutate freely, call Validate when it matters — and Marshal runs the
 // same check automatically whenever the type declares constraints, so an
 // invalid value never reaches the wire.
-func Validate(v any) error {
+func Validate(v any) error { return validateAgainst(v, nil) }
+
+// ValidateWith validates v against an ALREADY COMPILED schema — one fetched
+// from a registry, read from a file, or derived from another type — instead
+// of the schema derived from v's own type and tags. `io` tags still name the
+// members; the given schema owns types and constraints entirely (ADR 0004 D5:
+// attached wins outright, never merges).
+func ValidateWith(v any, s *Schema) error {
+	if s == nil {
+		return &MarshalError{Path: "$", Msg: "nil schema"}
+	}
+	return validateAgainst(v, s.s)
+}
+
+func validateAgainst(v any, override *schema.Schema) error {
 	rv := reflect.ValueOf(v)
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
@@ -36,7 +50,7 @@ func Validate(v any) error {
 		if err != nil {
 			return err
 		}
-		return checkRecords(plan, []any{rec})
+		return checkRecords(schemaOr(override, plan), []any{rec})
 	case rv.Kind() == reflect.Slice && isStructElem(rv.Type().Elem()):
 		et := rv.Type().Elem()
 		for et.Kind() == reflect.Pointer {
@@ -61,18 +75,26 @@ func Validate(v any) error {
 			}
 			records = append(records, rec)
 		}
-		return checkRecords(plan, records)
+		return checkRecords(schemaOr(override, plan), records)
 	}
 	return &MarshalError{Path: "$", Msg: "Validate takes a struct or a slice of structs"}
 }
 
-// checkRecords validates encoded records against the plan's compiled schema,
-// accumulating every fault. Used by Validate always, and by Marshal whenever
-// the plan carries `schema`-tag constraints.
-func checkRecords(plan *structPlan, records []any) error {
+// schemaOr picks the explicitly given schema over the type-derived one.
+func schemaOr(override *schema.Schema, plan *structPlan) *schema.Schema {
+	if override != nil {
+		return override
+	}
+	return plan.compiled
+}
+
+// checkRecords validates encoded records against a compiled schema,
+// accumulating every fault. Used by Validate/ValidateWith always, and by
+// Marshal whenever the plan carries `schema`-tag constraints.
+func checkRecords(s *schema.Schema, records []any) error {
 	var all []errs.Error
 	for _, rec := range records {
-		_, verrs := schema.ValidateRecord(rec.(*value.Object), plan.compiled, noDefs{}, true)
+		_, verrs := schema.ValidateRecord(rec.(*value.Object), s, noDefs{}, true)
 		all = append(all, verrs...)
 	}
 	return toErrorList(all)

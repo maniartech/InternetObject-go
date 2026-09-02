@@ -135,7 +135,8 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 	if isWildcardDef(s) {
 		declared--
 	}
-	if len(rec.Members) > 0 && declared > 0 && (s.Open == nil || declared == 1) {
+	if len(rec.Members) > 0 && declared > 0 && (s.Open == nil || declared == 1) &&
+		!absorptionLoops(rec.Members[0].Key, s, defs) {
 		fm := rec.Members[0]
 		if !fm.Positional && s.Defs[fm.Key] == nil && fm.Key != "*" {
 			name0 := s.Names[0]
@@ -245,6 +246,53 @@ func validateObject(rec *value.Object, s *Schema, defs Defs) (out *value.Object,
 
 	fillMissing(true)
 	return assemble(s, slots, extras), acc, nil
+}
+
+// absorptionLoops reports whether applying the lone-object absorption rule
+// could never terminate. Absorption hands the WHOLE record down to the first
+// declared member without consuming anything, so if the chain of "first
+// member's schema" cycles before some schema on it declares the record's own
+// first key (which is what stops absorption), the record would be absorbed
+// forever — `~ $P: {A: $P}` fed `{$P: 0}`, which stack-overflows the
+// reference implementation (docs/FINDINGS.md #14).
+//
+// Skipping absorption here is not an invented rule: the record then takes the
+// ordinary path and reports the fault it actually has (unknown-member), which
+// is what absorption exists to override only when it can succeed. Legitimate
+// recursive schemas are untouched — real nesting consumes a level of data per
+// step and terminates on its own.
+func absorptionLoops(key string, s *Schema, defs Defs) bool {
+	seen := map[*Schema]bool{}
+	for cur := s; cur != nil; {
+		if seen[cur] {
+			return true
+		}
+		seen[cur] = true
+
+		declared := len(cur.Names)
+		if isWildcardDef(cur) {
+			declared--
+		}
+		// Absorption stops here — the key is declared, there is nothing to
+		// absorb into, or this schema does not absorb at all.
+		if declared == 0 || cur.Defs[key] != nil || !(cur.Open == nil || declared == 1) {
+			return false
+		}
+		md := cur.Defs[cur.Names[0]]
+		if md == nil {
+			return false
+		}
+		next := md.Schema
+		if next == nil && md.SchemaRef != "" {
+			resolved, cerr := defs.SchemaOf(strings.TrimPrefix(md.SchemaRef, "$"))
+			if cerr != nil {
+				return false // a dangling reference is reported on the normal path
+			}
+			next = resolved
+		}
+		cur = next
+	}
+	return false
 }
 
 // isWildcardDef reports whether the "*" entry in Names is the typed-open

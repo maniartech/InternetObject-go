@@ -20,11 +20,16 @@ import (
 // positionally by field order and by key for named members, so
 // `Unmarshal("Alice, 30", &p)` works without a header.
 func Unmarshal(src string, v any) error {
+	return bindDoc(document.Load(src), v)
+}
+
+// bindDoc binds a loaded document into v — the shared tail of Unmarshal and
+// UnmarshalWith, so the two differ only in which schema validated the load.
+func bindDoc(doc *document.Doc, v any) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return &UnmarshalError{Path: "$", Msg: "target must be a non-nil pointer"}
 	}
-	doc := document.Load(src)
 	if len(doc.Errors) > 0 {
 		return toErrorList(doc.Errors)
 	}

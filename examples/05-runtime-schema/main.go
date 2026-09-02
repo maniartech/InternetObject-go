@@ -1,10 +1,10 @@
-// Attaching a schema at RUNTIME — no tags involved.
+// Runtime schemas: parse the schema ONCE, then apply the compiled object to
+// documents, values and streams.
 //
-// Tags are design-time. When the schema lives somewhere else (a registry, a
-// file, a remote service), remember that an Internet Object schema is itself
-// Internet Object text: fetch it and hand it to the engine as the document's
-// definitions. Works today with zero special API; the typed variants
-// (UnmarshalWith / ValidateWith / AttachSchema) are ADR 0004 phase 2.
+// Tags are design-time. When the schema lives elsewhere — a registry, a file,
+// a remote service, or another document — fetch it, compile it with
+// ParseSchema, and hand that *io.Schema to the `With` functions. Nothing is
+// re-parsed per call, and schema text is never concatenated with data text.
 package main
 
 import (
@@ -14,11 +14,11 @@ import (
 	io "github.com/maniartech/InternetObject-go"
 )
 
-// Imagine this arrived over HTTP from your schema registry.
+// Imagine this arrived over HTTP from your schema registry, once, at startup.
 const fetched = `name: {string, minLen: 2}, age: {int, min: 0, max: 130}, role?: string`
 
-// The struct carries NO schema tags — names only. Constraints come from the
-// fetched schema; `io` tags remain the name-binding contract.
+// The struct carries NO schema tags — `io` tags only name the members.
+// Types and constraints come from the compiled schema.
 type Person struct {
 	Name string `io:"name"`
 	Age  int    `io:"age"`
@@ -26,23 +26,39 @@ type Person struct {
 }
 
 func main() {
-	// 1. Validate + bind incoming data against the fetched schema: the schema
-	//    text becomes the header of the document being read.
-	rows := "~ Alice, 30, admin\n~ Bob, 131"
-	doc := fetched + "\n---\n" + rows
+	// Compile once. Reuse everywhere; safe to keep in a package var.
+	schema, err := io.ParseSchema(fetched)
+	if err != nil {
+		panic(err)
+	}
 
+	// 1. Bind + validate incoming data that carries NO header of its own.
 	var people []Person
-	err := io.Unmarshal(doc, &people)
-	fmt.Println("wire validation from the FETCHED schema:", err) // mismatched-max (Bob)
+	err = io.UnmarshalWith("~ Alice, 30, admin\n~ Bob, 131", &people, schema)
+	fmt.Println("UnmarshalWith:", err) // mismatched-max (Bob's age)
 
-	// The dynamic route accumulates: faults listed, good rows still loaded.
-	parsed, perr := io.Parse(doc)
-	fmt.Println("dynamic route:", perr, "| records (incl. fault markers):", len(parsed.Value().([]any)))
+	err = io.UnmarshalWith("~ Alice, 30, admin\n~ Bob, 25", &people, schema)
+	fmt.Printf("loaded %d people, first = %s\n", len(people), people[0].Name)
 
-	// 2. The same works for streaming: preload the fetched definitions.
-	stream := "~ Cara, 27\n~ Dan, oops\n"
-	opts := &io.StreamOptions{Definitions: "~ $person: {" + fetched + "}", DefaultSchema: "$person"}
-	for item, err := range io.Stream(strings.NewReader(stream), opts) {
+	// 2. Validate a Go value against the runtime schema — no tags involved.
+	fmt.Println("ValidateWith(ok):", io.ValidateWith(Person{Name: "Cara", Age: 27}, schema))
+	fmt.Println("ValidateWith(bad):", io.ValidateWith(Person{Name: "X", Age: 200}, schema))
+
+	// 3. Write with it: validated, header emitted from the compiled schema.
+	text, err := io.MarshalWith(people, schema)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("--- MarshalWith ---")
+	fmt.Println(text)
+
+	// 4. Parse dynamically under the runtime schema (no structs at all).
+	doc, err := io.ParseWith("~ Dana, 41", schema)
+	fmt.Println("ParseWith:", err, "records:", len(doc.Records()))
+
+	// 5. Stream under it — every record validated, no header in the stream.
+	for item, err := range io.Stream(strings.NewReader("~ Eve, 22\n~ Fay, oops\n"),
+		&io.StreamOptions{Schema: schema}) {
 		if err != nil {
 			panic(err)
 		}
@@ -54,10 +70,10 @@ func main() {
 		fmt.Printf("stream record %d ok: %v\n", item.Index, rec.Members[rec.Find("name")].Value)
 	}
 
-	// 3. A fetched schema is inspectable like any other.
-	s, err := io.ParseSchema(fetched)
-	if err != nil {
-		panic(err)
+	// A schema can equally be lifted out of another document's header, or
+	// derived from a Go type — all three produce the same *io.Schema.
+	other, _ := io.Parse("~ $person: {name: string}\n--- $person\n~ Gil")
+	if s, err := other.SchemaOf("person"); err == nil {
+		fmt.Println("schema lifted from a document:", s.String())
 	}
-	fmt.Println("fetched schema, compiled and re-rendered:", s.String())
 }

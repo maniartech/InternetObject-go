@@ -39,6 +39,10 @@ type StreamOptions struct {
 	Definitions string
 	// DefaultSchema is the fallback default-schema name, with its $ sigil.
 	DefaultSchema string
+	// Schema is an already-compiled schema every record is validated
+	// against. It outranks both the in-stream header and DefaultSchema
+	// (ADR 0004 D5) and is never re-parsed.
+	Schema *schema.Schema
 }
 
 // Reader consumes a stream incrementally. Feed returns the items each chunk
@@ -182,6 +186,15 @@ func isAnnotationByte(b byte) bool {
 // later ones switch the schema context.
 func (r *Reader) control(selector string) {
 	selector = strings.TrimSpace(selector)
+	if r.opts.Schema != nil {
+		// An attached schema wins outright: in-stream selectors change the
+		// reported name, never the schema records are validated against.
+		r.current, r.currentSel = r.opts.Schema, strings.TrimSpace(strings.TrimPrefix(selector, "$"))
+		if r.currentSel != "" {
+			r.currentSel = "$" + r.currentSel
+		}
+		return
+	}
 	if selector == "" {
 		r.current, r.currentSel = r.defaultSchema(), ""
 		return
@@ -276,6 +289,9 @@ func parseHeaderText(text string) (*parser.Header, bool) {
 // defaultSchema resolves the bare-`---` context: the in-stream `$schema`,
 // else the reader option's fallback, else none.
 func (r *Reader) defaultSchema() *schema.Schema {
+	if r.opts.Schema != nil {
+		return r.opts.Schema // an attached schema outranks everything
+	}
 	if r.defs == nil {
 		return nil
 	}

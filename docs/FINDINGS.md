@@ -111,6 +111,19 @@ Status legend: **open** = not yet reported/resolved upstream.
   milliseconds); beyond it the claim is broken — `invalid-bigint`. Deliberate divergence,
   needs an upstream decision on the designed bound.
 
+## 14. A self-absorbing schema stack-overflows the reference — open, rule-10 violation
+
+- `~ $P: {A: $P}` fed `{$P: 0}` (or `{x: 1}`) throws V8's uncoded
+  `RangeError: Maximum call stack size exceeded`; so does the mutual pair `$P: {A: $Q}`,
+  `$Q: {A: $P}`. The lone-object absorption rule (ISSUE-15) hands the WHOLE record to the
+  first declared member without consuming anything, so a cycle in the "first member's
+  schema" chain absorbs forever. Legitimate recursion (`{A: {A: N}}`) works in both
+  implementations — real nesting consumes a level of data per step.
+- **This port**: absorption is skipped when that chain cycles before some schema on it
+  declares the record's own first key; the record then reports the fault it actually has
+  (`unknown-member`). No invented code, and recursive schemas keep working. Found by the
+  stream byte fuzzer.
+
 ## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
 
 - A malformed literal in a HEADER definition is fatal (`~ A: 0B` → `invalid-number`); no case

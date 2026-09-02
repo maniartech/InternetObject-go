@@ -48,7 +48,7 @@ func Marshal(v any) (string, error) {
 			return "", err
 		}
 		if plan.validate {
-			if err := checkRecords(plan, []any{rec}); err != nil {
+			if err := checkRecords(plan.compiled, []any{rec}); err != nil {
 				return "", err
 			}
 		}
@@ -80,7 +80,7 @@ func Marshal(v any) (string, error) {
 			sec.Records = append(sec.Records, rec)
 		}
 		if plan.validate {
-			if err := checkRecords(plan, sec.Records); err != nil {
+			if err := checkRecords(plan.compiled, sec.Records); err != nil {
 				return "", err
 			}
 		}

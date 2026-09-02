@@ -89,6 +89,18 @@ shipped (all verified) plus `examples/PROPOSED.md` showing the ADR surface as us
 Building the examples caught a real divergence, fixed: headerless streams ignored preloaded
 definitions (reference validates; FINDINGS corpus-gap list updated).
 
+## Runtime schemas — SHIPPED (ADR 0004 D5)
+
+Compile a schema once — `ParseSchema` (fetched text), `SchemaFor[T]()` (a Go type), or
+`doc.SchemaOf(name)` (lifted from another document) — then apply it anywhere:
+`UnmarshalWith`, `ValidateWith`, `MarshalWith`, `ParseWith`, `StreamOptions{Schema:}`. It
+outranks both the document header and `schema` tags (never merges); `io` tags still name the
+members. Internals: `document.LoadWith` (override the section schema) and
+`document.NewWithSchema` (write a header from a compiled schema). The stream fuzzer caught a
+pre-existing DoS while verifying this — a self-absorbing schema (`$P: {A: $P}`) recursed
+forever; absorption now detects the cycle and reports the natural `unknown-member`
+(FINDINGS #14; the reference stack-overflows).
+
 ## What's next
 
 1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/

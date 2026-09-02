@@ -96,19 +96,15 @@ for e, err := range io.StreamAs[Employee](r, nil) {} // typed streaming
 (`io.Record` is the renamed dynamic object — today's `io.Object` alias; the base takes the
 `Object` name.)
 
-## Runtime schemas, typed
+## Runtime schemas — SHIPPED, see [05-runtime-schema](05-runtime-schema/main.go)
 
-```go
-s, _ := io.ParseSchema(fetchedText)          // from a registry / file / service
-err := io.ValidateWith(v, s)                 // struct against a runtime schema
-err  = io.UnmarshalWith(text, &v, s)         // even when the wire has no header
-text, err := io.MarshalWith(v, s)
-emp.AttachSchema(s)                          // Set/Validate now use s
-```
+`ParseSchema` / `SchemaFor[T]` / `doc.SchemaOf(name)` produce a compiled `*io.Schema` that
+drives `UnmarshalWith`, `ValidateWith`, `MarshalWith`, `ParseWith` and
+`StreamOptions{Schema:}`. Still proposed here: `emp.AttachSchema(s)` on the bases, so
+`Set`/`Validate` use it.
 
 Precedence: attached > document header > tag-derived. `io` tags always remain the
-name-binding contract. (The untyped version — schema text as definitions — ships today:
-see [05-runtime-schema](05-runtime-schema/main.go).)
+name-binding contract.
 
 ## Level 2: generated (`iogen`)
 
