@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +88,7 @@ func Marshal(v any) (string, error) {
 		pdoc = schemaDoc(plan.shape, sec)
 
 	default:
-		ev, err := encodeValue(rv, "", "$")
+		ev, err := encodeValue(rv, "", pathAt{"$", "", -1})
 		if err != nil {
 			return "", err
 		}
@@ -121,6 +122,7 @@ func (e *MarshalError) Error() string { return e.Path + ": " + e.Msg }
 
 type structPlan struct {
 	fields   []fieldPlan
+	byName   map[string]int // member name → index in fields, built once
 	shape    *value.Object  // the derived schema shape, as parsed text would be
 	compiled *schema.Schema // the shape, compiled once
 	validate bool           // any field (own or nested) carries a `schema` tag
@@ -212,6 +214,10 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 			p.shape.Members = append(p.shape.Members, value.Member{Key: fp.name, Quoted: true, Value: ann})
 		}
 		p.fields = append(p.fields, fp)
+	}
+	p.byName = make(map[string]int, len(p.fields))
+	for i, f := range p.fields {
+		p.byName[f.name] = i
 	}
 	compiled, cerr := schema.Compile(p.shape, "")
 	if cerr != nil {
@@ -401,17 +407,37 @@ func schemaDoc(shape *value.Object, sec *parser.Section) *parser.Document {
 
 // ── value encoding ─────────────────────────────────────────────────────────
 
+// pathAt names a position in the value being encoded WITHOUT building the
+// string: encoding is the hot path and a fault is rare, so the parent, the
+// member name and the array index travel separately and are joined only when
+// an error is actually reported.
+type pathAt struct {
+	parent string
+	name   string
+	index  int // -1 when this is a named member rather than an element
+}
+
+func (p pathAt) String() string {
+	if p.index >= 0 {
+		return p.parent + "[" + strconv.Itoa(p.index) + "]"
+	}
+	if p.name == "" {
+		return p.parent
+	}
+	return p.parent + "." + p.name
+}
+
 // maxSafeInt is the largest integer the number wire type holds exactly.
 const maxSafeInt = 1 << 53
 
 func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Object, error) {
-	out := &value.Object{}
+	out := &value.Object{Members: make([]value.Member, 0, len(plan.fields))}
 	for _, f := range plan.fields {
 		fv := rv.FieldByIndex(f.index)
 		if f.omitZero && fv.IsZero() {
 			continue
 		}
-		ev, err := encodeValue(fv, f.kind, path+"."+f.name)
+		ev, err := encodeValue(fv, f.kind, pathAt{path, f.name, -1})
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +448,7 @@ func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Objec
 
 // encodeValue converts one Go value to the wire value model. Integer values
 // beyond 2^53 are refused rather than silently rounded.
-func encodeValue(rv reflect.Value, kind, path string) (any, error) {
+func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
 			return nil, nil
@@ -459,13 +485,13 @@ func encodeValue(rv reflect.Value, kind, path string) (any, error) {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		n := rv.Int()
 		if n > maxSafeInt || n < -maxSafeInt {
-			return nil, &MarshalError{Path: path, Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+			return nil, &MarshalError{Path: at.String(), Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
 		}
 		return float64(n), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		n := rv.Uint()
 		if n > maxSafeInt {
-			return nil, &MarshalError{Path: path, Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
+			return nil, &MarshalError{Path: at.String(), Msg: fmt.Sprintf("%d overflows the int wire type (use *big.Int)", n)}
 		}
 		return float64(n), nil
 	case reflect.Float32, reflect.Float64:
@@ -473,7 +499,7 @@ func encodeValue(rv reflect.Value, kind, path string) (any, error) {
 	case reflect.Slice, reflect.Array:
 		out := make([]any, rv.Len())
 		for i := range out {
-			ev, err := encodeValue(rv.Index(i), "", fmt.Sprintf("%s[%d]", path, i))
+			ev, err := encodeValue(rv.Index(i), "", pathAt{at.String(), "", i})
 			if err != nil {
 				return nil, err
 			}
@@ -482,7 +508,7 @@ func encodeValue(rv reflect.Value, kind, path string) (any, error) {
 		return out, nil
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
-			return nil, &MarshalError{Path: path, Msg: "map keys must be strings"}
+			return nil, &MarshalError{Path: at.String(), Msg: "map keys must be strings"}
 		}
 		keys := make([]string, 0, rv.Len())
 		for _, k := range rv.MapKeys() {
@@ -491,7 +517,7 @@ func encodeValue(rv reflect.Value, kind, path string) (any, error) {
 		sort.Strings(keys) // deterministic output
 		out := &value.Object{}
 		for _, k := range keys {
-			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", path+"."+k)
+			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", pathAt{at.String(), k, -1})
 			if err != nil {
 				return nil, err
 			}
@@ -503,9 +529,9 @@ func encodeValue(rv reflect.Value, kind, path string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return encodeStruct(rv, plan, path)
+		return encodeStruct(rv, plan, at.String())
 	}
-	return nil, &MarshalError{Path: path, Msg: "unsupported type " + t.String()}
+	return nil, &MarshalError{Path: at.String(), Msg: "unsupported type " + t.String()}
 }
 
 // isModelStruct reports the value-model structs, which marshal as VALUES, not

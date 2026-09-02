@@ -596,9 +596,17 @@ func isAmbiguousString(s string) bool {
 		return true
 	}
 	// A claimed-and-broken word (`2.5e1n`) errors even mid-run, where an
-	// ordinary numeric word would just join the open string.
-	for _, w := range strings.Fields(s) {
-		if tokenizer.WordIsBrokenClaim(w) {
+	// ordinary numeric word would just join the open string. Scanned in
+	// place: strings.Fields here allocated a slice for every string written.
+	for i := 0; i < len(s); {
+		for i < len(s) && isSpaceByte(s[i]) {
+			i++
+		}
+		start := i
+		for i < len(s) && !isSpaceByte(s[i]) {
+			i++
+		}
+		if start < i && tokenizer.WordIsBrokenClaim(s[start:i]) {
 			return true
 		}
 	}
@@ -711,4 +719,10 @@ func formatObjectKey(key string) string {
 		return regularString(key)
 	}
 	return key
+}
+
+// isSpaceByte reports ASCII whitespace — the word separators a bare run can
+// carry (multi-byte Unicode spaces never appear inside one unquoted word).
+func isSpaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }

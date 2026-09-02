@@ -305,7 +305,8 @@ func isWildcardDef(s *Schema) bool {
 // assemble builds the validated object: declared members in schema order,
 // then extras in arrival order.
 func assemble(s *Schema, slots map[string]any, extras []value.Member) *value.Object {
-	out := &value.Object{}
+	// The exact size is known: one member per filled slot plus the extras.
+	out := &value.Object{Members: make([]value.Member, 0, len(slots)+len(extras))}
 	for _, name := range s.Names {
 		if v, ok := slots[name]; ok {
 			out.Members = append(out.Members, value.Member{Key: name, Value: v})

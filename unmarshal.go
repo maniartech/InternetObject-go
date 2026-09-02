@@ -101,26 +101,27 @@ func bindInto(rv reflect.Value, rec *value.Object, path string) error {
 // member name, positional members by position (the schema-less form). Members
 // with no matching field are ignored, like encoding/json.
 func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, path string) error {
-	byName := map[string]any{}
-	byPos := map[int]any{}
+	// One pass over the record, no per-record maps: a keyed member finds its
+	// field through the plan's name index (built once per type), a positional
+	// one through its own position. Binding runs per record, so the two maps
+	// this used to build were the hottest allocation in the decode path.
 	for i, m := range rec.Members {
-		switch {
-		case m.Absent:
-		case m.Positional || m.Key == strconv.Itoa(i):
-			byPos[i] = m.Value
-		default:
-			byName[m.Key] = m.Value
+		if m.Absent {
+			continue
 		}
-	}
-	for i, f := range plan.fields {
-		mv, ok := byName[f.name]
-		if !ok {
-			mv, ok = byPos[i]
+		fi := -1
+		if m.Positional || m.Key == strconv.Itoa(i) {
+			if i < len(plan.fields) {
+				fi = i
+			}
+		} else if j, ok := plan.byName[m.Key]; ok {
+			fi = j
 		}
-		if !ok {
-			continue // absent: the field keeps its zero value
+		if fi < 0 {
+			continue // a member with no field: ignored, as encoding/json does
 		}
-		if err := setValue(rv.FieldByIndex(f.index), mv, path+"."+f.name); err != nil {
+		f := plan.fields[fi]
+		if err := setValue(rv.FieldByIndex(f.index), m.Value, path+"."+f.name); err != nil {
 			return err
 		}
 	}

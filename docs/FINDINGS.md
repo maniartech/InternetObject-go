@@ -124,6 +124,48 @@ Status legend: **open** = not yet reported/resolved upstream.
   (`unknown-member`). No invented code, and recursive schemas keep working. Found by the
   stream byte fuzzer.
 
+## 15. Stream-absolute error positions: required by the spec, done by nobody — open
+
+- `io-specs/streaming/error-model.md:104-109` — positions "MUST be **stream-absolute**… It
+  MUST NOT report record-relative positions."
+- **io-js2**: reports frame-relative positions; no rebasing logic exists in
+  `src/streaming/reader.ts`. **This port**: reports `1:1` (see #16). Neither conforms, so the
+  requirement is currently unimplementable-as-written from the reference's behavior.
+- Needs an upstream decision: enforce it (both implementations change) or amend the spec.
+
+## 16. Error positions are asserted by ZERO corpus cases — open, gating gap
+
+- A regex for position keys across every live `.io` case returns one hit, and it is a false
+  positive (a schema member named `at` in `schema/primitives.io:30`). `CONFORMANCE.md:261`:
+  "asserting **codes only** for errors". The only position affordance (`at: {line, col}`)
+  sits in a stale YAML section, is marked optional, and no case uses it.
+- Consequence, measured: this port drifted to a hardcoded `Line: 1, Col: 1` at **13 sites**,
+  including the two helpers that govern the entire validation and schema-compile surface,
+  and the corpus stayed green throughout. Any port can do the same.
+- **Suggested**: one optional position column on the error case tables plus a §8 rule, so
+  every port is held to it. See `io-go/docs/reports/error-model.md`.
+
+## 17. CONFORMANCE.md §2 and §5 describe an abandoned layout — open, doc defect
+
+- §2/§5 document a YAML case format using camelCase codes and `message:` assertions, both
+  forbidden by the live contract; §8/§9 document the real `.io` format the corpus actually
+  uses. The stale sections are the ones a new port reads first.
+
+## 18. CONFORMANCE.md contradicts itself on error ordering — open, doc defect
+
+- §5: multi-code expectations are "order-independent unless `ordered: true` is set".
+  §8: `error_codes` means "these errors, **in this order**". §7.1 also requires "the same
+  error codes, **in the same order**". `ordered: true` is implemented nowhere and used by no
+  case; the corpus data follows §8, and two cases (`validation/accumulation.io:19-22,31-34`)
+  genuinely depend on order.
+
+## 19. The reference has no structured member path on errors — open
+
+- io-js2 interpolates the failing member's path into the message *string*
+  (`schema/types/common-number.ts:92-108`), and messages are explicitly non-normative
+  (`CONFORMANCE.md:176-177`), so no conformance rule can assert which member failed. A
+  structured field would serve every port; today each one invents its own or omits it.
+
 ## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
 
 - A malformed literal in a HEADER definition is fatal (`~ A: 0B` → `invalid-number`); no case

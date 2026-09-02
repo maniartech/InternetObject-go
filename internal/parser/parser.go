@@ -422,6 +422,11 @@ func (p *parser) addMember(obj *value.Object, m value.Member, at tokenizer.Token
 	if !m.Positional && obj.Find(m.Key) >= 0 {
 		p.die(errs.DuplicateMember, at)
 	}
+	if obj.Members == nil {
+		// Records are small and uniform; one sized allocation beats the
+		// 1→2→4→8 doubling an unsized append performs on every record.
+		obj.Members = make([]value.Member, 0, 8)
+	}
 	obj.Members = append(obj.Members, m)
 }
 

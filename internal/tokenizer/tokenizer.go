@@ -11,6 +11,13 @@ import (
 // token text and positions refer to Stream.Src, not the caller's original.
 func Tokenize(src string) *Stream {
 	s := &scanner{src: normalizeNewlines(src), line: 1, col: 1}
+	// Size the token slice up front. Real documents average well over four
+	// bytes per token (a bare `a,` is the dense extreme), so this lands one
+	// allocation instead of the ~20 doublings an unsized append performs on a
+	// large document — the single largest allocation site in the pipeline.
+	if n := len(s.src) / 4; n > 8 {
+		s.toks = make([]Token, 0, n)
+	}
 	s.run()
 	return &Stream{Src: s.src, Tokens: s.toks}
 }

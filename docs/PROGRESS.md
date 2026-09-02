@@ -101,9 +101,25 @@ pre-existing DoS while verifying this — a self-absorbing schema (`$P: {A: $P}`
 forever; absorption now detects the cycle and reports the natural `unknown-member`
 (FINDINGS #14; the reference stack-overflows).
 
+## Two reports — read these before the next build phase
+
+- **[reports/benchmarks.md](reports/benchmarks.md)** — we were 2.7-12.8x slower than
+  `encoding/json`; targeted fixes this session closed a third of the gap (now 1.8-8.7x,
+  -21%..-38% wall time, -36%..-55% bytes). The scanner is NOT the problem (153 MB/s, 3
+  allocs); the layers above it are. Roadmap with per-item estimates is in the report; the
+  writer's `[]string`+`Join` strategy is the single biggest remaining item.
+- **[reports/error-model.md](reports/error-model.md)** — the accumulate-and-continue
+  MECHANISM matches the reference and passes the one dimension the corpus gates (code order
+  and count). The error CONTENT is far thinner: positions are hardcoded `1:1` at 13 sites
+  (including the two helpers governing all validation), the streaming category is computed
+  then dropped at the public boundary, the failed-record marker is unnameable by callers,
+  and `Value()`/`Records()` disagree about faulted rows. Recommends ADR 0005 BEFORE ADR 0004
+  phase 1, since one plumbing change (a position on `value.Member`) fixes most of it.
+
 ## What's next
 
-1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
+1. **ADR 0005 — the error model** (recommended first; see the report above).
+2. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
 3. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
