@@ -5,9 +5,9 @@
 
 ## Headline
 
-**We were 2.7×–12.8× slower than `encoding/json`. Two optimization passes have closed roughly
-half of that; we are now 1.8×–5.9× slower, encode has shed 54% of its allocations, and the
-remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
+**We were 2.7×–12.8× slower than `encoding/json`. Three optimization passes have closed most
+of it: decode is now 1.56× and the dynamic parse 1.73×, with encode still the outlier at
+5.7×. The remaining gap is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
 document**, competitive with any JSON parser. Everything above it is where the time goes.
 
 ## The numbers
@@ -15,13 +15,17 @@ document**, competitive with any JSON parser. Everything above it is where the t
 1,000 records × 6 members (string, int, string, bool, float, string array); 64 KB of IO text
 against 114 KB of equivalent JSON, decoded into the same Go structs.
 
-| Operation | Baseline | Pass 1 | **Pass 2 (now)** | encoding/json | Gap now |
-| --------- | -------: | -----: | ---------------: | ------------: | ------: |
-| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | **~5.2 ms · 34,804** | 2.55 ms · 6,019 | ~2.1× |
-| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | **2.58 ms · 17,692** | 0.43 ms · **2** | **5.9×** |
-| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | **3.37 ms · 25,050** | 1.92 ms · 23,013 | 1.8× |
-| Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | **~2.1 ms · 22,008** | — | — |
-| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | **9.1 µs · 70** | 2.3 µs · 11 | 4.0× |
+| Operation | Baseline | Pass 1 | Pass 2 | **Pass 3 (now)** | encoding/json | Gap now |
+| --------- | -------: | -----: | -----: | ---------------: | ------------: | ------: |
+| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms · 34,804 | **3.19 ms · 23,861** | 2.05 ms · 6,019 | **1.56×** |
+| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | **2.16 ms · 17,849** | 0.38 ms · **2** | 5.7× |
+| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms · 25,050 | **3.30 ms · 21,953** | 1.91 ms · 23,013 | 1.73× |
+| Validate (no JSON equivalent) | 3.33 ms · — | 2.10 ms | ~2.1 ms · 22,008 | **1.65 ms · 17,009** | — | — |
+| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs · 70 | **8.6 µs · 61** | 2.3 µs · 11 | 3.7× |
+
+**Cumulative: decode 1.9× faster than baseline with 42% fewer allocations; encode 2.5×
+faster with 54% fewer. The dynamic parse now allocates FEWER objects than `encoding/json`
+does (21,953 vs 23,013)** — it is still slower per operation, but no longer by churn.
 
 **Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
 17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
@@ -66,6 +70,28 @@ values — where `encoding/json` does one.
 
 **The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
+
+## What changed — pass 3 (ADR 0006 P2 + P7 partial)
+
+**P2 — validation without per-record maps.** `slots`/`processed` became ONE slice of
+`memberSlot` indexed by schema position (`Schema.Index`, built once at compile). Worth
+recording honestly: **the profile disproved my estimate.** Ranked by allocation *count* — the
+metric that matters for churn — those maps were 2.8% of decode allocations, not the
+bottleneck I predicted from the byte profile. The change is still right (no hashing, one
+allocation instead of two) but it did not move the number on its own. *Measure, don't
+believe*, as the ADR says.
+
+**P7 (partial) — stop re-boxing validated values.** The type validators unboxed a value from
+`any`, checked it, and then `return s` — allocating a **fresh interface for a value they had
+not changed**. Returning the original box instead removes one allocation per validated
+scalar member. This was the single biggest win of the pass and it cost five one-line edits.
+
+**P1 (decode side) — lazy error paths.** The same eager-path mistake fixed on the encode side
+in pass 2 was still in the decoder: `fmt.Sprintf("$[%d]", i)` per record and `path+"."+field`
+per field, on the happy path. Paths now travel as a (parent, name) pair and join only when a
+fault is reported; a record path is built once per record. One failed attempt is worth
+recording: making the path a linked list of parent *pointers* looked cleaner but the pointer
+escaped, adding 6,000 allocations to encode — reverted after measurement.
 
 ## What changed — pass 2 (ADR 0006 P1 + P5)
 

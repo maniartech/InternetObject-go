@@ -42,6 +42,16 @@ var absent = absentType{}
 
 type valFail struct{ err errs.Error }
 
+// memberSlot is one declared member's validation state. The three facts live
+// in ONE slice so a record costs a single allocation here — three parallel
+// slices cost three, and the two maps this replaced cost two plus hashing
+// (ADR 0006 P2).
+type memberSlot struct {
+	val       any
+	filled    bool // a value was produced (absent members leave this false)
+	processed bool // this member has been dealt with; a second key is a duplicate
+}
+
 // vfail raises a member fault. It carries NO position: the recover sites in
 // validateObject know which member and record the fault belongs to and stamp
 // it there (ADR 0005 D2), which is why every validation error used to report
@@ -81,9 +91,12 @@ func ValidateRecordAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, 
 // error (which aborted processing) if any.
 func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
 	// Validated members: schema-order slots first, then extras by arrival.
-	slots := make(map[string]any, len(s.Names))
+	// Slots are addressed by POSITION, not by name — the schema is compiled
+	// and its member positions are fixed, so two maps per record became two
+	// slices (ADR 0006 P2). Small enough to stay on the stack for typical
+	// records.
+	slots := make([]memberSlot, len(s.Names))
 	var extras []value.Member
-	processed := make(map[string]bool, len(s.Names))
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -98,23 +111,30 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 	}()
 
 	// try validates one member, converting a member-level failure into an
-	// accumulated error.
-	try := func(name string, m *value.Member, f func() any) {
+	// accumulated error. idx is the member's schema position, or -1 for an
+	// undeclared member, whose value the caller places in extras itself.
+	try := func(idx int, name string, m *value.Member, f func() any) (out any, ok bool) {
 		defer func() {
 			if r := recover(); r != nil {
-				f, ok := r.(valFail)
-				if !ok {
+				fail, isFail := r.(valFail)
+				if !isFail {
 					panic(r)
 				}
-				acc = append(acc, locate(f.err, path, name, rec, m))
-				processed[name] = true
+				acc = append(acc, locate(fail.err, path, name, rec, m))
+				if idx >= 0 {
+					slots[idx].processed = true
+				}
+				out, ok = nil, false
 			}
 		}()
 		v := f()
-		if v != (any)(absent) {
-			slots[name] = v
-			processed[name] = true
+		if v == (any)(absent) {
+			return nil, false
 		}
+		if idx >= 0 {
+			slots[idx] = memberSlot{val: v, filled: true, processed: true}
+		}
+		return v, true
 	}
 
 	// fillMissing gives every unbound schema member its absence treatment:
@@ -122,8 +142,8 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 	// the record supply the value (the normal path); the absorption path
 	// consumed the whole record already and must not read it twice.
 	fillMissing := func(lookup bool) {
-		for _, name := range s.Names {
-			if (name == "*" && isWildcardDef(s)) || processed[name] {
+		for idx, name := range s.Names {
+			if (name == "*" && isWildcardDef(s)) || slots[idx].processed {
 				continue
 			}
 			md := s.Defs[name]
@@ -135,7 +155,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 					mp = &rec.Members[i]
 				}
 			}
-			try(name, mp, func() any { return validateMember(val, present, md, defs) })
+			try(idx, name, mp, func() any { return validateMember(val, present, md, defs) })
 		}
 	}
 
@@ -154,8 +174,8 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 		fm := rec.Members[0]
 		if !fm.Positional && s.Defs[fm.Key] == nil && fm.Key != "*" {
 			name0 := s.Names[0]
-			try(name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
-			processed[name0] = true
+			try(0, name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
+			slots[0].processed = true
 			fillMissing(false)
 			return assemble(s, slots, extras), acc, nil
 		}
@@ -181,17 +201,17 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 				if md.Optional && !md.HasDefault {
 					continue
 				}
-				try(name, nil, func() any { return validateMember(nil, false, md, defs) })
+				try(i, name, nil, func() any { return validateMember(nil, false, md, defs) })
 				continue
 			}
-			try(name, &rec.Members[i], func() any { return validateMember(m.Value, true, md, defs) })
+			try(i, name, &rec.Members[i], func() any { return validateMember(m.Value, true, md, defs) })
 		} else {
 			// entirely missing — absence treatment, but leave an optional
 			// member unprocessed so a later keyed value may still fill it
 			if md.Optional && !md.HasDefault {
 				continue
 			}
-			try(name, nil, func() any { return validateMember(nil, false, md, defs) })
+			try(i, name, nil, func() any { return validateMember(nil, false, md, defs) })
 		}
 	}
 
@@ -235,36 +255,39 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 			vfail(errs.UnexpectedPositionalMember)
 		}
 		name := m.Key
-		if processed[name] {
+		idx, declared := s.Index[name]
+		if declared && slots[idx].processed {
+			vfail(errs.DuplicateMember)
+		}
+		if !declared && hasExtra(extras, name) {
 			vfail(errs.DuplicateMember)
 		}
 		md := s.Defs[name]
 		if name == "*" && isWildcardDef(s) {
+			declared = false
 			// The `*` entry is OPENNESS, not a member named `*`. A data key
 			// that happens to be `*` is an ordinary extra: it must keep its
 			// arrival position, not be hoisted into schema order ahead of
 			// positional members — which produced a record the writer could
 			// only spell as unparseable `"*": 0, 0` (found by the byte fuzzer;
 			// the reference keeps arrival order).
-			md = nil
+			md, declared = nil, false
 		}
 		if md == nil {
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
 			}
 			md = undeclaredMemberDef(name, s.Open)
-			processed[name] = true
 			mv := m.Value
-			try(name, &rec.Members[i], func() any { return validateMember(mv, true, md, defs) })
-			if v, ok := slots[name]; ok {
+			if v, ok := try(-1, name, &rec.Members[i], func() any {
+				return validateMember(mv, true, md, defs)
+			}); ok {
 				extras = append(extras, value.Member{Key: name, Value: v})
-				delete(slots, name)
 			}
 			continue
 		}
-		processed[name] = true
 		mv := m.Value
-		try(name, &rec.Members[i], func() any { return validateMember(mv, true, md, defs) })
+		try(idx, name, &rec.Members[i], func() any { return validateMember(mv, true, md, defs) })
 	}
 
 	fillMissing(true)
@@ -352,16 +375,34 @@ func isWildcardDef(s *Schema) bool {
 
 // assemble builds the validated object: declared members in schema order,
 // then extras in arrival order.
-func assemble(s *Schema, slots map[string]any, extras []value.Member) *value.Object {
-	// The exact size is known: one member per filled slot plus the extras.
-	out := &value.Object{Members: make([]value.Member, 0, len(slots)+len(extras))}
-	for _, name := range s.Names {
-		if v, ok := slots[name]; ok {
-			out.Members = append(out.Members, value.Member{Key: name, Value: v})
+func assemble(s *Schema, slots []memberSlot, extras []value.Member) *value.Object {
+	n := len(extras)
+	for i := range slots {
+		if slots[i].filled {
+			n++
+		}
+	}
+	out := &value.Object{Members: make([]value.Member, 0, n)}
+	for i, name := range s.Names {
+		if slots[i].filled {
+			out.Members = append(out.Members, value.Member{Key: name, Value: slots[i].val})
 		}
 	}
 	out.Members = append(out.Members, extras...)
 	return out
+}
+
+// hasExtra reports whether an undeclared member with this name was already
+// accepted. Extras are few, so a scan beats a map — and the parser already
+// rejects duplicate keys within a parsed record, leaving only hand-built
+// objects to reach this.
+func hasExtra(extras []value.Member, name string) bool {
+	for i := range extras {
+		if !extras[i].Positional && extras[i].Key == name {
+			return true
+		}
+	}
+	return false
 }
 
 // undeclaredMemberDef is THE definition an undeclared member gets under an
@@ -549,7 +590,10 @@ func validateString(val any, md *MemberDef) any {
 	if l, ok := md.Constraints["minLen"].(float64); ok && float64(length()) < l {
 		vfail(errs.MismatchedMinLen)
 	}
-	return s
+	// Return the ORIGINAL interface value rather than re-boxing: the caller
+	// already holds this value boxed, and `return s` allocates a fresh
+	// interface for a value validation did not change (ADR 0006 P7).
+	return val
 }
 
 // The email and url expressions, ported from the reference implementation.
@@ -613,7 +657,7 @@ func validateNumber(val any, md *MemberDef, defs Defs) any {
 	if m, ok := numBound(md, "multipleOf", defs); ok && math.Mod(f, m) != 0 {
 		vfail(errs.MismatchedMultipleOf)
 	}
-	return f
+	return val // the original box; see validateString
 }
 
 func numBound(md *MemberDef, key string, defs Defs) (float64, bool) {
@@ -655,7 +699,7 @@ func validateBigInt(val any, md *MemberDef, defs Defs) any {
 			vfail(errs.MismatchedMultipleOf)
 		}
 	}
-	return b
+	return val // the original box; see validateString
 }
 
 func validateDecimal(val any, md *MemberDef, defs Defs) any {
@@ -689,7 +733,7 @@ func validateDecimal(val any, md *MemberDef, defs Defs) any {
 	if m, ok := bound("multipleOf"); ok && !decimalMultiple(d, m) {
 		vfail(errs.MismatchedMultipleOf)
 	}
-	return d
+	return val // the original box; see validateString
 }
 
 // decimalDigits counts a decimal's significant digits (its precision).
@@ -760,7 +804,7 @@ func validateTemporal(val any, md *MemberDef, defs Defs) any {
 	if m, ok := bound("max"); ok && t.T.UnixMilli() > m.T.UnixMilli() {
 		vfail(errs.MismatchedMax)
 	}
-	return t
+	return val // the original box; see validateString
 }
 
 func validateArray(val any, md *MemberDef, defs Defs) any {

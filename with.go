@@ -1,7 +1,6 @@
 package internetobject
 
 import (
-	"fmt"
 	"reflect"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
@@ -85,7 +84,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 		sec.Collection = true
 		for i := 0; i < rv.Len(); i++ {
 			ev := rv.Index(i)
-			path := fmt.Sprintf("$[%d]", i)
+			path := recordPath(i)
 			for ev.Kind() == reflect.Pointer {
 				if ev.IsNil() {
 					return "", &MarshalError{Path: path, Msg: "a collection record cannot be nil"}

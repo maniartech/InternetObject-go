@@ -21,6 +21,10 @@ import (
 type Schema struct {
 	Names []string
 	Defs  map[string]*MemberDef
+	// Index maps a declared name to its position in Names, so validation can
+	// address members by slice index instead of allocating per-record maps
+	// (ADR 0006 P2). Built once, here, at compile time.
+	Index map[string]int
 	// Open: nil = closed; OpenAny = any additional members; a *MemberDef =
 	// additional members must match it.
 	Open any
@@ -227,6 +231,10 @@ func addMember(s *Schema, md *MemberDef) {
 	if _, dup := s.Defs[md.Name]; dup {
 		fail(errs.DuplicateMember)
 	}
+	if s.Index == nil {
+		s.Index = map[string]int{}
+	}
+	s.Index[md.Name] = len(s.Names)
 	s.Names = append(s.Names, md.Name)
 	s.Defs[md.Name] = md
 }

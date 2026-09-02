@@ -40,7 +40,7 @@ func bindDoc(doc *document.Doc, v any) error {
 		records := allRecords(doc)
 		out := reflect.MakeSlice(elem.Type(), len(records), len(records))
 		for i, rec := range records {
-			if err := bindInto(out.Index(i), rec, fmt.Sprintf("$[%d]", i)); err != nil {
+			if err := bindInto(out.Index(i), rec, recordPath(i)); err != nil {
 				return err
 			}
 		}
@@ -56,7 +56,7 @@ func bindDoc(doc *document.Doc, v any) error {
 		return bindInto(elem, records[0], "$")
 
 	default:
-		return setValue(elem, doc.Project(), "$")
+		return setValue(elem, doc.Project(), pathAt{parent: "$", index: -1})
 	}
 }
 
@@ -121,7 +121,7 @@ func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, path stri
 			continue // a member with no field: ignored, as encoding/json does
 		}
 		f := plan.fields[fi]
-		if err := setValue(rv.FieldByIndex(f.index), m.Value, path+"."+f.name); err != nil {
+		if err := setValue(rv.FieldByIndex(f.index), m.Value, pathAt{parent: path, name: f.name, index: -1}); err != nil {
 			return err
 		}
 	}
@@ -130,13 +130,13 @@ func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, path stri
 
 // setValue stores one wire value into a Go value, converting where the
 // conversion is exact and refusing where it is not.
-func setValue(rv reflect.Value, v any, path string) error {
+func setValue(rv reflect.Value, v any, at pathAt) error {
 	if v == nil {
 		rv.SetZero() // null: pointers become nil, everything else its zero
 		return nil
 	}
 	if ev, ok := v.(value.ErrorValue); ok {
-		return &UnmarshalError{Path: path, Msg: "value carries the deferred error " + ev.Code}
+		return &UnmarshalError{Path: at.String(), Msg: "value carries the deferred error " + ev.Code}
 	}
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
@@ -154,36 +154,36 @@ func setValue(rv reflect.Value, v any, path string) error {
 			return nil
 		case float64:
 			if x != math.Trunc(x) || math.Abs(x) > maxSafeInt {
-				return typeMismatch(path, v, t)
+				return typeMismatch(at, v, t)
 			}
 			rv.Set(reflect.ValueOf(*big.NewInt(int64(x))))
 			return nil
 		}
-		return typeMismatch(path, v, t)
+		return typeMismatch(at, v, t)
 	case t == decimalType:
 		if d, ok := v.(Decimal); ok {
 			rv.Set(reflect.ValueOf(d))
 			return nil
 		}
-		return typeMismatch(path, v, t)
+		return typeMismatch(at, v, t)
 	case t == timeType:
 		if tm, ok := v.(Temporal); ok {
 			rv.Set(reflect.ValueOf(tm.T.UTC()))
 			return nil
 		}
-		return typeMismatch(path, v, t)
+		return typeMismatch(at, v, t)
 	case t == temporalType:
 		if tm, ok := v.(Temporal); ok {
 			rv.Set(reflect.ValueOf(tm))
 			return nil
 		}
-		return typeMismatch(path, v, t)
+		return typeMismatch(at, v, t)
 	case t == bytesType:
 		if b, ok := v.([]byte); ok {
 			rv.SetBytes(append([]byte(nil), b...))
 			return nil
 		}
-		return typeMismatch(path, v, t)
+		return typeMismatch(at, v, t)
 	case t == anyType:
 		rv.Set(reflect.ValueOf(v))
 		return nil
@@ -219,7 +219,7 @@ func setValue(rv reflect.Value, v any, path string) error {
 		if arr, ok := v.([]any); ok {
 			out := reflect.MakeSlice(t, len(arr), len(arr))
 			for i, e := range arr {
-				if err := setValue(out.Index(i), e, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				if err := setValue(out.Index(i), e, pathAt{parent: at.String(), index: i}); err != nil {
 					return err
 				}
 			}
@@ -238,7 +238,7 @@ func setValue(rv reflect.Value, v any, path string) error {
 					key = strconv.Itoa(i)
 				}
 				ev := reflect.New(t.Elem()).Elem()
-				if err := setValue(ev, m.Value, path+"."+key); err != nil {
+				if err := setValue(ev, m.Value, pathAt{parent: at.String(), name: key, index: -1}); err != nil {
 					return err
 				}
 				out.SetMapIndex(reflect.ValueOf(key), ev)
@@ -248,10 +248,10 @@ func setValue(rv reflect.Value, v any, path string) error {
 		}
 	case reflect.Struct:
 		if obj, ok := v.(*value.Object); ok {
-			return bindInto(rv, obj, path)
+			return bindInto(rv, obj, at.String())
 		}
 	}
-	return typeMismatch(path, v, t)
+	return typeMismatch(at, v, t)
 }
 
 // integralOf extracts an exact int64 from the numeric wire types.
@@ -270,6 +270,6 @@ func integralOf(v any) (int64, bool) {
 	return 0, false
 }
 
-func typeMismatch(path string, v any, t reflect.Type) error {
-	return &UnmarshalError{Path: path, Msg: fmt.Sprintf("cannot store %T in %s", v, t)}
+func typeMismatch(at pathAt, v any, t reflect.Type) error {
+	return &UnmarshalError{Path: at.String(), Msg: fmt.Sprintf("cannot store %T in %s", v, t)}
 }

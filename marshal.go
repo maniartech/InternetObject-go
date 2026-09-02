@@ -67,7 +67,7 @@ func Marshal(v any) (string, error) {
 		sec := &parser.Section{Name: "data", Collection: true}
 		for i := 0; i < rv.Len(); i++ {
 			ev := rv.Index(i)
-			path := fmt.Sprintf("$[%d]", i)
+			path := recordPath(i)
 			for ev.Kind() == reflect.Pointer {
 				if ev.IsNil() {
 					return "", &MarshalError{Path: path, Msg: "a collection record cannot be nil"}
@@ -88,7 +88,7 @@ func Marshal(v any) (string, error) {
 		pdoc = schemaDoc(plan.shape, sec)
 
 	default:
-		ev, err := encodeValue(rv, "", pathAt{"$", "", -1})
+		ev, err := encodeValue(rv, "", pathAt{parent: "$", index: -1})
 		if err != nil {
 			return "", err
 		}
@@ -417,15 +417,29 @@ type pathAt struct {
 	index  int // -1 when this is a named member rather than an element
 }
 
+// recordPath spells the position of the i-th record of a collection. It is
+// built ONCE per record; that record's scalar members then travel as
+// (parent, name) pairs that never join, so only an actual fault pays for a
+// full path (ADR 0006 P1).
+func recordPath(i int) string { return "$[" + strconv.Itoa(i) + "]" }
+
 func (p pathAt) String() string {
-	if p.index >= 0 {
+	switch {
+	case p.index >= 0:
 		return p.parent + "[" + strconv.Itoa(p.index) + "]"
+	case p.name != "":
+		return p.parent + "." + p.name
 	}
-	if p.name == "" {
-		return p.parent
-	}
-	return p.parent + "." + p.name
+	return p.parent
 }
+
+// at and elem name a child position. They take the child's name or index
+// ALONGSIDE the parent rather than materializing a joined string, so walking
+// a record's scalar members allocates nothing; only descending into a nested
+// container (or reporting an actual fault) pays for a join.
+func (p pathAt) at(name string) pathAt { return pathAt{parent: p.String(), name: name, index: -1} }
+func (p pathAt) elem(i int) pathAt     { return pathAt{parent: p.String(), index: i} }
+func (p pathAt) of(name string) pathAt { return pathAt{parent: p.parent, name: name, index: p.index} }
 
 // maxSafeInt is the largest integer the number wire type holds exactly.
 const maxSafeInt = 1 << 53
@@ -437,7 +451,7 @@ func encodeStruct(rv reflect.Value, plan *structPlan, path string) (*value.Objec
 		if f.omitZero && fv.IsZero() {
 			continue
 		}
-		ev, err := encodeValue(fv, f.kind, pathAt{path, f.name, -1})
+		ev, err := encodeValue(fv, f.kind, pathAt{parent: path, name: f.name, index: -1})
 		if err != nil {
 			return nil, err
 		}
@@ -499,7 +513,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	case reflect.Slice, reflect.Array:
 		out := make([]any, rv.Len())
 		for i := range out {
-			ev, err := encodeValue(rv.Index(i), "", pathAt{at.String(), "", i})
+			ev, err := encodeValue(rv.Index(i), "", pathAt{parent: at.String(), index: i})
 			if err != nil {
 				return nil, err
 			}
@@ -517,7 +531,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		sort.Strings(keys) // deterministic output
 		out := &value.Object{}
 		for _, k := range keys {
-			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", pathAt{at.String(), k, -1})
+			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", pathAt{parent: at.String(), name: k, index: -1})
 			if err != nil {
 				return nil, err
 			}
