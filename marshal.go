@@ -132,7 +132,8 @@ type structPlan struct {
 	shape    *value.Object  // the derived schema shape, as parsed text would be
 	compiled *schema.Schema // the shape, compiled once
 	validate bool           // any field (own or nested) carries a `schema` tag
-	fastOK   bool           // every member can be written without the tree
+	fastOK   bool           // every member can be WRITTEN without the tree
+	lazyOK   bool           // every member can be READ from a token span
 }
 
 // encKind is a field's wire shape, decided ONCE when the plan is built. The
@@ -302,6 +303,7 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 	}
 	p.compiled = compiled
 	p.fastOK = fastEligible(t, p)
+	p.lazyOK = lazyEligible(p)
 	return p, nil
 }
 

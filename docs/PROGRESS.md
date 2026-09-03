@@ -6,7 +6,7 @@ are `io-test-cases/PORTING-NOTES.md`.
 
 ## Current state — THE FULL CORPUS IS GREEN
 
-Every suite passes, against `io-test-cases` commit `e6f288c` (still untagged upstream — ADR 0007
+Every suite passes, against `io-test-cases` commit `15e02ce` (still untagged upstream — ADR 0007
 D5 remains open; when `v1.0.0` lands, move the pin in
 `internal/conformance/corpus.go` and re-run):
 

@@ -638,7 +638,18 @@ func appendTemporal(dst []byte, t value.Temporal, declared string) []byte {
 	u := t.T.UTC()
 	kind := declared
 	if kind == "" {
-		kind = inferTemporalKind(u)
+		// The value KEEPS the kind it carries; inferring from the instant
+		// loses it, and silently — a midnight datetime came back as a date
+		// and a 1900-01-01 date as a time-of-day (PORTING-NOTES rule 15).
+		// The reference infers only because a JS Date has no kind to keep.
+		switch t.Kind {
+		case value.KindDate:
+			kind = "date"
+		case value.KindTime:
+			kind = "time"
+		default:
+			kind = "datetime"
+		}
 	}
 	switch kind {
 	case "date":
@@ -658,10 +669,12 @@ func appendTemporal(dst []byte, t value.Temporal, declared string) []byte {
 	return append(dst, '"')
 }
 
-// inferTemporalKind is THE single site deciding which literal an undeclared
-// temporal is written as: the 1900-01-01 sentinel date is a time, an all-zero
-// clock is a date, anything else a datetime.
-func inferTemporalKind(u time.Time) string {
+// InferTemporalKind reports the kind an instant EVIDENCES, for a host value
+// that genuinely carries none: the 1900-01-01 sentinel date is a time, an
+// all-zero clock is a date, anything else a datetime. Our own model always
+// carries a kind, so the writer never needs this — it is kept for callers
+// converting from a kindless source (PORTING-NOTES rule 15).
+func InferTemporalKind(u time.Time) string {
 	y, mo, day := u.Date()
 	h, mi, sec := u.Clock()
 	switch {

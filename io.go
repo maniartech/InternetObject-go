@@ -56,10 +56,21 @@ type (
 	Decimal = value.Decimal
 	// Temporal is a date, time or datetime; the kind stays distinct.
 	Temporal = value.Temporal
+	// TemporalKind distinguishes the three temporal literals. A value KEEPS
+	// the kind it carries end to end: a midnight datetime is not a date, and
+	// a 1900-01-01 date is not a time of day.
+	TemporalKind = value.TemporalKind
 	// ErrorItem stands in for a record that failed, INSIDE projected data:
 	// the row keeps its position and carries this marker instead of a value,
 	// so the good records around it are untouched. Test for it with IsError.
 	ErrorItem = value.ErrorNode
+)
+
+// The temporal kinds, so a caller can name the one a value carries.
+const (
+	KindDate     = value.KindDate
+	KindTime     = value.KindTime
+	KindDateTime = value.KindDateTime
 )
 
 // IsError reports whether a projected value is a failed record.

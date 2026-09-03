@@ -34,6 +34,29 @@ import (
 
 var noLazy = os.Getenv("IO_NO_LAZY") != ""
 
+// lazyEligible reports whether every field can be decoded straight from a
+// token span. It is DECODE eligibility, deliberately narrower than the encode
+// path's: writing a temporal or a decimal is a formatting question, reading
+// one into a Go field is a conversion the general path already owns. A type
+// this declines never enters the lazy path at all, so no half-bound value can
+// escape it.
+func lazyEligible(plan *structPlan) bool {
+	for i := range plan.fields {
+		switch plan.fields[i].enc {
+		case encString, encBool, encInt, encUint, encFloat:
+		case encSlice:
+			switch plan.fields[i].elem {
+			case encString, encBool, encInt, encUint, encFloat:
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(plan.fields) > 0
+}
+
 // unmarshalLazy binds src into v without building a value tree. took reports
 // whether it handled the call at all.
 func unmarshalLazy(src string, v any) (took bool, err error) {
@@ -61,8 +84,8 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 	}
 
 	plan, perr := planFor(et)
-	if perr != nil || !plan.fastOK {
-		return false, nil // fastOK: scalars and scalar slices only
+	if perr != nil || !plan.lazyOK {
+		return false, nil // only kinds this path decodes directly
 	}
 
 	f, ok := document.ParseFramed(src)
@@ -80,20 +103,30 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 	}
 	_ = defs
 
+	// Bind into a temporary and publish only on success, so a fallback can
+	// never leave the caller's value half-written.
 	recs := f.Raw.Records
 	if !collection {
 		if len(recs) != 1 {
 			return false, nil
 		}
-		if e := bindFramed(elem, recs[0], f, plan, 0); e != nil {
+		tmp := reflect.New(elem.Type()).Elem()
+		if e := bindFramed(tmp, recs[0], f, plan, 0); e != nil {
+			if e == errUnsupportedLazy {
+				return false, nil // the general path takes it
+			}
 			return true, e
 		}
+		elem.Set(tmp)
 		return true, nil
 	}
 
 	out := reflect.MakeSlice(elem.Type(), len(recs), len(recs))
 	for i := range recs {
 		if e := bindFramed(out.Index(i), recs[i], f, plan, i); e != nil {
+			if e == errUnsupportedLazy {
+				return false, nil
+			}
 			return true, e
 		}
 	}
