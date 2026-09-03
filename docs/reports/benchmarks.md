@@ -34,9 +34,8 @@ against 114 KB of equivalent JSON, decoded into the same Go structs.
 | Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | 8.6 µs · 61 | 8.6 µs · 61 | **8.2 µs · 51** | 1.69 µs · 11 | 4.9× |
 | …with the schema hoisted | — | — | — | — | — | **3.5 µs · 30** | 1.69 µs · 11 | 2.1× |
 
-**Pass 7 (2026-09-03) — allocations only**, because the bench machine was under 79-96% external
-load all day and no timing taken then is worth recording. Allocation counts are exact and
-load-independent, and this project gates on them for that reason:
+**Pass 7 (2026-09-03).** Allocation counts are exact and load-independent, and this project
+gates on them for that reason:
 
 | Operation | pass 6 | **pass 7** | `encoding/json` | allocs vs JSON |
 | --------- | -----: | ---------: | --------------: | -------------: |
@@ -47,9 +46,23 @@ load-independent, and this project gates on them for that reason:
 
 The small payload shed **72% of its bytes and 73% of its allocations**, taking it from 4.6× to
 1.3× `encoding/json`'s allocation count while still doing schema binding and per-member
-validation JSON does not do. The dynamic parse shed 20% of its bytes. Detail in
-[ADR 0009](../decisions/0009-shared-compiled-state.md); timings need re-taking on a quiet
-machine.
+validation JSON does not do. The dynamic parse shed 20% of its bytes.
+Detail in [ADR 0009](../decisions/0009-shared-compiled-state.md).
+
+**Timings, taken later the same day on a half-loaded machine** — read the RATIOS, not the
+absolutes. `encoding/json`'s own numbers are the control here, and they came back 13-17% above
+their quiet-day values, so the io-go column is inflated by roughly the same and the gap ratios
+are the only figures worth quoting:
+
+| Operation | gap before | **gap now** | note |
+| --------- | ---------: | ----------: | ---- |
+| Small record decode | 4.9× slower | **~1.5× slower** | 8.2 µs → 2.9 µs measured, ~2.4-2.8× faster after discounting the inflation |
+| Parse → dynamic | 1.65× slower | **~1.47× slower** | a modest ~10% off the wall clock — less than the 15-25% the byte reduction suggested |
+| Unmarshal → struct | 1.45× faster | 1.4-1.8× faster | unchanged by this pass, as expected |
+
+The dynamic path is the honest disappointment: −20% bytes bought ~10% time, not the ~20% a
+GC-bound path implied. That points at the remaining per-record work (roadmap 10) rather than at
+allocation volume, and it is the first thing to profile next.
 
 The "Now" column is a fresh 6-run measurement taken 2026-09-03 after the temporal refactor
 ([ADR 0008](../decisions/0008-temporal-is-time-time.md)); allocation counts are unchanged from

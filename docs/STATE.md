@@ -76,12 +76,12 @@ Six passes, each driven by a profile rather than intuition. Full detail in
 | Dynamic parse | 5.19 ms · 31,073 allocs | 3.01 ms · **17,952** | 1.83 ms · 23,013 |
 | Small record (133 B) | 9.6 µs · 84 allocs | **2,144 B · 14** | 480 B · 11 |
 
-(1,000 records × 6 members. Allocation counts are current and exact; the ns figures are from
-the last quiet-machine run and predate pass 7, which was measured on allocations only —
-[ADR 0009](decisions/0009-shared-compiled-state.md). **Timings need re-taking on an idle
-machine.** The dynamic parse is now the only operation slower than `encoding/json`; the two
-structural items that would close it are roadmap 10 and 11 in
-[reports/benchmarks.md](reports/benchmarks.md).)
+(1,000 records × 6 members. Allocation counts are current and exact. The ns column is from the
+last quiet-machine run; pass 7's own timings were taken on a half-loaded machine and are
+recorded as RATIOS in [reports/benchmarks.md](reports/benchmarks.md) — small-record decode went
+from 4.9× to ~1.5× `encoding/json`, dynamic parse from 1.65× to ~1.47×. The dynamic parse is
+the only operation still slower than JSON, and −20% of its bytes bought only ~10% of its time,
+which points at per-record work rather than allocation volume — roadmap 10 and 11.)
 
 The two structural wins were the same idea applied in both directions: **stop building a
 value tree nobody asked for.** Encode walks the struct straight into the output buffer;

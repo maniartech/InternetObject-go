@@ -182,13 +182,15 @@ Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
 3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
    the fuzz corpora only protect the port if something runs them. Highest-value non-code item
    ([STATE.md](STATE.md) §5).
-4. **Re-time on an idle machine.** Pass 7 was measured on allocation counts only — the bench
-   machine sat at 79-96% external load all day, so no timing from 2026-09-03 is trustworthy.
-   The allocation numbers are exact and stand; the ns/op column in
-   [reports/benchmarks.md](reports/benchmarks.md) predates the pass.
-5. **Perf items 10-11** — arena-allocate `[]value.Member` (ADR 0006 P4), then frame the data
-   instead of building the parser's tree. The dynamic parse is the only operation still slower
-   than `encoding/json`, and these are what would close it.
+4. **Profile the dynamic path again, for TIME this time.** Pass 7 took 20% of its bytes and got
+   only ~10% of its wall clock, so the remaining cost is per-record work, not allocation
+   volume — the earlier CPU profile's "GC is ~45%" reading has been partly banked and no longer
+   points where it did. Then perf items 10-11 (arena-allocate `[]value.Member`, ADR 0006 P4;
+   then frame the data instead of building the parser's tree). The dynamic parse is the only
+   operation still slower than `encoding/json`.
+5. **Re-time everything on a genuinely idle machine.** Every figure from 2026-09-03 was taken
+   at 51-96% external load; ratios are sound (`encoding/json` is the control), absolutes are
+   not.
 6. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
