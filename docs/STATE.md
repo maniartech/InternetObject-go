@@ -323,9 +323,16 @@ of them.
 - **The corpus pin has drifted again**: `internal/conformance` pins `e6f288c` while the
   sibling checkout is at `15e02ce`. Everything passes at both; the pin should move, and
   should become a `v1.0.0` tag when upstream cuts one.
-- **No CI.** Every gate here is run by hand. A pipeline running the corpus, the fuzz quick
-  gates and a `benchstat` allocation-count regression check is the single highest-value
-  engineering item that is not code.
+- **CI exists as of 2026-09-03** (`.github/workflows/ci.yml`) — but **has never run**: it needs
+  a push to the remote to take effect, and the first run is the real test of it. Four jobs:
+  `test` (3 OS × Go 1.24/stable — gofmt, vet, build, the corpus ladder, the three forced-route
+  variants, the examples), `race`, `fuzz` (45s per target per push, 5m nightly, crashers
+  uploaded as artifacts), and a nightly `corpus-drift` job that runs against io-test-cases'
+  live HEAD. The push jobs pin the corpus to `CorpusPin`, read out of the source rather than
+  repeated in the workflow, so there is still one statement of it.
+  **Still missing: an allocation-count regression gate.** This project's own rule is to read
+  allocations rather than nanoseconds, and nothing enforces that a change does not add
+  allocations — which is exactly the regression a benchmark-based CI check would catch.
 - **No cross-implementation benchmark.** "Fastest Internet Object implementation" is
   unmeasured; a shared payload in `io-test-cases` would make it a claim rather than a hope.
 - **Documentation for users** — the examples and the package doc are good, but there is no

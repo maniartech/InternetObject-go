@@ -182,9 +182,11 @@ Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
    scope to the declared part; implemented here, still owed spec text, a corpus case and five
    ports). **#21 is open** — io-js2 drops non-zero ms writing a `time`, contradicting the spec;
    io-go follows the spec and diverges deliberately.
-3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
-   the fuzz corpora only protect the port if something runs them. Highest-value non-code item
-   ([STATE.md](STATE.md) §5).
+3. **CI is written but has never run** — `.github/workflows/ci.yml` needs a push to the remote
+   to take effect, and the first run will find whatever I could not verify locally (the
+   checkouts, `setup-go`, the Windows runner). Every step was dry-run locally and passes. What
+   it still lacks is an **allocation-count regression gate**, which is the check this project
+   would actually benefit from most ([STATE.md](STATE.md) §5.3).
 4. **Profile the dynamic path again, for TIME this time.** Pass 7 took 20% of its bytes and got
    only ~10% of its wall clock, so the remaining cost is per-record work, not allocation
    volume — the earlier CPU profile's "GC is ~45%" reading has been partly banked and no longer
