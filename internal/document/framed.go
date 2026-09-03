@@ -1,7 +1,10 @@
 package document
 
 import (
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
@@ -52,27 +55,92 @@ func ParseFramed(src string) (*Framed, bool) {
 		}
 	}
 
-	headerSrc := src[:s.Tokens[sepAt].Start]
-	hdoc := parser.Parse(headerSrc + "\n---\n")
-	if len(hdoc.Errors) > 0 {
-		return nil, false // the normal path reports the header's fault
-	}
-
-	defs := newDefs(hdoc.Header)
-	sec := &parser.Section{Name: "data"}
-	sch, cerr := sectionSchema(sec, defs)
-	if cerr != nil {
+	he := headerFor(src[:s.Tokens[sepAt].Start])
+	if !he.ok {
 		return nil, false
-	}
-	if hdoc.Header != nil && len(hdoc.Header.Vars) > 0 {
-		return nil, false // @variables resolve during the tree walk
 	}
 
 	raw, ok := parser.FrameData(s)
 	if !ok {
 		return nil, false
 	}
-	return &Framed{Stream: s, Raw: raw, Schema: sch, Defs: defs}, true
+	return &Framed{Stream: s, Raw: raw, Schema: he.sch, Defs: newDefs(he.header)}, true
+}
+
+// A header's compiled form, memoized on the header text.
+//
+// Parsing and compiling the header on every call is invisible on a 1,000-record
+// document and dominates a one-record one: it measured as ~45% of the
+// allocations of a 133-byte payload, the shape an HTTP handler decodes all day.
+// The header text is a SUFFICIENT key here because compilation is a pure
+// function of it on this path — ParseFramed has already declined any `--- $Name`
+// selector above, so no section binding can vary; the section it compiles
+// against is built locally with no name; and Compile deliberately does not
+// resolve @-references, so variable values never enter a compiled schema.
+//
+// Sharing the compiled *Schema across goroutines is only sound because a
+// compiled schema is now read-only — the lazily-compiled `pattern` regexp that
+// used to be written during validation was a data race, fixed in
+// schema.compilePattern. Do not reintroduce a write-at-validation field.
+//
+// Deliberately NOT cached: the *docDefs, which is mutable (it memoizes
+// per-name compilation), so each document gets a fresh one.
+type headerEntry struct {
+	header *parser.Header
+	sch    *schema.Schema
+	ok     bool // false: this header is not framable, decline as before
+}
+
+// The cache never evicts, so it is bounded twice: a header bigger than this
+// amortizes its own compilation anyway, and past the entry cap the behavior
+// degrades to exactly what it was before. Both matter when the header text is
+// attacker-controlled — an unbounded memo would be a memory-exhaustion vector.
+// Wrong keys cannot return right entries (an entry is stored only after a pure
+// compile of that exact text), so there is no poisoning to defend against.
+const (
+	maxCachedHeaderLen = 4 << 10
+	maxCachedHeaders   = 1024
+)
+
+var (
+	headerCache   sync.Map // string → headerEntry
+	headerCached  atomic.Int64
+	noHeaderCache = os.Getenv("IO_NO_HEADER_CACHE") != ""
+)
+
+func headerFor(headerSrc string) headerEntry {
+	if !noHeaderCache {
+		if e, ok := headerCache.Load(headerSrc); ok {
+			return e.(headerEntry)
+		}
+	}
+	e := compileHeader(headerSrc)
+	if !noHeaderCache && len(headerSrc) <= maxCachedHeaderLen &&
+		headerCached.Load() < maxCachedHeaders {
+		// Clone the key: headerSrc is a substring of the whole document, and
+		// storing it as-is would pin every byte of that document forever.
+		if _, loaded := headerCache.LoadOrStore(strings.Clone(headerSrc), e); !loaded {
+			headerCached.Add(1)
+		}
+	}
+	return e
+}
+
+// compileHeader is the uncached original, and stays the only statement of what
+// a framable header is.
+func compileHeader(headerSrc string) headerEntry {
+	hdoc := parser.Parse(headerSrc + "\n---\n")
+	if len(hdoc.Errors) > 0 {
+		return headerEntry{} // the normal path reports the header's fault
+	}
+	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, newDefs(hdoc.Header))
+	if cerr != nil {
+		return headerEntry{}
+	}
+	if hdoc.Header != nil && len(hdoc.Header.Vars) > 0 {
+		return headerEntry{} // @variables resolve during the tree walk
+	}
+	return headerEntry{header: hdoc.Header, sch: sch, ok: true}
 }
 
 // SchemaMemberDefs exposes the compiled member definitions in schema order,

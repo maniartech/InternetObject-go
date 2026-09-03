@@ -133,6 +133,9 @@ func (d *Document) SchemaOf(name string) (*Schema, error) {
 
 // Records returns the document's records as live values, faulted ones
 // included (as their error markers) — the dynamic counterpart of Unmarshal.
+//
+// As with Value, these are a VIEW of the document's own records, not copies;
+// mutating one can change what String writes.
 func (d *Document) Records() []any {
 	var out []any
 	for _, sec := range d.doc.Sections {

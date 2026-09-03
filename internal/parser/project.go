@@ -47,11 +47,20 @@ func (d *Document) projectSections() any {
 
 func sectionValue(sec *Section) any {
 	if sec.Collection {
-		arr := make([]any, len(sec.Records))
+		// sec.Records is already a []any; when every record projects to
+		// itself, it IS the projection.
 		for i, r := range sec.Records {
-			arr[i] = projectValue(r)
+			if pr, changed := project(r); changed {
+				arr := make([]any, len(sec.Records))
+				copy(arr, sec.Records[:i])
+				arr[i] = pr
+				for j := i + 1; j < len(sec.Records); j++ {
+					arr[j] = projectValue(sec.Records[j])
+				}
+				return arr
+			}
 		}
-		return arr
+		return sec.Records
 	}
 	if len(sec.Records) == 0 {
 		return nil
@@ -64,27 +73,80 @@ func sectionValue(sec *Section) any {
 func ProjectValue(v any) any { return projectValue(v) }
 
 func projectValue(v any) any {
+	out, _ := project(v)
+	return out
+}
+
+// project returns v's projection and whether that projection DIFFERS from v.
+//
+// The projection is copy-on-write. Projecting only ever does three things —
+// drop absent slots, number positional and empty keys, recurse — so a value
+// with no absent slot, no unkeyed member and no changed child projects to
+// itself, and is returned as itself instead of being cloned.
+//
+// That case is not a corner: it is every schema-validated record. `assemble`
+// emits one keyed, present member per declared slot, so the old code deep-
+// cloned an entire validated document to produce a value-identical copy. It
+// was the dynamic path's third full materialization of every record (parse
+// builds one, validation assembles a second), and ~20% of its allocated bytes
+// on a path where the GC already accounts for roughly half the CPU time.
+//
+// The tradeoff is aliasing: Document.Value() and Records() now hand back the
+// document's own objects, so mutating a projection can change what String()
+// writes. Leaf values ([]byte, *big.Int, Decimal.Coef) were always shared this
+// way — this widens that to containers, and is documented on the public
+// methods.
+func project(v any) (any, bool) {
 	switch x := v.(type) {
 	case *value.Object:
-		out := &value.Object{Members: make([]value.Member, 0, len(x.Members))}
 		for i, m := range x.Members {
-			if m.Absent {
-				continue // an empty comma slot projects nothing
+			pv, changed := project(m.Value)
+			if m.Absent || m.Positional || m.Key == "" || changed {
+				return projectObjectFrom(x, i, pv), true
 			}
-			key := m.Key
-			if m.Positional || key == "" {
-				key = strconv.Itoa(i)
-			}
-			out.Members = append(out.Members, value.Member{Key: key, Value: projectValue(m.Value)})
 		}
-		return out
+		return x, false
 	case []any:
-		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = projectValue(e)
+			if pe, changed := project(e); changed {
+				out := make([]any, len(x))
+				copy(out, x[:i])
+				out[i] = pe
+				for j := i + 1; j < len(x); j++ {
+					out[j] = projectValue(x[j])
+				}
+				return out, true
+			}
 		}
-		return out
+		return x, false
 	default:
-		return v
+		return v, false
 	}
+}
+
+// projectObjectFrom builds the projection of x, given that every member before
+// `at` projects to itself and that member `at` projects to pv.
+func projectObjectFrom(x *value.Object, at int, pv any) *value.Object {
+	out := &value.Object{
+		Line: x.Line, Col: x.Col,
+		Members: make([]value.Member, 0, len(x.Members)),
+	}
+	out.Members = append(out.Members, x.Members[:at]...)
+	for i := at; i < len(x.Members); i++ {
+		m := x.Members[i]
+		if m.Absent {
+			continue // an empty comma slot projects nothing
+		}
+		val := pv
+		if i != at {
+			val = projectValue(m.Value)
+		}
+		key := m.Key
+		if m.Positional || key == "" {
+			key = strconv.Itoa(i)
+		}
+		out.Members = append(out.Members,
+			value.Member{Key: key, Value: val, Line: m.Line, Col: m.Col})
+	}
+	return out
 }

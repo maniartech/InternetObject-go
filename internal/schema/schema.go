@@ -60,7 +60,11 @@ type MemberDef struct {
 	Constraints map[string]any
 	Keys        []string
 
-	re *regexp.Regexp // the compiled pattern, cached at first use
+	// The `pattern` constraint, compiled once by compilePattern at compile
+	// time. Written only there; validation reads. reBad records a pattern that
+	// would not compile, whose fault surfaces per value at validation.
+	re    *regexp.Regexp
+	reBad bool
 }
 
 // The registered type names. A name outside this set is unknown-type — unless
@@ -413,6 +417,37 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			md.Keys = append(md.Keys, key)
 		}
 	}
+	compilePattern(md)
+}
+
+// compilePattern builds the `pattern` regexp once, here, so that validation
+// only ever READS a compiled schema.
+//
+// It used to be built lazily at the first match and cached onto the shared
+// *MemberDef. That was an unsynchronized write to a schema reachable from the
+// global plan cache, and the race detector confirms it: two goroutines calling
+// io.Validate on the same struct type race on this field (validate.go read vs
+// write). ADR 0003 D7 promises Marshal/Unmarshal are safe for concurrent use,
+// so this was a correctness bug, not a tuning question.
+//
+// An INVALID pattern is deliberately not a compile error: the reference reports
+// it per value as mismatched-pattern, so the failure is recorded here and
+// raised at the same moment it always was.
+func compilePattern(md *MemberDef) {
+	pat, ok := md.Constraints["pattern"].(string)
+	if !ok {
+		return
+	}
+	flags := ""
+	if f, ok := md.Constraints["flags"].(string); ok && strings.Contains(f, "i") {
+		flags = "(?i)"
+	}
+	re, err := regexp.Compile(flags + pat)
+	if err != nil {
+		md.reBad = true
+		return
+	}
+	md.re = re
 }
 
 // compileOfDef compiles the `of:` value of an object-form array typedef. Its

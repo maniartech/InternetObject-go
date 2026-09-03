@@ -1,6 +1,7 @@
 package internetobject_test
 
 import (
+	"errors"
 	"math/big"
 	"reflect"
 	"strings"
@@ -247,6 +248,43 @@ func TestMarshalConcurrent(t *testing.T) {
 		}()
 	}
 	for i := 0; i < 8; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A `pattern` constraint used to compile its regexp lazily and cache it on the
+// *MemberDef — an unsynchronized write to a schema shared through the global
+// plan cache. `go test -race` reported it here (a read at validateString's
+// `md.re` against a write at the same site); the pattern is now compiled once,
+// at schema-compile time.
+//
+// This gate exists because NO test and no corpus case used a `pattern` through
+// a `schema` tag, so the race shipped unseen. Run under -race to mean anything.
+func TestConcurrentPatternValidation(t *testing.T) {
+	type row struct {
+		Code string `io:"code" schema:"{string, pattern: \"^[A-Z]+$\"}"`
+	}
+	done := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		go func() {
+			for j := 0; j < 40; j++ {
+				if err := io.Validate(row{Code: "ABC"}); err != nil {
+					done <- err
+					return
+				}
+				// A non-matching value must still be reported, from every
+				// goroutine: the shared regexp is read, not consumed.
+				if err := io.Validate(row{Code: "abc"}); err == nil {
+					done <- errors.New("lowercase passed a ^[A-Z]+$ pattern")
+					return
+				}
+			}
+			done <- nil
+		}()
+	}
+	for i := 0; i < 16; i++ {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}

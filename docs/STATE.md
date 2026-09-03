@@ -71,14 +71,17 @@ Six passes, each driven by a profile rather than intuition. Full detail in
 
 | | Start | Now | `encoding/json` |
 | --- | ---: | ---: | ---: |
-| Decode → struct | 5.92 ms · 40,830 allocs | **1.33 ms · 4,060** | 1.92 ms · 6,019 |
+| Decode → struct | 5.92 ms · 40,830 allocs | **1.33 ms · 4,024** | 1.92 ms · 6,019 |
 | Encode ← struct | 5.50 ms · 38,701 allocs | **0.33 ms · 22** | 0.39 ms · 2 |
-| Dynamic parse | 5.19 ms · 31,073 allocs | 3.01 ms · 20,953 | 1.83 ms · 23,013 |
-| Small record (133 B) | 9.6 µs · 84 allocs | 8.2 µs · 51 — **3.5 µs · 30** hoisted | 1.69 µs · 11 |
+| Dynamic parse | 5.19 ms · 31,073 allocs | 3.01 ms · **17,952** | 1.83 ms · 23,013 |
+| Small record (133 B) | 9.6 µs · 84 allocs | **2,144 B · 14** | 480 B · 11 |
 
-(1,000 records × 6 members; min of six runs, 2026-09-03. The small-record row is the one gap
-left worth engineering: 45% of its allocations are a header schema compiled on every call,
-which `ParseSchema` + `UnmarshalWith` already avoids by hand.)
+(1,000 records × 6 members. Allocation counts are current and exact; the ns figures are from
+the last quiet-machine run and predate pass 7, which was measured on allocations only —
+[ADR 0009](decisions/0009-shared-compiled-state.md). **Timings need re-taking on an idle
+machine.** The dynamic parse is now the only operation slower than `encoding/json`; the two
+structural items that would close it are roadmap 10 and 11 in
+[reports/benchmarks.md](reports/benchmarks.md).)
 
 The two structural wins were the same idea applied in both directions: **stop building a
 value tree nobody asked for.** Encode walks the struct straight into the output buffer;

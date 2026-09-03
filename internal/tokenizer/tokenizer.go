@@ -11,11 +11,26 @@ import (
 // token text and positions refer to Stream.Src, not the caller's original.
 func Tokenize(src string) *Stream {
 	s := &scanner{src: normalizeNewlines(src), line: 1, col: 1}
-	// Size the token slice up front. Real documents average well over four
-	// bytes per token (a bare `a,` is the dense extreme), so this lands one
-	// allocation instead of the ~20 doublings an unsized append performs on a
-	// large document — the single largest allocation site in the pipeline.
-	if n := len(s.src) / 4; n > 8 {
+	// Size the token slice up front, so a document lands one allocation instead
+	// of the ~20 doublings an unsized append performs.
+	//
+	// The `+16` is the point, and it is MEASURED (2026-09-03) over documents our
+	// own writer produced. Density is not fixed: it climbs from 3.44 source
+	// bytes per token at one record to 4.00 at a thousand, as a document's
+	// fixed header amortizes away. So `len/4` alone under-shot EVERY document
+	// below ~100 records — the API-payload case — and each of those paid a
+	// doubling plus a copy, which for a 137-byte payload was most of its
+	// allocated bytes.
+	//
+	// A flat margin fixes that band without disturbing the rest, because at
+	// that size the shortfall is a constant (41 tokens wanted, 35 estimated),
+	// not a ratio. Widening the DIVISOR instead was tried and measured worse:
+	// `len/3` costs 6-9% more bytes on large documents, where a third of a big
+	// buffer is real memory. Denser data still (2.7 B/token, nested objects)
+	// out-runs any estimate and is left to append's own growth, which reaches
+	// it in one step. Being wrong upward is the cheap direction regardless:
+	// Token is pointer-free, so a slack buffer is memory the GC never scans.
+	if n := len(s.src)/4 + 16; n > 16 {
 		s.toks = make([]Token, 0, n)
 	}
 	s.run()

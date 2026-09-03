@@ -554,23 +554,13 @@ func validateString(val any, md *MemberDef) any {
 	}
 	switch md.Type {
 	case "string":
-		if pat, ok := md.Constraints["pattern"].(string); ok {
-			re := md.re
-			if re == nil {
-				var err error
-				flags := ""
-				if f, ok := md.Constraints["flags"].(string); ok && strings.Contains(f, "i") {
-					flags = "(?i)"
-				}
-				re, err = regexp.Compile(flags + pat)
-				if err != nil {
-					vfail(errs.MismatchedPattern)
-				}
-				md.re = re
-			}
-			if !re.MatchString(s) {
-				vfail(errs.MismatchedPattern)
-			}
+		// Compiled by compilePattern at schema-compile time — read only, never
+		// written here: this member def is shared across goroutines.
+		if md.reBad {
+			vfail(errs.MismatchedPattern) // the pattern itself would not compile
+		}
+		if md.re != nil && !md.re.MatchString(s) {
+			vfail(errs.MismatchedPattern)
 		}
 	case "email":
 		if !emailRe.MatchString(s) {

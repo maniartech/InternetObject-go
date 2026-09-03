@@ -139,6 +139,25 @@ and each has a fast route held identical to the general route by a differential 
 (`IO_NO_FAST_PATH=1`, `IO_NO_LAZY=1`). Detail in [reports/benchmarks.md](reports/benchmarks.md);
 three reverted experiments are recorded there so nobody retries them.
 
+## Shared compiled state — SHIPPED (ADR 0009, 2026-09-03)
+
+Pushing on the two remaining performance gaps found **a shipped data race** first: a member's
+`pattern` regexp was compiled lazily and cached on the `*MemberDef`, which is reachable from
+the global plan cache, so concurrent `io.Validate` on the same struct type raced. `go test
+-race` confirms it. It survived because no test and no corpus case used a `pattern` through a
+`schema` tag. Now compiled once, at compile time; `TestConcurrentPatternValidation` gates it.
+
+That made compiled state safe to share, which is what the two optimizations needed:
+**the compiled header is memoized** on its text (bounded, `strings.Clone`d key,
+`IO_NO_HEADER_CACHE=1` forces it off) and **the projection is copy-on-write** — a validated
+record projects to itself instead of being deep-cloned, deleting the dynamic path's third
+materialization of every record. Small payload **7,728 B/51 allocs → 2,144 B/14** (JSON: 480/11);
+dynamic parse **−20% bytes, −14% allocs**. `Value()`/`Records()` now return VIEWS — documented
+on both, and the reason renaming keys in place would have been wrong is recorded in the ADR.
+
+Also fixed: `FuzzLazyMatchesTreePath` compared with `reflect.DeepEqual`, so `NaN != NaN` made
+it report two identical decodes as divergent (`N,N,NaN`).
+
 ## Value model — a temporal is `time.Time` (ADR 0008, 2026-09-03)
 
 `io.Temporal` is **gone**, along with `TemporalKind`, the three `Kind*` constants and the three
@@ -163,10 +182,14 @@ Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
 3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
    the fuzz corpora only protect the port if something runs them. Highest-value non-code item
    ([STATE.md](STATE.md) §5).
-4. **Perf item 8 — cache the compiled schema** across `Unmarshal` calls. The only measured,
-   unclaimed win left (small-payload decode −55%); everything else on the roadmap is either
-   done or speculative. See [reports/benchmarks.md](reports/benchmarks.md).
-5. Retrospective for the Rust port (definition of done, item 4).
+4. **Re-time on an idle machine.** Pass 7 was measured on allocation counts only — the bench
+   machine sat at 79-96% external load all day, so no timing from 2026-09-03 is trustworthy.
+   The allocation numbers are exact and stand; the ns/op column in
+   [reports/benchmarks.md](reports/benchmarks.md) predates the pass.
+5. **Perf items 10-11** — arena-allocate `[]value.Member` (ADR 0006 P4), then frame the data
+   instead of building the parser's tree. The dynamic parse is the only operation still slower
+   than `encoding/json`, and these are what would close it.
+6. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 

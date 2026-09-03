@@ -1,7 +1,8 @@
 package internetobject_test
 
 import (
-	"reflect"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,6 +58,36 @@ func decodeBothWays(t *testing.T, src string) (lazyRows, treeRows []lazyRow, laz
 	return a, b, lazyErr, treeErr
 }
 
+// equalRows compares two decodes of the same document, treating NaN as equal
+// to itself.
+//
+// reflect.DeepEqual cannot: NaN != NaN by IEEE-754, so it called two IDENTICAL
+// decodes different the moment a document contained `NaN` — the fuzzer found
+// `N,N,NaN` and reported a divergence whose two sides printed the same. The
+// format's own comparator has always treated NaN as equal to itself
+// (value.Equal), and this is that rule applied to the bound Go structs.
+//
+// It is otherwise EXACTLY as strict as DeepEqual, deliberately: a nil slice
+// and an empty one stay different, because "lazy returned nil where the tree
+// returned empty" is precisely the kind of divergence this fuzzer exists for.
+func equalRows(a, b []lazyRow) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		switch {
+		case x.Name != y.Name, x.Age != y.Age, x.Active != y.Active:
+			return false
+		case (x.Tags == nil) != (y.Tags == nil), !slices.Equal(x.Tags, y.Tags):
+			return false
+		case x.Score != y.Score && !(math.IsNaN(x.Score) && math.IsNaN(y.Score)):
+			return false
+		}
+	}
+	return true
+}
+
 // errText reduces an error to its designated codes, which are the contract;
 // messages and positions are compared separately where they matter.
 func errText(err error) string {
@@ -73,7 +104,7 @@ func TestLazyMatchesTreePath(t *testing.T) {
 			t.Errorf("doc %d error differs:\n lazy %q\n tree %q\n src %q", i, lazyErr, treeErr, src)
 			continue
 		}
-		if !reflect.DeepEqual(lazy, tree) {
+		if !equalRows(lazy, tree) {
 			t.Errorf("doc %d values differ:\n lazy %#v\n tree %#v\n src %q", i, lazy, tree, src)
 		}
 	}
@@ -131,7 +162,7 @@ func FuzzLazyMatchesTreePath(f *testing.F) {
 		if lazyErr != treeErr {
 			t.Fatalf("error differs:\n lazy %q\n tree %q\n src %q", lazyErr, treeErr, src)
 		}
-		if !reflect.DeepEqual(lazy, tree) {
+		if !equalRows(lazy, tree) {
 			t.Fatalf("values differ:\n lazy %#v\n tree %#v\n src %q", lazy, tree, src)
 		}
 	})

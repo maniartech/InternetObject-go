@@ -8,10 +8,15 @@ windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$' -cou
 **We were 2.7×–12.8× slower than `encoding/json`. Six optimization passes closed it: on the
 typed path — the one real applications use — io-go now BEATS `encoding/json` in both
 directions, decoding 1.45× faster with a third fewer allocations and encoding 1.17× faster
-with 22 allocations against JSON's 2. Both directions shed ~90% of their allocations.** Two
-gaps remain, both understood and localized: the **dynamic** parse (1.65× slower) and the
-**small single-record** payload (4.9×, of which 58% is a per-call schema compile — see
-[Small payloads](#the-remaining-gap-2--small-payloads-pay-for-the-schema-every-call)).
+with 22 allocations against JSON's 2. Both directions shed ~90% of their allocations.**
+
+**Pass 7 then closed the small-payload gap** — a 133-byte record decodes in 2,144 B and 14
+allocations, down 72% and 73%, against `encoding/json`'s 480 B and 11 — and took 20% off the
+dynamic path's bytes. It also turned up **a shipped data race** in `pattern` validation, which
+is the more important finding of the two ([ADR 0009](../decisions/0009-shared-compiled-state.md)).
+What remains slower than JSON is the **dynamic** parse alone, and the two structural items that
+would close it are named in the roadmap.
+
 The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
 competitive with any JSON parser. Everything above it is where the time goes.
 
@@ -28,6 +33,23 @@ against 114 KB of equivalent JSON, decoded into the same Go structs.
 | Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | 1.65 ms · 17,009 | 1.65 ms · 17,009 | **1.37 ms · 14,009** | — | — |
 | Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | 8.6 µs · 61 | 8.6 µs · 61 | **8.2 µs · 51** | 1.69 µs · 11 | 4.9× |
 | …with the schema hoisted | — | — | — | — | — | **3.5 µs · 30** | 1.69 µs · 11 | 2.1× |
+
+**Pass 7 (2026-09-03) — allocations only**, because the bench machine was under 79-96% external
+load all day and no timing taken then is worth recording. Allocation counts are exact and
+load-independent, and this project gates on them for that reason:
+
+| Operation | pass 6 | **pass 7** | `encoding/json` | allocs vs JSON |
+| --------- | -----: | ---------: | --------------: | -------------: |
+| Small record (133 B) decode | 7,728 B · 51 allocs | **2,144 B · 14** | 480 B · 11 | **1.3×** |
+| Parse → dynamic | 1,824,815 B · 20,953 | **1,456,610 B · 17,952** | 728,785 B · 23,013 | **0.78×** |
+| Unmarshal → struct | 1,150,107 B · 4,060 | **1,145,606 B · 4,024** | 390,810 B · 6,019 | **0.67×** |
+| Marshal ← struct | 180,920 B · 22 | 180,925 B · 22 | 114,995 B · 2 | 11× |
+
+The small payload shed **72% of its bytes and 73% of its allocations**, taking it from 4.6× to
+1.3× `encoding/json`'s allocation count while still doing schema binding and per-member
+validation JSON does not do. The dynamic parse shed 20% of its bytes. Detail in
+[ADR 0009](../decisions/0009-shared-compiled-state.md); timings need re-taking on a quiet
+machine.
 
 The "Now" column is a fresh 6-run measurement taken 2026-09-03 after the temporal refactor
 ([ADR 0008](../decisions/0008-temporal-is-time-time.md)); allocation counts are unchanged from
@@ -87,7 +109,11 @@ values — where `encoding/json` does one.
 **The scanner is exonerated.** `BenchmarkTokenize`: **44.5 µs, 143.8 MB/s, 3 allocs** for the
 same 64 KB. Tokenization is ~3% of decode time. Nothing about the *format* is slow.
 
-### The remaining gap 2 — small payloads pay for the schema every call
+### Gap 2 — small payloads paid for the schema every call (FIXED in pass 7)
+
+> The diagnosis below is what led to the fix. `headerFor` now memoizes the compiled header, so
+> `Unmarshal` no longer pays this: the row is **2,144 B · 14 allocs**, better than the
+> hand-hoisted number this section proposed as the prize. Kept for the reasoning.
 
 The 133-byte single-record case is our worst ratio (4.9× JSON), and an allocation profile
 taken 2026-09-03 names the reason: **the header schema is parsed and compiled on every
@@ -112,6 +138,38 @@ on the header text would collect most of the same win automatically. Filed as ro
 
 The residual 2.1× after hoisting is the honest floor of doing more work — schema binding and
 per-member validation with designated codes — on a payload too small to amortize anything.
+
+## What changed — pass 7 (the two gaps, and a race found on the way)
+
+Attacking the two remaining gaps meant profiling the two benchmarks that never had been. Full
+rationale in [ADR 0009](../decisions/0009-shared-compiled-state.md); in short:
+
+1. **A shipped data race, fixed first.** A member's `pattern` regexp was compiled lazily and
+   cached on the `*MemberDef` — which is reachable from the global plan cache, so two
+   goroutines calling `io.Validate` on the same struct type wrote it concurrently. `go test
+   -race` confirms it. It survived because **no test and no corpus case used a `pattern`
+   through a `schema` tag**; the existing concurrency test exercised everything except the one
+   field that was written. The regexp is now built once, at compile time. This was a
+   prerequisite for anything that shares a compiled schema, not merely a tidy-up.
+2. **The compiled header is memoized** (`headerFor`), because it was being re-parsed and
+   re-compiled on every call: ~45% of a 133-byte payload's allocations, invisible at 1,000
+   records. Bounded by header size and entry count, keyed on `strings.Clone`d header text so a
+   small header cannot pin a large document, and forced off by `IO_NO_HEADER_CACHE=1`.
+3. **The projection is copy-on-write.** Projecting drops absent slots and numbers unkeyed
+   members; a validated record has neither, so it now projects to itself instead of being
+   deep-cloned. That deleted the dynamic path's *third* full materialization of every record.
+   The cost is a public contract change — `Value()` and `Records()` return views, documented on
+   both.
+4. **The token-slice estimate gained a flat `+16`.** Density is not constant: measured over our
+   own writer's output it climbs from 3.44 bytes/token at one record to 4.00 at a thousand, so
+   `len/4` under-shot *every* document below ~100 records and each paid a doubling plus a copy.
+   Widening the divisor to `len/3` was tried and **measured worse** (+6-9% bytes on large
+   documents); a constant margin fixes the small band without touching the rest.
+
+**A fuzzer false positive was fixed too.** `FuzzLazyMatchesTreePath` compared decodes with
+`reflect.DeepEqual`, which calls `NaN != NaN` — so it reported two *identical* decodes as
+divergent the moment a document contained `NaN` (`N,N,NaN`). The comparator is now NaN-aware
+and otherwise exactly as strict, keeping nil-vs-empty slices distinct.
 
 ## What changed — pass 6 (encode: the last of the per-value work)
 
@@ -266,10 +324,13 @@ Ordered by value per unit of risk. Estimates are from the profiles, not measured
 | 5b | **Tune the token-slice heuristic** (`len/4`) against real documents; over-allocation is now visible in the profile | Decode bytes −10% | Low |
 | 6 | **Reuse buffers across calls** (`sync.Pool` for token slices and the writer's builder) | Both −10…20% | Medium |
 | 7 | **Generated code (`iogen`)** removes reflection entirely from the struct path | Encode/decode −30…50% on top | Larger project |
-| 8 | **Cache the compiled schema** across `Unmarshal` calls, keyed on the header text — measured at 45% of a small payload's allocations, and hoisting by hand already proves 2.4× | Small-payload decode −55% | Low–medium (cache keying and invalidation are the whole risk) |
-| 9 | **Dynamic parse** is the last operation slower than JSON (1.65×) and the only one never given a pass of its own; item 4 (`Project()` deep-clone) is still unclaimed | Dynamic −30% | Low |
+| ~~8~~ | ~~Cache the compiled schema across `Unmarshal` calls~~ | **DONE (pass 7)** — small payload −72% bytes, −73% allocs | landed; ADR 0009 D2 |
+| ~~9~~ | ~~`Project()` deep-clone~~ | **DONE (pass 7)** — dynamic −20% bytes, −14% allocs | landed; ADR 0009 D3 |
+| 10 | **Arena-allocate `[]value.Member`** (ADR 0006 P4, still unclaimed). `parser.go`'s `make([]value.Member, 0, 8)` per record and `assemble`'s per-record slice are now the two largest remaining allocation sites on the dynamic path. Note the objection recorded at `assemble` does NOT apply: an arena still yields a *fresh* Object, so no reference cycle is possible — only the backing array is shared | Dynamic −8…15% | Medium |
+| 11 | **Frame the data instead of building the parser's tree**, materializing the tree once (validated) with `Project` as the view it now already is. The only version where the dynamic path costs one tree instead of two | Dynamic, structural | Larger |
 
-Items 8 and 9 are what is left. Note the bar: `encoding/json` is *not* the fastest Go JSON
+Items 10 and 11 are what is left on the dynamic path; the typed path and the small payload are
+done. Note the bar: `encoding/json` is *not* the fastest Go JSON
 implementation (`json/v2`, `sonic` and `go-json` beat it substantially), so "parity with
 encoding/json" is the floor for a format that wants to lead, not the finish line.
 

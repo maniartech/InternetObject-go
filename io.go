@@ -201,6 +201,12 @@ func Parse(src string) (*Document, error) {
 // Value returns the document's projected live value: an *Object, a []any of
 // records, a scalar, or nil for an empty document. Positional members carry
 // their index as a numeric-string key.
+//
+// The projection is a VIEW, not a copy. Projecting only drops absent slots and
+// numbers unkeyed members, so wherever it would change nothing — which is
+// every schema-validated record — the document's own values are returned as
+// they are. Mutating what Value returns can therefore change what String
+// writes; copy first if you need the two independent.
 func (d *Document) Value() any {
 	return d.doc.Project()
 }
