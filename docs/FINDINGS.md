@@ -195,6 +195,28 @@ Status legend: **open** = not yet reported/resolved upstream.
 
 ## Go-specific notes (not upstream defects)
 
+- **A temporal is a plain `time.Time`; the kind is not kept on the value.** PORTING-NOTES
+  rule 15 asks a host to keep `date` / `time` / `datetime` distinct end to end. Rule 15
+  scopes itself to a **kinded host** — Rust's `Temporal`, Python's `date`/`time`/`datetime`,
+  JS's tagged wrapper — and names the three types it expects to find there. Go's standard
+  library has exactly one temporal type, so this port decodes all three literals to
+  `time.Time` and treats the kind as **presentational**, the same class of fact as a string's
+  open / raw / quoted spelling, which no host keeps either.
+
+  The evidence that the kind is presentational rather than semantic is in the reference, not
+  in convenience: validation states outright that "the three temporal kinds are
+  interchangeable at the type check" — a `date` satisfies `datetime` and vice versa — and the
+  corpus comparator compares temporals **by instant**, with the kind ignored. Nothing in the
+  format's semantics can observe the difference.
+
+  So the kind is decided on WRITE, where a spelling decision belongs. When the member
+  declares a temporal type the schema supplies it, which in a schema-first format is the
+  normal case and is lossless — a midnight `datetime` stays a `datetime`, a 1900-01-01 `date`
+  stays a `date`. Only an **undeclared** temporal is spelled from its instant, exactly as the
+  reference infers one, and the writer's `InferTemporalKind` is the single site that does it.
+  `temporal_test.go` pins all four behaviors. Reported here because it is a deliberate
+  divergence from the letter of rule 15, not because the rule is wrong for kinded hosts.
+
 - **Lone UTF-16 surrogates.** JS strings can hold a lone surrogate from `\uD83D`; Go strings
   cannot. This port decodes a lone surrogate escape to U+FFFD. If a corpus case ever asserts a
   lone-surrogate value, it is asserting a JavaScript accident and needs an upstream decision.

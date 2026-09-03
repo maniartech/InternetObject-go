@@ -73,4 +73,7 @@ makes each such decision exactly once, in one exported function, from day one:
 - **Decimal representation** (scale is part of the value; a float is forbidden) — phase 2.
 - **BigInt** — `math/big.Int` — phase 2.
 - **Temporal kinds** (`date`/`time`/`datetime` stay distinct end to end) — phase 2 value model.
+  **Superseded 2026-09-03 by [ADR 0008](0008-temporal-is-time-time.md):** the kind is
+  presentational (validation treats the three as interchangeable, the corpus compares by
+  instant), so a temporal is a plain `time.Time` and the kind is chosen on write.
 - **Public API shape, recovery idiom, live-vs-JSON projection** — post-phase-2 ADR.

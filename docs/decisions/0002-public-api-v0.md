@@ -29,15 +29,17 @@ Error codes are the conformance contract; `Error.Code` is the designated kebab-c
 ### D3. The two projections
 
 - `Document.Value() any` — the **live** value model: `*Object` (ordered members), `[]any`,
-  `string`, `float64`, `*big.Int`, `Decimal`, `[]byte`, `Temporal`, `bool`, `nil`. Decimal
-  scale and temporal kind survive.
+  `string`, `float64`, `*big.Int`, `Decimal`, `[]byte`, `time.Time`, `bool`, `nil`. Decimal
+  scale survives on the value; the temporal kind is a write-time spelling
+  ([ADR 0008](0008-temporal-is-time-time.md) — this line read `Temporal` until 2026-09-03).
 - `Document.String() string` — canonical Internet Object text, round-trip safe (the corpus's
   three writer properties).
 - A JSON-safe projection (`MarshalJSON`) is **deferred**: its spellings for decimal, bigint,
   binary and temporals must be oracle-derived first, not guessed.
 
-Value types are exported as aliases of the internal model (`Object`, `Member`, `Decimal`,
-`Temporal`), so the pipeline and the public surface cannot drift.
+Value types are exported as aliases of the internal model (`Object`, `Member`, `Decimal`), so
+the pipeline and the public surface cannot drift. A temporal needs no alias — it is `time.Time`
+([ADR 0008](0008-temporal-is-time-time.md)).
 
 ### D4. Streaming is an iterator
 

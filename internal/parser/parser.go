@@ -476,14 +476,10 @@ func (p *parser) parseValue() any {
 	case tokenizer.KindBinary:
 		return p.s.Bytes(t)
 	case tokenizer.KindDateTime:
-		kind := value.KindDateTime
-		switch t.Sub {
-		case tokenizer.SubDate:
-			kind = value.KindDate
-		case tokenizer.SubTime:
-			kind = value.KindTime
-		}
-		return value.Temporal{Time: p.s.Temporal(t), Kind: kind}
+		// A temporal decodes to a plain time.Time: the three literals are
+		// spellings of one value, and the writer re-picks a spelling on
+		// output (value.TimeAnchor documents the decision).
+		return p.s.Temporal(t)
 	case tokenizer.KindString:
 		// An @-string stays a string here; variable references resolve
 		// lazily, at validation or projection, so definition order and

@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"time"
 )
 
 // Equal implements the corpus's structural equality (CONFORMANCE §4, reduced
@@ -59,9 +60,9 @@ func Equal(a, b any) bool {
 			return bytesEqualNumbers(x, y)
 		}
 		return false
-	case Temporal:
-		y, ok := b.(Temporal)
-		return ok && x.Time.UnixMilli() == y.Time.UnixMilli()
+	case time.Time:
+		y, ok := b.(time.Time)
+		return ok && x.UnixMilli() == y.UnixMilli()
 	case ErrorNode:
 		y, ok := b.(ErrorNode)
 		return ok && x == y

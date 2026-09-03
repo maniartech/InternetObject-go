@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/value"
@@ -173,14 +174,8 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 		}
 		return typeMismatch(at, v, t)
 	case t == timeType:
-		if tm, ok := v.(Temporal); ok {
-			rv.Set(reflect.ValueOf(tm.Time.UTC()))
-			return nil
-		}
-		return typeMismatch(at, v, t)
-	case t == temporalType:
-		if tm, ok := v.(Temporal); ok {
-			rv.Set(reflect.ValueOf(tm))
+		if tm, ok := v.(time.Time); ok {
+			rv.Set(reflect.ValueOf(tm.UTC()))
 			return nil
 		}
 		return typeMismatch(at, v, t)

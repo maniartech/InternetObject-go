@@ -54,24 +54,16 @@ type (
 	Member = value.Member
 	// Decimal is an exact fixed-point value; its scale is part of the value.
 	Decimal = value.Decimal
-	// Temporal is a date, time or datetime; the kind stays distinct.
-	Temporal = value.Temporal
-	// TemporalKind distinguishes the three temporal literals. A value KEEPS
-	// the kind it carries end to end: a midnight datetime is not a date, and
-	// a 1900-01-01 date is not a time of day.
-	TemporalKind = value.TemporalKind
 	// ErrorItem stands in for a record that failed, INSIDE projected data:
 	// the row keeps its position and carries this marker instead of a value,
 	// so the good records around it are untouched. Test for it with IsError.
 	ErrorItem = value.ErrorNode
 )
 
-// The temporal kinds, so a caller can name the one a value carries.
-const (
-	KindDate     = value.KindDate
-	KindTime     = value.KindTime
-	KindDateTime = value.KindDateTime
-)
+// TimeAnchor is the date a time-of-day carries. The format has no bare clock
+// type, so `t"14:30"` is this date at that clock — the reference's convention,
+// and what makes two implementations agree on the instant.
+var TimeAnchor = value.TimeAnchor
 
 // IsError reports whether a projected value is a failed record.
 //

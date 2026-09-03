@@ -348,7 +348,7 @@ func (d *Doc) constraintValue(v any) string {
 		return x.String() + "n"
 	case value.Decimal:
 		return x.String() + "m"
-	case value.Temporal:
+	case time.Time:
 		return temporalLiteral(x, "")
 	case []any:
 		var elems []string
@@ -524,7 +524,7 @@ func (d *Doc) appendValueWithDef(dst []byte, v any, md *schema.MemberDef) []byte
 	if v == nil {
 		return append(dst, 'N')
 	}
-	if t, ok := v.(value.Temporal); ok {
+	if t, ok := v.(time.Time); ok {
 		switch md.Type {
 		case "date", "time", "datetime":
 			return appendTemporal(dst, t, md.Type)
@@ -574,7 +574,7 @@ func (d *Doc) appendValue(dst []byte, v any, md *schema.MemberDef) []byte {
 		dst = append(dst, 'b', '"')
 		dst = base64.StdEncoding.AppendEncode(dst, x)
 		return append(dst, '"')
-	case value.Temporal:
+	case time.Time:
 		return appendTemporal(dst, x, "")
 	case string:
 		return appendAutoString(dst, x)
@@ -634,22 +634,15 @@ func appendIONumber(dst []byte, f float64) []byte {
 
 // appendTemporal is temporalLiteral in append form: time.AppendFormat writes
 // straight into the buffer, so no intermediate string is built.
-func appendTemporal(dst []byte, t value.Temporal, declared string) []byte {
-	u := t.Time.UTC()
+func appendTemporal(dst []byte, t time.Time, declared string) []byte {
+	u := t.UTC()
+	// The SCHEMA names the spelling when the member declares one — the normal
+	// case in a schema-first format, and it loses nothing. An undeclared
+	// temporal is spelled from what its instant evidences, the same
+	// normalization the writer applies to a string's open/raw/quoted form.
 	kind := declared
 	if kind == "" {
-		// The value KEEPS the kind it carries; inferring from the instant
-		// loses it, and silently — a midnight datetime came back as a date
-		// and a 1900-01-01 date as a time-of-day (PORTING-NOTES rule 15).
-		// The reference infers only because a JS Date has no kind to keep.
-		switch t.Kind {
-		case value.KindDate:
-			kind = "date"
-		case value.KindTime:
-			kind = "time"
-		default:
-			kind = "datetime"
-		}
+		kind = InferTemporalKind(u)
 	}
 	switch kind {
 	case "date":
@@ -690,7 +683,7 @@ func InferTemporalKind(u time.Time) string {
 // kind the value itself evidences when none is declared: the 1900-01-01
 // sentinel date is a time, an all-zero time is a date, anything else a
 // datetime.
-func temporalLiteral(t value.Temporal, declared string) string {
+func temporalLiteral(t time.Time, declared string) string {
 	return string(appendTemporal(nil, t, declared))
 }
 
@@ -1187,7 +1180,7 @@ func AppendString(dst []byte, s string) []byte { return appendAutoString(dst, s)
 func AppendNumber(dst []byte, f float64) []byte { return appendIONumber(dst, f) }
 
 // AppendTemporalValue appends a temporal under the declared kind ("" to infer).
-func AppendTemporalValue(dst []byte, t value.Temporal, declared string) []byte {
+func AppendTemporalValue(dst []byte, t time.Time, declared string) []byte {
 	return appendTemporal(dst, t, declared)
 }
 

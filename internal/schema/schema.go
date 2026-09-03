@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/value"
@@ -493,7 +494,7 @@ func checkConstraintValue(typeName, key string, v any) {
 			_, ok := v.(value.Decimal)
 			expect(errs.ExpectedDecimal, ok)
 		case famTemporal:
-			_, ok := v.(value.Temporal)
+			_, ok := v.(time.Time)
 			expect(errs.ExpectedDateTime, ok)
 		case famBool:
 			_, ok := v.(bool)

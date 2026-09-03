@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
@@ -182,8 +183,8 @@ func show(b *strings.Builder, v any) {
 		fmt.Fprintf(b, "dec(%s,%d)", x.Coef.String(), x.Scale)
 	case []byte:
 		fmt.Fprintf(b, "bytes(%x)", x)
-	case value.Temporal:
-		b.WriteString(x.Time.UTC().Format("2006-01-02T15:04:05.000Z"))
+	case time.Time:
+		b.WriteString(x.UTC().Format("2006-01-02T15:04:05.000Z"))
 	case value.ErrorNode:
 		fmt.Fprintf(b, "errorNode(%s)", x.Code)
 	case []any:

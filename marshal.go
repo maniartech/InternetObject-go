@@ -152,7 +152,6 @@ const (
 	encBigInt
 	encDecimal
 	encTime
-	encTemporal
 	encBytes
 	encSlice
 )
@@ -169,8 +168,6 @@ func encKindOf(t reflect.Type) encKind {
 		return encDecimal
 	case timeType:
 		return encTime
-	case temporalType:
-		return encTemporal
 	case bytesType:
 		return encBytes
 	}
@@ -411,7 +408,6 @@ var (
 	// bigIntType.Elem() per value showed up in the profile.
 	bigIntElemType = reflect.TypeOf(big.Int{})
 	decimalType    = reflect.TypeOf(Decimal{})
-	temporalType   = reflect.TypeOf(Temporal{})
 	timeType       = reflect.TypeOf(time.Time{})
 	bytesType      = reflect.TypeOf([]byte(nil))
 	anyType        = reflect.TypeOf((*any)(nil)).Elem()
@@ -434,9 +430,9 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool, 
 			return kind, nil
 		}
 		return "datetime", nil
-	case t == temporalType, t == bytesType, t == anyType:
-		// A Temporal's kind and a []byte are value-level facts; `any` admits
-		// them (there is no `bytes` schema type in the format).
+	case t == bytesType, t == anyType:
+		// Binary is a value-level fact with no schema type of its own, so the
+		// derived schema admits it as `any`.
 		return "any", nil
 	}
 	switch t.Kind() {
@@ -599,16 +595,9 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		}
 		return Decimal{Coef: coef, Scale: d.Scale}, nil
 	case t == timeType:
-		k := value.KindDateTime
-		switch kind {
-		case "date":
-			k = value.KindDate
-		case "time":
-			k = value.KindTime
-		}
-		return Temporal{Time: rv.Interface().(time.Time).UTC(), Kind: k}, nil
-	case t == temporalType:
-		return rv.Interface().(Temporal), nil
+		// A temporal value IS a time.Time; the `,date` / `,time` tag chooses
+		// the spelling, which the writer applies from the schema.
+		return rv.Interface().(time.Time).UTC(), nil
 	case t == bytesType:
 		return append([]byte(nil), rv.Bytes()...), nil
 	}
@@ -672,7 +661,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 // isModelStruct reports the value-model structs, which marshal as VALUES, not
 // as records with fields.
 func isModelStruct(t reflect.Type) bool {
-	return t == decimalType || t == temporalType || t == timeType
+	return t == decimalType || t == timeType
 }
 
 func isStructElem(t reflect.Type) bool {

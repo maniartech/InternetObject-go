@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 	"github.com/maniartech/InternetObject-go/internal/value"
@@ -41,16 +42,7 @@ func decodeRaw(s *tokenizer.Stream, m RawMember) (any, bool) {
 	case tokenizer.KindBinary:
 		return s.Bytes(t), true
 	case tokenizer.KindDateTime:
-		// The temporal KIND is the token's sub-kind — exactly the
-		// distinction RawMember.Sub carries.
-		k := value.KindDateTime
-		switch m.Sub {
-		case tokenizer.SubDate:
-			k = value.KindDate
-		case tokenizer.SubTime:
-			k = value.KindTime
-		}
-		return value.Temporal{Time: s.Temporal(t), Kind: k}, true
+		return s.Temporal(t), true
 	}
 	return nil, false // a container: compared structurally below
 }
@@ -71,9 +63,9 @@ func sameScalar(a, b any) bool {
 	case []byte:
 		y, ok := b.([]byte)
 		return ok && string(x) == string(y)
-	case value.Temporal:
-		y, ok := b.(value.Temporal)
-		return ok && x.Kind == y.Kind && x.Time.Equal(y.Time)
+	case time.Time:
+		y, ok := b.(time.Time)
+		return ok && x.Equal(y)
 	}
 	return a == b
 }

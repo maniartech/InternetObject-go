@@ -60,7 +60,7 @@ func IsError(v any) bool
 type Document  // Value, Records, Errors, Schema, SchemaOf, String
 type Schema    // MemberNames, Open, String
 type Error, ErrorList, ErrorItem, StreamItem, StreamOptions
-type Object, Member, Decimal, Temporal   // the value model
+type Object, Member, Decimal             // the value model
 type MarshalError, UnmarshalError        // binding faults, distinct from wire faults
 ```
 
@@ -159,7 +159,7 @@ null → choices → type → declared bounds → intrinsic bounds → multipleO
 
 ### 3.3 The value model is native Go, everywhere it can be
 
-Every wire type decodes to the Go type a developer would have chosen. Only two carry
+Every wire type decodes to the Go type a developer would have chosen. Exactly **one** carries
 anything extra, and only because the standard library has no equivalent:
 
 | IO | Go | |
@@ -172,23 +172,18 @@ anything extra, and only because the standard library has no equivalent:
 | null | `nil` | native |
 | array | `[]any` | native |
 | record | `*Object` | ordered members — a Go map cannot keep order or positional members |
-| date/time/datetime | `Temporal` | **embeds `time.Time`** — it IS one, plus the kind |
+| date/time/datetime | `time.Time` | native (stdlib) — one value, three spellings |
 | decimal | `Decimal` | `*big.Int` coefficient + scale — **decided 2026-09-03 to stay** (below) |
 
-**`Temporal` is not an invented parallel type.** It embeds `time.Time`, so every method
-promotes and it is assignable to one:
+**A temporal is a plain `time.Time`** (decided 2026-09-03 — there is no wrapper type to learn,
+no `.Time` to reach through, and no conversion at the boundary):
 
 ```go
-tm := rec.Members[6].Value.(io.Temporal)
-tm.Year()            // 2024        — promoted from time.Time
-tm.Format("2006-01-02")
+tm := rec.Members[6].Value.(time.Time)
+tm.Year()                      // 2024
 tm.Before(time.Now())
-var t time.Time = tm.Time
-tm.Kind              // io.KindDate — the one thing time.Time cannot express
+var t time.Time = tm           // it already is one
 ```
-
-And on the struct path — what most code uses — the type never appears at all: a plain
-`time.Time` field binds straight from the wire.
 
 **`Decimal` stays** (decided 2026-09-03). It is the only carrier type left, and it has no
 native alternative: `big.Float` is binary and cannot hold `0.1` exactly, and `big.Rat` has no
@@ -196,27 +191,42 @@ scale — so `1.50m` and `1.5m` would become the same value and the trailing zer
 on write. Preserving scale is a property of the format, not an implementation choice, so the
 carrier is required rather than invented.
 
-### 3.3.1 Why the kind cannot simply be dropped
+### 3.3.1 Where the temporal kind lives instead
 
-`d"2024-03-20"` decodes to `io.Temporal{T time.Time, Kind TemporalKind}` — a **real
-`time.Time`**, usable directly (`tm.T.Year()`, comparisons, arithmetic), with the kind kept
-alongside because Go's `time.Time` cannot express "this is a date, not a midnight instant".
+The three literals decode to one Go type. The date anchor for a time-of-day is 1900-01-01 —
+the reference's convention, so instants compare across implementations:
 
 ```go
-d"2024-03-20"                 → Temporal{T: 2024-03-20T00:00:00Z, Kind: KindDate}
-t"14:30:45.123"               → Temporal{T: 1900-01-01T14:30:45.123Z, Kind: KindTime}
-dt"2024-03-20T14:30:45.123Z"  → Temporal{T: 2024-03-20T14:30:45.123Z, Kind: KindDateTime}
+d"2024-03-20"                 → 2024-03-20T00:00:00Z
+t"14:30:45.123"               → 1900-01-01T14:30:45.123Z
+dt"2024-03-20T14:30:45.123Z"  → 2024-03-20T14:30:45.123Z
 ```
 
-A `time.Time` struct field binds straight from the wire, and `io:",date"` / `io:",time"`
-choose which literal it writes back as. A time-of-day uses 1900-01-01 as its date anchor —
-the reference's convention, so instants compare across implementations.
+The kind is **presentational** — the same class of fact as a string's open / raw / quoted
+spelling, which the value model does not keep either. The reference proves this rather than
+merely suggesting it: validation says the three kinds are "interchangeable at the type check"
+(a `date` satisfies `datetime` and vice versa), and the corpus comparator compares temporals
+by instant with the kind ignored. Nothing in the format's semantics can tell them apart.
 
-**The kind is carried, never inferred** (PORTING-NOTES rules 15 and 18). Inferring it from
-the instant — which the reference must do, because a JavaScript `Date` has no kind — silently
-turned a midnight datetime into a date and a 1900-01-01 date into a time of day. This port
-had that bug until 2026-09-03; `temporal_kind_test.go` is the gate, since no corpus case
-covers it.
+So the kind is decided on **write**, where a spelling decision belongs:
+
+| the member is | the spelling comes from | lossless? |
+| -- | -- | -- |
+| declared `date` / `time` / `datetime` in a schema | the schema | **yes** — the normal case |
+| a `time.Time` field tagged `io:",date"` / `io:",time"` | the tag | **yes** |
+| undeclared (schemaless document) | `InferTemporalKind`, from the instant | normalized, like a string's spelling |
+
+Only the third row normalizes, and there is nothing to normalize *from* — a schemaless
+document has never stated which of three interchangeable spellings it meant. `temporal_test.go`
+pins all three rows plus the instant round trip. The deliberate divergence from the letter of
+PORTING-NOTES rule 15 (which scopes itself to kinded hosts) is recorded in
+[FINDINGS.md](FINDINGS.md).
+
+**Earlier design, superseded.** This port shipped an `io.Temporal{Time, Kind}` carrier until
+2026-09-03, on the reading that rule 15 required the kind on the value. Dropping it removed a
+type, a kind enum and three constructors from the public surface, and removed a `.Time`
+indirection from every caller. Benchmarks were unchanged (both types box into an `any`
+identically), so this bought API surface, not speed.
 
 ### 3.4 Known limits in the schema layer
 

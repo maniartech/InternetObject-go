@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/value"
@@ -790,27 +791,27 @@ func validateTemporal(val any, md *MemberDef, defs Defs) any {
 	case "time":
 		expected = errs.ExpectedTime
 	}
-	t, ok := val.(value.Temporal)
+	t, ok := val.(time.Time)
 	if !ok {
 		// the three temporal kinds are interchangeable at the type check;
 		// anything else — including a deferred malformed literal — is not
 		vfail(expected)
 	}
-	bound := func(key string) (value.Temporal, bool) {
+	bound := func(key string) (time.Time, bool) {
 		v, ok := md.Constraints[key]
 		if !ok {
-			return value.Temporal{}, false
+			return time.Time{}, false
 		}
-		tt, ok := resolveRef(v, defs).(value.Temporal)
+		tt, ok := resolveRef(v, defs).(time.Time)
 		if !ok {
 			vfail(errs.ExpectedDateTime)
 		}
 		return tt, true
 	}
-	if m, ok := bound("min"); ok && t.Time.UnixMilli() < m.Time.UnixMilli() {
+	if m, ok := bound("min"); ok && t.UnixMilli() < m.UnixMilli() {
 		vfail(errs.MismatchedMin)
 	}
-	if m, ok := bound("max"); ok && t.Time.UnixMilli() > m.Time.UnixMilli() {
+	if m, ok := bound("max"); ok && t.UnixMilli() > m.UnixMilli() {
 		vfail(errs.MismatchedMax)
 	}
 	return val // the original box; see validateString

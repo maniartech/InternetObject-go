@@ -128,16 +128,37 @@ marker is exported as `io.ErrorItem` with a type-based `io.IsError` (data cannot
 `errors.Is`. Nine dedicated tests gate all of it — the corpus asserts codes only, in every
 implementation, so these are the ONLY gate that exists for positions (FINDINGS #16).
 
+## Performance — SHIPPED (ADR 0006 + 0007)
+
+Decode → struct **1.65 ms / 4,060 allocs** (from 5.92 ms / 40,830), beating `encoding/json`'s
+2.40 ms / 6,019. Encode ← struct **0.37 ms / 22 allocs** (from 5.50 ms / 38,701) against
+0.42 ms / 2. Both directions got the same idea — stop building a value tree nobody asked for —
+and each has a fast route held identical to the general route by a differential fuzzer
+(`IO_NO_FAST_PATH=1`, `IO_NO_LAZY=1`). Detail in [reports/benchmarks.md](reports/benchmarks.md);
+three reverted experiments are recorded there so nobody retries them.
+
+## Value model — a temporal is `time.Time` (ADR 0008, 2026-09-03)
+
+`io.Temporal` is **gone**, along with `TemporalKind`, the three `Kind*` constants and the three
+constructors. All three literals decode to a native `time.Time`; the `date`/`time`/`datetime`
+spelling is chosen on write — by the schema when the member declares a temporal type, by the
+`io:",date"` / `io:",time"` tag on a struct field, and otherwise inferred from the instant.
+`io.TimeAnchor` (1900-01-01 UTC) is the date a time-of-day carries. `Decimal` is now the only
+carrier type left, and it stays: scale is part of the value and Go has no decimal.
+Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
+[decisions/0008](decisions/0008-temporal-is-time-time.md) and [FINDINGS.md](FINDINGS.md).
+
 ## What's next
 
 1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (13 numbered + corpus-case
+2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (20 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
    outranks the library.
-4. **Performance pass** — benchmarks, allocation audit, profile-guided tuning. The tokenizer is
-   already zero-alloc per token.
+3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
+   the fuzz corpora only protect the port if something runs them. Highest-value non-code item
+   ([STATE.md](STATE.md) §5).
 4. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)

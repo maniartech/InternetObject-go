@@ -83,8 +83,10 @@ text := doc.String()             // canonical IO text: re-parses to the same
 ```
 
 Values decode precisely: numbers are `float64`, bigints `*big.Int`, decimals keep their scale
-(`1.50m` ≠ `1.5m`), temporals keep their kind (`date` / `time` / `datetime`), binary is
-`[]byte`.
+(`1.50m` ≠ `1.5m`), temporals are a native `time.Time`, binary is `[]byte`. A temporal's
+`date` / `time` / `datetime` spelling is chosen on write — by the schema when the member
+declares one, by the `io:",date"` / `io:",time"` tag on a struct field, and otherwise from the
+instant, the same way the writer re-picks a string's open / raw / quoted form.
 
 ### Streaming
 

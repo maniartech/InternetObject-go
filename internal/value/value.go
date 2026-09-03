@@ -11,7 +11,7 @@
 //	Decimal    decimal — scale is part of the value (1.50m ≠ 1.5m)
 //	string     string
 //	[]byte     binary
-//	Temporal   date | time | datetime — the kind stays distinct
+//	time.Time  date | time | datetime — one value, three spellings
 //	*Object    an ordered key/value record
 //	[]any      an array
 package value
@@ -95,32 +95,28 @@ func (d Decimal) String() string {
 	return sign + digits[:cut] + "." + digits[cut:]
 }
 
-// TemporalKind distinguishes the three temporal literal kinds, which stay
-// distinct all the way out — a date is not a datetime with a zero time.
-type TemporalKind uint8
-
-const (
-	KindDate TemporalKind = iota
-	KindTime
-	KindDateTime
-)
-
-// Temporal is a date, time or datetime value.
+// A temporal value is a plain time.Time.
 //
-// It EMBEDS time.Time, so it is one for every practical purpose — Year(),
-// Format(), Before(), Sub() and the rest promote — and adds the one thing
-// Go's time.Time cannot express: which of the three literals this value is.
+// DECIDED 2026-09-03: the three literals — `d"…"`, `t"…"`, `dt"…"` — are
+// SPELLINGS of one value, not three types. Validation says so itself ("the
+// three temporal kinds are interchangeable at the type check"), and the
+// corpus comparator compares temporals by instant with the kind ignored. So
+// the kind belongs with the other presentational facts the value model does
+// not keep: an open string, a raw string and a quoted string all decode to
+// one Go string too, and the writer re-picks the leanest spelling on output.
 //
-// The kind is not decoration. `d"2024-03-20"` and `dt"2024-03-20T00:00:00Z"`
-// are the same instant, as are `d"1900-01-01"` and `t"00:00:00"` (a
-// time-of-day is anchored at 1900-01-01). With only an instant the writer
-// must guess, which loses data in both directions — the reference does guess,
-// because a JavaScript Date has no kind, and io-test-cases PORTING-NOTES rule
-// 15 records that as a defect a kinded host must not copy.
-type Temporal struct {
-	time.Time
-	Kind TemporalKind
-}
+// On write the kind comes from the schema when the member declares one —
+// which, in a schema-first format, is the normal case and loses nothing. For
+// an undeclared temporal the writer infers from the instant, exactly as the
+// reference does. io-test-cases PORTING-NOTES rule 15 asks a KINDED host
+// (Rust's Temporal, Python's date/time/datetime) to keep its kind; Go's
+// standard library has one temporal type, so this is not one, and the rule's
+// own scope excludes it. Recorded as a deliberate divergence in FINDINGS.
+//
+// TimeAnchor is the date a time-of-day carries: the format has no bare clock,
+// so `t"14:30"` is this date at that clock — the reference's convention, and
+// what makes two implementations agree on the instant.
+var TimeAnchor = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ErrorNode marks a record that failed to parse or validate inside a
 // collection: the fault was reported and the surrounding records survived.
@@ -149,7 +145,7 @@ type ErrorValue struct {
 // record (the highest-yield trap in PORTING-NOTES).
 func IsScalar(v any) bool {
 	switch v.(type) {
-	case nil, bool, float64, string, *big.Int, Decimal, []byte, Temporal:
+	case nil, bool, float64, string, *big.Int, Decimal, []byte, time.Time:
 		return true
 	}
 	return false

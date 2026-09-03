@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The direct encode path (ADR 0006 roadmap item 5).
@@ -57,7 +56,7 @@ func fastScalarType(t reflect.Type) bool {
 		t = t.Elem()
 	}
 	switch t {
-	case bigIntType.Elem(), decimalType, temporalType, timeType, bytesType:
+	case bigIntType.Elem(), decimalType, timeType, bytesType:
 		return true
 	}
 	switch t.Kind() {
@@ -173,16 +172,11 @@ func appendFastValue(dst []byte, rv reflect.Value, kind string, at pathAt) ([]by
 		d := rv.Interface().(Decimal)
 		return append(append(dst, d.String()...), 'm'), nil
 	case timeType:
-		k := ""
-		switch kind {
-		case "date", "time":
+		k := "datetime"
+		if kind == "date" || kind == "time" {
 			k = kind
-		default:
-			k = "datetime"
 		}
-		return document.AppendTemporalValue(dst, value.Temporal{Time: rv.Interface().(time.Time).UTC()}, k), nil
-	case temporalType:
-		return document.AppendTemporalValue(dst, rv.Interface().(value.Temporal), ""), nil
+		return document.AppendTemporalValue(dst, rv.Interface().(time.Time).UTC(), k), nil
 	case bytesType:
 		dst = append(dst, 'b', '"')
 		dst = base64.StdEncoding.AppendEncode(dst, rv.Bytes())
