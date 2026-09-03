@@ -217,8 +217,23 @@ So the kind is decided on **write**, where a spelling decision belongs:
 | undeclared (schemaless document) | `InferTemporalKind`, from the instant | normalized, like a string's spelling |
 
 Only the third row normalizes, and there is nothing to normalize *from* — a schemaless
-document has never stated which of three interchangeable spellings it meant. `temporal_test.go`
-pins all three rows plus the instant round trip. The deliberate divergence from the letter of
+document has never stated which of three interchangeable spellings it meant.
+
+**The declared kind truncates on write, never in the value.** A `date` member writes the date
+and drops the clock, a `time` member writes the clock and drops the date, a `datetime` member
+widens — all six cross-kind combinations probed against io-js2 and matching. But the parsed
+VALUE keeps its full instant: `validation/temporal-depth.io` pins a date under `time` keeping
+its 2024 date and a time under `date` keeping its 12:00 clock. Truncating at the validator
+fails those two cases (measured, reverted, recorded at `validateTemporal`).
+
+Two open items came out of pinning this, both in [FINDINGS.md](FINDINGS.md): the reference
+drops a non-zero millisecond field when writing a `time` (#21 — data loss; we follow the spec's
+`HH:mm:ss.SSS` and diverge), and temporal `min`/`max` compare whole instants rather than the
+declared precision (#22 — we match the reference; changing it needs a spec decision, since a
+`{time, max: t"15:00"}` bound currently rejects a datetime value for an anchor reason rather
+than a clock one).
+
+`temporal_test.go` pins all of it — seven tests. The deliberate divergence from the letter of
 PORTING-NOTES rule 15 (which scopes itself to kinded hosts) is recorded in
 [FINDINGS.md](FINDINGS.md).
 

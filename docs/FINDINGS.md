@@ -176,6 +176,45 @@ Status legend: **open** = not yet reported/resolved upstream.
 - **This port**: fixed in `validateObject`. Found by the byte fuzzer, not by the corpus — no
   case combines a typed wildcard with a literal `*` data key. Worth a corpus case.
 
+## 21. A `time` serializes without its milliseconds — open, reference defect (data loss)
+
+- **Spec** (`the-structure/values/date-and-time.md`, format table): the canonical Time form is
+  `HH:mm:ss.SSS`.
+- **io-js2**: writes `t"14:30:45"` for `t"14:30:45.999"` — the millisecond field is dropped
+  whether the member is declared `time` or undeclared. The value survives in memory
+  (`toObject()` returns `1900-01-01T14:30:45.999Z`); only the serialization loses it, so
+  `parse → toString → parse` silently changes the instant. `datetime` is unaffected: it always
+  writes `.SSS`.
+- **This port**: follows the spec — `t"14:30:45.999"`, with `.000` still elided (`t"14:30:45"`)
+  so the one corpus case that covers this, `serializer/scalars.io :: time_value`, still passes.
+- **Gating gap:** that case uses `t"14:30:45.000"` — a ZERO millisecond field — so it cannot
+  tell "elides a zero" from "drops the field". No corpus case anywhere uses a non-zero
+  millisecond in a serialized time, which is why five ports could disagree here undetected.
+  **Suggested case:** `~ time_millis, 't"14:30:45.999"', '---\nt"14:30:45.999"'`.
+- Related to #1: the reference also rejects `t"143045.123"` on input. Its time handling
+  disregards fractional seconds in both directions.
+
+## 22. Temporal `min`/`max` compare the whole instant, ignoring the declared precision — open
+
+- **Spec**: says nothing about how a bound is compared against a value of a different temporal
+  annotation.
+- **io-js2**: compares the raw instants. Two consequences, both probed 2026-09-03:
+  - `{date, max: d"2024-03-20"}` rejects `dt"2024-03-20T14:30:45.123Z"` with `mismatched-max`,
+    although the value's DATE is exactly the bound.
+  - `{time, max: t"15:00:00"}` rejects `dt"2024-03-20T14:30:00Z"`, although 14:30 precedes
+    15:00. It fails because the bound is anchored at 1900-01-01 and the value is not — a
+    comparison between a real date and the time-of-day anchor, which is not meaningful.
+- **This port**: matches the reference (`temporal_test.go :: TestTemporalBoundsCompareWholeInstant`
+  pins it). No corpus case covers temporal bounds across annotations.
+- **The case for changing it upstream:** the format already decided that the annotation governs
+  precision — `validation/temporal-depth.io` permits any temporal under any annotation, and the
+  serializer truncates to the declared kind on write (a `date` member writes `d"…"` and drops
+  the clock). Comparison is the one place that precision is *not* applied, so a value can be
+  rejected on a component that the same schema will discard on output. Scoping the comparison
+  to the declared precision — date vs date, clock vs clock — would make the three operations
+  agree. This needs a spec decision before any port implements it, since it changes accept/reject
+  outcomes; raised here rather than diverging unilaterally.
+
 ## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
 
 - A malformed literal in a HEADER definition is fatal (`~ A: 0B` → `invalid-number`); no case

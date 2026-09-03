@@ -797,6 +797,11 @@ func validateTemporal(val any, md *MemberDef, defs Defs) any {
 		// anything else — including a deferred malformed literal — is not
 		vfail(expected)
 	}
+	// The declared type does NOT truncate the value. `validation/temporal-depth.io`
+	// pins both directions — a date under `time` keeps its 2024 date, a time under
+	// `date` keeps its 12:00 clock — so the instant survives the annotation and the
+	// declared kind decides only the SPELLING, at the writer. Truncating here fails
+	// those two cases; measured 2026-09-03, do not retry without changing the corpus.
 	bound := func(key string) (time.Time, bool) {
 		v, ok := md.Constraints[key]
 		if !ok {

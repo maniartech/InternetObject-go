@@ -47,6 +47,25 @@ treatment.
 `value.TimeAnchor` (1900-01-01 UTC) is the date a time-of-day carries — the reference's
 convention, so instants compare across implementations.
 
+**The declared kind truncates on write, and only on write.** A `date` member writes the date
+and drops the clock; a `time` member writes the clock and drops the date; a `datetime` member
+widens. All six cross-kind combinations were probed against io-js2 on 2026-09-03 and match,
+with one deliberate exception: a `time` carrying non-zero milliseconds writes them
+(`t"23:59:59.999"`) where the reference drops them, because the spec's canonical Time form is
+`HH:mm:ss.SSS` and dropping a non-zero field is data loss ([FINDINGS](../FINDINGS.md) #21).
+
+**The value is never truncated.** `validation/temporal-depth.io` pins both directions — a date
+under `time` keeps its 2024 date, a time under `date` keeps its 12:00 clock — under the heading
+"the three annotations are not interchangeable". A validator that truncates to the declared
+precision fails exactly those two cases; measured, then reverted, with the reason recorded at
+`validateTemporal`. So the annotation governs the spelling and never the instant, which is the
+same split this ADR makes everywhere else.
+
+One consequence worth stating plainly: because the value keeps its full instant and the writer
+truncates, `parse → String → parse` can lose a component that `String → parse → String` never
+does. That asymmetry is the reference's too, and the round-trip property the corpus asserts is
+the second one.
+
 Only the third row normalizes, and it has nothing to normalize *from*: a schemaless document
 never stated which of three interchangeable spellings it meant. This is the one case the
 earlier design was protecting, and it is protecting a distinction the format does not make.
