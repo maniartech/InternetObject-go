@@ -58,6 +58,14 @@ func (o *Object) Find(key string) int {
 // Decimal is an exact fixed-point value: Coef × 10^-Scale. The scale is part
 // of the value — 1.50m is coefficient 150, scale 2, and is distinct from
 // 1.5m in serialized form.
+//
+// DECIDED 2026-09-03, and not to be revisited without new evidence: this is
+// the one carrier type in the value model, because Go has no decimal to be
+// native to. `big.Float` is binary, so it cannot hold 0.1 exactly; `big.Rat`
+// has no scale, so 1.50m and 1.5m would become the same value and the
+// trailing zero would be lost on write. Everything else in the model is the
+// Go type a developer would have chosen anyway — string, bool, float64,
+// *big.Int, []byte, nil, []any — and Temporal embeds time.Time.
 type Decimal struct {
 	Coef  *big.Int
 	Scale int

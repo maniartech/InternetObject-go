@@ -173,7 +173,7 @@ anything extra, and only because the standard library has no equivalent:
 | array | `[]any` | native |
 | record | `*Object` | ordered members — a Go map cannot keep order or positional members |
 | date/time/datetime | `Temporal` | **embeds `time.Time`** — it IS one, plus the kind |
-| decimal | `Decimal` | `*big.Int` coefficient + scale — Go has no decimal type, and `big.Float` is binary, so `1.50m ≠ 1.5m` would be lost |
+| decimal | `Decimal` | `*big.Int` coefficient + scale — **decided 2026-09-03 to stay** (below) |
 
 **`Temporal` is not an invented parallel type.** It embeds `time.Time`, so every method
 promotes and it is assignable to one:
@@ -189,6 +189,12 @@ tm.Kind              // io.KindDate — the one thing time.Time cannot express
 
 And on the struct path — what most code uses — the type never appears at all: a plain
 `time.Time` field binds straight from the wire.
+
+**`Decimal` stays** (decided 2026-09-03). It is the only carrier type left, and it has no
+native alternative: `big.Float` is binary and cannot hold `0.1` exactly, and `big.Rat` has no
+scale — so `1.50m` and `1.5m` would become the same value and the trailing zero would vanish
+on write. Preserving scale is a property of the format, not an implementation choice, so the
+carrier is required rather than invented.
 
 ### 3.3.1 Why the kind cannot simply be dropped
 
