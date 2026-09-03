@@ -71,9 +71,14 @@ Six passes, each driven by a profile rather than intuition. Full detail in
 
 | | Start | Now | `encoding/json` |
 | --- | ---: | ---: | ---: |
-| Decode → struct | 5.92 ms · 40,830 allocs | **1.65 ms · 4,060** | 2.40 ms · 6,019 |
-| Encode ← struct | 5.50 ms · 38,701 allocs | **0.37 ms · 22** | 0.42 ms · 2 |
-| Dynamic parse | 5.19 ms · 31,073 allocs | 3.30 ms · 20,953 | 1.91 ms · 23,013 |
+| Decode → struct | 5.92 ms · 40,830 allocs | **1.33 ms · 4,060** | 1.92 ms · 6,019 |
+| Encode ← struct | 5.50 ms · 38,701 allocs | **0.33 ms · 22** | 0.39 ms · 2 |
+| Dynamic parse | 5.19 ms · 31,073 allocs | 3.01 ms · 20,953 | 1.83 ms · 23,013 |
+| Small record (133 B) | 9.6 µs · 84 allocs | 8.2 µs · 51 — **3.5 µs · 30** hoisted | 1.69 µs · 11 |
+
+(1,000 records × 6 members; min of six runs, 2026-09-03. The small-record row is the one gap
+left worth engineering: 45% of its allocations are a header schema compiled on every call,
+which `ParseSchema` + `UnmarshalWith` already avoids by hand.)
 
 The two structural wins were the same idea applied in both directions: **stop building a
 value tree nobody asked for.** Encode walks the struct straight into the output buffer;

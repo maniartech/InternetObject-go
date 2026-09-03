@@ -1,49 +1,59 @@
 # Performance report — where io-go stands
 
-**Date:** 2026-09-02 · **Machine:** AMD Ryzen 7 5700G, Go 1.26.0, windows/amd64 ·
-**Reproduce:** `go test -bench Compare -benchmem -run '^$' .`
+**Date:** 2026-09-02, re-measured 2026-09-03 · **Machine:** AMD Ryzen 7 5700G, Go 1.26.0,
+windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$' -count=6 .`
 
 ## Headline
 
-**We were 2.7×–12.8× slower than `encoding/json`. Five optimization passes closed it: typed
-decoding is now FASTER than `encoding/json` and allocates less, encode is within 3.2×, and
-both have shed ~90% of their allocations. What remains is understood, localized and scheduled ([ADR 0006](../decisions/0006-performance-architecture.md)).** The scanner is not the problem — it runs at **153 MB/s with 3 allocations per
-document**, competitive with any JSON parser. Everything above it is where the time goes.
+**We were 2.7×–12.8× slower than `encoding/json`. Six optimization passes closed it: on the
+typed path — the one real applications use — io-go now BEATS `encoding/json` in both
+directions, decoding 1.45× faster with a third fewer allocations and encoding 1.17× faster
+with 22 allocations against JSON's 2. Both directions shed ~90% of their allocations.** Two
+gaps remain, both understood and localized: the **dynamic** parse (1.65× slower) and the
+**small single-record** payload (4.9×, of which 58% is a per-call schema compile — see
+[Small payloads](#the-remaining-gap-2--small-payloads-pay-for-the-schema-every-call)).
+The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
+competitive with any JSON parser. Everything above it is where the time goes.
 
 ## The numbers
 
 1,000 records × 6 members (string, int, string, bool, float, string array); 64 KB of IO text
 against 114 KB of equivalent JSON, decoded into the same Go structs.
 
-| Operation | Baseline | Pass 1 | Pass 2 | Pass 3 | **Pass 4 (now)** | encoding/json | Gap now |
-| --------- | -------: | -----: | -----: | -----: | ---------------: | ------------: | ------: |
-| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms | 3.19 ms · 23,861 | **1.65 ms · 4,060** | 2.40 ms · 6,019 | **0.69× — faster** |
-| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | 2.16 ms · 17,849 | **1.80 ms · 3,922** | 0.35 ms · **2** | **3.2×** |
-| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms | 3.30 ms · 21,953 | **3.30 ms · 21,953** | 1.91 ms · 23,013 | 1.73× |
-| Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | **1.65 ms · 17,009** | 1.65 ms · 17,009 | — | — |
-| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | **8.6 µs · 61** | 8.6 µs · 61 | 2.0 µs · 11 | 3.7× |
+| Operation | Baseline | Pass 1 | Pass 2 | Pass 3 | Pass 4 | **Now (pass 6)** | encoding/json | Gap now |
+| --------- | -------: | -----: | -----: | -----: | -----: | ---------------: | ------------: | ------: |
+| Unmarshal → struct | 5.92 ms · 40,830 allocs | 4.65 ms · 34,804 | ~5.2 ms | 3.19 ms · 23,861 | 1.65 ms · 4,060 | **1.33 ms · 4,060** | 1.92 ms · 6,019 | **0.69× — faster** |
+| Marshal ← struct | 5.50 ms · 38,701 allocs | 3.43 ms · 23,698 | 2.58 ms · 17,692 | 2.16 ms · 17,849 | 1.80 ms · 3,922 | **0.33 ms · 22** | 0.39 ms · **2** | **0.85× — faster** |
+| Parse → dynamic | 5.19 ms · 31,073 allocs | 3.37 ms · 25,050 | 3.37 ms | 3.30 ms · 21,953 | 3.30 ms · 21,953 | **3.01 ms · 20,953** | 1.83 ms · 23,013 | 1.65× |
+| Validate (no JSON equivalent) | 3.33 ms | 2.10 ms | ~2.1 ms | 1.65 ms · 17,009 | 1.65 ms · 17,009 | **1.37 ms · 14,009** | — | — |
+| Small record (133 B) decode | 9.6 µs · 84 allocs | 9.1 µs · 70 | 9.1 µs | 8.6 µs · 61 | 8.6 µs · 61 | **8.2 µs · 51** | 1.69 µs · 11 | 4.9× |
+| …with the schema hoisted | — | — | — | — | — | **3.5 µs · 30** | 1.69 µs · 11 | 2.1× |
 
-**Both directions now beat `encoding/json` on the typed path.** Decode: 3.6× faster than
-baseline, 40,830 → 4,060 allocations, and 1.65 ms against JSON's 2.40 ms with fewer
-allocations (4,060 vs 6,019). Encode: **15× faster than baseline, 38,701 → 22 allocations**,
-and 0.37 ms against JSON's 0.42 ms. The dynamic parse also allocates fewer objects than
-`encoding/json` (21,953 vs 23,013).
+The "Now" column is a fresh 6-run measurement taken 2026-09-03 after the temporal refactor
+([ADR 0008](../decisions/0008-temporal-is-time-time.md)); allocation counts are unchanged from
+pass 6, confirming the refactor cost nothing. Times are the **minimum** of six runs, the
+estimator this machine's ±30% noise forces — the ratios reproduce (decode 0.69× on both days),
+the absolute values do not.
 
-Encode still moves fewer bytes per second than JSON (173 vs 273 MB/s) while finishing
-sooner, because the IO document is 56% of the JSON one — the format's own advantage showing
-up in the wall clock.
+**Both directions now beat `encoding/json` on the typed path.** Decode: 4.5× faster than
+baseline, 40,830 → 4,060 allocations, and 1.33 ms against JSON's 1.92 ms with a third fewer
+allocations. Encode: **17× faster than baseline, 38,701 → 22 allocations**, and 0.33 ms
+against JSON's 0.39 ms. The dynamic parse also allocates fewer objects than `encoding/json`
+(20,953 vs 23,013) while taking longer — its cost is time, not churn.
 
-**Encode is now 2.1× faster than baseline and has shed 54% of its allocations** (38,701 →
-17,692) and 55% of its bytes (1.64 MB → 0.73 MB). Pass 2 did not touch the decode path —
-that is phase B of [ADR 0006](../decisions/0006-performance-architecture.md).
+Encode moves fewer bytes per second than JSON (194 vs 295 MB/s) while finishing sooner,
+because the IO document is 56% of the JSON one — the format's own advantage showing up in the
+wall clock. Read the ns/op for "who finishes first" and the MB/s only for "how hard is the
+machine working", never the two interchangeably: the two formats are not moving the same
+number of bytes.
 
 > **Read allocation counts, not nanoseconds.** `allocs/op` is stable to ±1 across runs;
 > ns/op on this machine swings ±30% with background load (a run taken while the fuzzers were
 > active measured `encoding/json` itself 40% slower). ADR 0006 gates CI on allocations for
 > exactly this reason.
 
-Throughput on a quiet machine: decode **~12 MB/s**, encode **~25 MB/s**, dynamic parse
-**~19 MB/s**, against JSON's ~44 / ~260 / ~58 MB/s.
+Throughput over each format's own bytes: decode **48 MB/s**, encode **194 MB/s**, dynamic
+parse **21 MB/s**, tokenizer **144 MB/s**, against JSON's 59 / 295 / 62 MB/s.
 
 ### Where we already win: the wire
 
@@ -74,8 +84,34 @@ buffer itself), `parser.addMember` 20%, `schema.assemble` 16%, reflection 7%. De
 four passes over the data — tokenize, build tree, validate into a *new* tree, bind into Go
 values — where `encoding/json` does one.
 
-**The scanner is exonerated.** `BenchmarkTokenize`: **41.8 µs, 152.9 MB/s, 3 allocs** for the
-same 64 KB. Tokenization is ~1% of decode time. Nothing about the *format* is slow.
+**The scanner is exonerated.** `BenchmarkTokenize`: **44.5 µs, 143.8 MB/s, 3 allocs** for the
+same 64 KB. Tokenization is ~3% of decode time. Nothing about the *format* is slow.
+
+### The remaining gap 2 — small payloads pay for the schema every call
+
+The 133-byte single-record case is our worst ratio (4.9× JSON), and an allocation profile
+taken 2026-09-03 names the reason: **the header schema is parsed and compiled on every
+`Unmarshal` call.** `schema.addMember` (15%), `compileMemberDef` (13%), `compileSchema`,
+`parseHeader` and `newDefs` together are **~45% of the allocations** for a document whose
+data is one line. At 1,000 records that cost amortizes to nothing, which is exactly why it
+stayed invisible until the small case was profiled.
+
+Hoisting the schema out of the loop — `ParseSchema` once, then `UnmarshalWith` — measures the
+size of the prize:
+
+| 133-byte record, decoded into a struct | time | bytes | allocs |
+| -------------------------------------- | ---: | ----: | -----: |
+| `Unmarshal` (header compiled per call) | 8.2 µs | 7,728 B | 51 |
+| `UnmarshalWith` (schema hoisted) | **3.5 µs** | **2,400 B** | **30** |
+| `encoding/json` | 1.69 µs | 480 B | 11 |
+
+**2.4× faster and 69% fewer bytes, with no change to the library** — the API already supports
+it, and this is the shape an HTTP handler wants anyway (one schema, many payloads). What the
+library still owes is the case where the caller *cannot* hoist: a compiled-schema cache keyed
+on the header text would collect most of the same win automatically. Filed as roadmap item 8.
+
+The residual 2.1× after hoisting is the honest floor of doing more work — schema binding and
+per-member validation with designated codes — on a payload too small to amortize anything.
 
 ## What changed — pass 6 (encode: the last of the per-value work)
 
@@ -230,18 +266,20 @@ Ordered by value per unit of risk. Estimates are from the profiles, not measured
 | 5b | **Tune the token-slice heuristic** (`len/4`) against real documents; over-allocation is now visible in the profile | Decode bytes −10% | Low |
 | 6 | **Reuse buffers across calls** (`sync.Pool` for token slices and the writer's builder) | Both −10…20% | Medium |
 | 7 | **Generated code (`iogen`)** removes reflection entirely from the struct path | Encode/decode −30…50% on top | Larger project |
+| 8 | **Cache the compiled schema** across `Unmarshal` calls, keyed on the header text — measured at 45% of a small payload's allocations, and hoisting by hand already proves 2.4× | Small-payload decode −55% | Low–medium (cache keying and invalidation are the whole risk) |
+| 9 | **Dynamic parse** is the last operation slower than JSON (1.65×) and the only one never given a pass of its own; item 4 (`Project()` deep-clone) is still unclaimed | Dynamic −30% | Low |
 
-Items 1–4 are a focused day's work and should bring encode within ~2× of `encoding/json`
-and decode to rough parity. Note the bar: `encoding/json` is *not* the fastest Go JSON
+Items 8 and 9 are what is left. Note the bar: `encoding/json` is *not* the fastest Go JSON
 implementation (`json/v2`, `sonic` and `go-json` beat it substantially), so "parity with
 encoding/json" is the floor for a format that wants to lead, not the finish line.
 
 ## Honest caveats
 
 - **We do strictly more work than JSON decoding**: schema binding, per-member validation with
-  designated error codes, and a value model that preserves decimals, bigints and temporal
-  kinds. Some gap is inherent. **8.7× on encode is not inherent** — that is the writer's
-  allocation strategy, and JSON hits 2 allocations doing the equivalent job.
+  designated error codes, and a value model that preserves decimals and bigints. Some gap is
+  inherent — and the typed path now beats `encoding/json` anyway, while doing that extra work.
+  The remaining 2.1× on a hoisted small payload is the part that plausibly *is* inherent; the
+  4.9× before hoisting is not, and item 8 says so.
 - These are single-machine numbers with ±10% run-to-run variance; the ratios are stable, the
   absolute values are not portable.
 - No cross-implementation numbers yet: neither `io-rust` nor `io-js2` publishes a comparable

@@ -104,10 +104,12 @@ forever; absorption now detects the cycle and reports the natural `unknown-membe
 ## Two reports — read these before the next build phase
 
 - **[reports/benchmarks.md](reports/benchmarks.md)** — we were 2.7-12.8x slower than
-  `encoding/json`; targeted fixes this session closed a third of the gap (now 1.8-8.7x,
-  -21%..-38% wall time, -36%..-55% bytes). The scanner is NOT the problem (153 MB/s, 3
-  allocs); the layers above it are. Roadmap with per-item estimates is in the report; the
-  writer's `[]string`+`Join` strategy is the single biggest remaining item.
+  `encoding/json`; six passes made the typed path FASTER in both directions (decode 0.69x,
+  encode 0.85x) with ~90% of the allocations gone. Two gaps left, both localized: the dynamic
+  parse (1.65x) and the small single-record payload (4.9x, of which 45% of allocations are a
+  header schema compiled on EVERY call — hoisting it by hand already measures 2.4x, so a
+  compiled-schema cache is roadmap item 8). The scanner was never the problem (144 MB/s, 3
+  allocs).
 - **[reports/error-model.md](reports/error-model.md)** — the accumulate-and-continue
   MECHANISM matches the reference and passes the one dimension the corpus gates (code order
   and count). The error CONTENT is far thinner: positions are hardcoded `1:1` at 13 sites
@@ -130,9 +132,9 @@ implementation, so these are the ONLY gate that exists for positions (FINDINGS #
 
 ## Performance — SHIPPED (ADR 0006 + 0007)
 
-Decode → struct **1.65 ms / 4,060 allocs** (from 5.92 ms / 40,830), beating `encoding/json`'s
-2.40 ms / 6,019. Encode ← struct **0.37 ms / 22 allocs** (from 5.50 ms / 38,701) against
-0.42 ms / 2. Both directions got the same idea — stop building a value tree nobody asked for —
+Decode → struct **1.33 ms / 4,060 allocs** (from 5.92 ms / 40,830), beating `encoding/json`'s
+1.92 ms / 6,019. Encode ← struct **0.33 ms / 22 allocs** (from 5.50 ms / 38,701) against
+0.39 ms / 2. Both directions got the same idea — stop building a value tree nobody asked for —
 and each has a fast route held identical to the general route by a differential fuzzer
 (`IO_NO_FAST_PATH=1`, `IO_NO_LAZY=1`). Detail in [reports/benchmarks.md](reports/benchmarks.md);
 three reverted experiments are recorded there so nobody retries them.
@@ -153,13 +155,18 @@ Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
 1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (20 numbered + corpus-case
+2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (22 numbered + corpus-case
    suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
-   outranks the library.
+   outranks the library. **#22 needs a spec decision from the format's owner** (should temporal
+   min/max compare the declared precision or the whole instant — it changes accept/reject in
+   every port), and #21 is a reference defect (io-js2 drops non-zero ms writing a `time`).
 3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
    the fuzz corpora only protect the port if something runs them. Highest-value non-code item
    ([STATE.md](STATE.md) §5).
-4. Retrospective for the Rust port (definition of done, item 4).
+4. **Perf item 8 — cache the compiled schema** across `Unmarshal` calls. The only measured,
+   unclaimed win left (small-payload decode −55%); everything else on the roadmap is either
+   done or speculative. See [reports/benchmarks.md](reports/benchmarks.md).
+5. Retrospective for the Rust port (definition of done, item 4).
 
 ## Standing rules (from upstream, non-negotiable)
 
