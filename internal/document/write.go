@@ -635,7 +635,7 @@ func appendIONumber(dst []byte, f float64) []byte {
 // appendTemporal is temporalLiteral in append form: time.AppendFormat writes
 // straight into the buffer, so no intermediate string is built.
 func appendTemporal(dst []byte, t value.Temporal, declared string) []byte {
-	u := t.T.UTC()
+	u := t.Time.UTC()
 	kind := declared
 	if kind == "" {
 		// The value KEEPS the kind it carries; inferring from the instant

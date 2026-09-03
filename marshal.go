@@ -606,7 +606,7 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		case "time":
 			k = value.KindTime
 		}
-		return Temporal{T: rv.Interface().(time.Time).UTC(), Kind: k}, nil
+		return Temporal{Time: rv.Interface().(time.Time).UTC(), Kind: k}, nil
 	case t == temporalType:
 		return rv.Interface().(Temporal), nil
 	case t == bytesType:

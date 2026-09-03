@@ -180,7 +180,7 @@ func appendFastValue(dst []byte, rv reflect.Value, kind string, at pathAt) ([]by
 		default:
 			k = "datetime"
 		}
-		return document.AppendTemporalValue(dst, value.Temporal{T: rv.Interface().(time.Time).UTC()}, k), nil
+		return document.AppendTemporalValue(dst, value.Temporal{Time: rv.Interface().(time.Time).UTC()}, k), nil
 	case temporalType:
 		return document.AppendTemporalValue(dst, rv.Interface().(value.Temporal), ""), nil
 	case bytesType:

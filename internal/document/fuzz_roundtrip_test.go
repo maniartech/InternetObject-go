@@ -119,16 +119,16 @@ func genFuzzTemporal(r *fuzzRng) value.Temporal {
 	switch r.below(3) {
 	case 0: // a date: zero clock, 1970-01-02 onward
 		day := 1 + r.below(3650)
-		return value.Temporal{Kind: value.KindDate, T: time.Unix(int64(day)*86_400, 0).UTC()}
+		return value.Temporal{Kind: value.KindDate, Time: time.Unix(int64(day)*86_400, 0).UTC()}
 	case 1: // a time: the writer's 1900-01-01 sentinel date, millisecond precision
 		ms := r.below(86_400_000)
 		base := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
-		return value.Temporal{Kind: value.KindTime, T: base.Add(time.Duration(ms) * time.Millisecond)}
+		return value.Temporal{Kind: value.KindTime, Time: base.Add(time.Duration(ms) * time.Millisecond)}
 	default: // a datetime, millisecond precision
 		day := 1 + r.below(3650)
 		ms := r.below(86_400_000)
 		t := time.Unix(int64(day)*86_400, 0).Add(time.Duration(ms) * time.Millisecond)
-		return value.Temporal{Kind: value.KindDateTime, T: t.UTC()}
+		return value.Temporal{Kind: value.KindDateTime, Time: t.UTC()}
 	}
 }
 
@@ -234,7 +234,7 @@ func fuzzEq(a, b any) bool {
 		return ok && ((math.IsNaN(x) && math.IsNaN(y)) || x == y)
 	case value.Temporal:
 		y, ok := b.(value.Temporal)
-		return ok && x.T.UTC().Equal(y.T.UTC())
+		return ok && x.Time.UTC().Equal(y.Time.UTC())
 	case value.Decimal:
 		y, ok := b.(value.Decimal)
 		return ok && x.Scale == y.Scale && x.Coef.Cmp(y.Coef) == 0
@@ -301,7 +301,7 @@ func writeDump(b *strings.Builder, v any) {
 		}
 		b.WriteString("]")
 	case value.Temporal:
-		fmt.Fprintf(b, "T(%d,%s)", x.Kind, x.T.UTC().Format(time.RFC3339Nano))
+		fmt.Fprintf(b, "T(%d,%s)", x.Kind, x.Time.UTC().Format(time.RFC3339Nano))
 	case value.Decimal:
 		fmt.Fprintf(b, "%sm", x.String())
 	case *big.Int:

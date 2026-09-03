@@ -183,7 +183,7 @@ func show(b *strings.Builder, v any) {
 	case []byte:
 		fmt.Fprintf(b, "bytes(%x)", x)
 	case value.Temporal:
-		b.WriteString(x.T.UTC().Format("2006-01-02T15:04:05.000Z"))
+		b.WriteString(x.Time.UTC().Format("2006-01-02T15:04:05.000Z"))
 	case value.ErrorNode:
 		fmt.Fprintf(b, "errorNode(%s)", x.Code)
 	case []any:

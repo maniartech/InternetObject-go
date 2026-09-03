@@ -174,7 +174,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 		return typeMismatch(at, v, t)
 	case t == timeType:
 		if tm, ok := v.(Temporal); ok {
-			rv.Set(reflect.ValueOf(tm.T.UTC()))
+			rv.Set(reflect.ValueOf(tm.Time.UTC()))
 			return nil
 		}
 		return typeMismatch(at, v, t)

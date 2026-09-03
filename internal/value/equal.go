@@ -61,7 +61,7 @@ func Equal(a, b any) bool {
 		return false
 	case Temporal:
 		y, ok := b.(Temporal)
-		return ok && x.T.UnixMilli() == y.T.UnixMilli()
+		return ok && x.Time.UnixMilli() == y.Time.UnixMilli()
 	case ErrorNode:
 		y, ok := b.(ErrorNode)
 		return ok && x == y

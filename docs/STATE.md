@@ -157,7 +157,40 @@ per faulted record, in record order; membership faults (unknown, duplicate, unex
 positional) prevail over member faults; per member the order is @var resolution → absence →
 null → choices → type → declared bounds → intrinsic bounds → multipleOf.
 
-### 3.3 Temporal values are native `time.Time`
+### 3.3 The value model is native Go, everywhere it can be
+
+Every wire type decodes to the Go type a developer would have chosen. Only two carry
+anything extra, and only because the standard library has no equivalent:
+
+| IO | Go | |
+| -- | -- | - |
+| string | `string` | native |
+| bool | `bool` | native |
+| number | `float64` | native |
+| bigint | `*big.Int` | native (stdlib) |
+| binary | `[]byte` | native |
+| null | `nil` | native |
+| array | `[]any` | native |
+| record | `*Object` | ordered members — a Go map cannot keep order or positional members |
+| date/time/datetime | `Temporal` | **embeds `time.Time`** — it IS one, plus the kind |
+| decimal | `Decimal` | `*big.Int` coefficient + scale — Go has no decimal type, and `big.Float` is binary, so `1.50m ≠ 1.5m` would be lost |
+
+**`Temporal` is not an invented parallel type.** It embeds `time.Time`, so every method
+promotes and it is assignable to one:
+
+```go
+tm := rec.Members[6].Value.(io.Temporal)
+tm.Year()            // 2024        — promoted from time.Time
+tm.Format("2006-01-02")
+tm.Before(time.Now())
+var t time.Time = tm.Time
+tm.Kind              // io.KindDate — the one thing time.Time cannot express
+```
+
+And on the struct path — what most code uses — the type never appears at all: a plain
+`time.Time` field binds straight from the wire.
+
+### 3.3.1 Why the kind cannot simply be dropped
 
 `d"2024-03-20"` decodes to `io.Temporal{T time.Time, Kind TemporalKind}` — a **real
 `time.Time`**, usable directly (`tm.T.Year()`, comparisons, arithmetic), with the kind kept

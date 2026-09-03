@@ -807,10 +807,10 @@ func validateTemporal(val any, md *MemberDef, defs Defs) any {
 		}
 		return tt, true
 	}
-	if m, ok := bound("min"); ok && t.T.UnixMilli() < m.T.UnixMilli() {
+	if m, ok := bound("min"); ok && t.Time.UnixMilli() < m.Time.UnixMilli() {
 		vfail(errs.MismatchedMin)
 	}
-	if m, ok := bound("max"); ok && t.T.UnixMilli() > m.T.UnixMilli() {
+	if m, ok := bound("max"); ok && t.Time.UnixMilli() > m.Time.UnixMilli() {
 		vfail(errs.MismatchedMax)
 	}
 	return val // the original box; see validateString

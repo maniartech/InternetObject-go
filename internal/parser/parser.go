@@ -483,7 +483,7 @@ func (p *parser) parseValue() any {
 		case tokenizer.SubTime:
 			kind = value.KindTime
 		}
-		return value.Temporal{T: p.s.Temporal(t), Kind: kind}
+		return value.Temporal{Time: p.s.Temporal(t), Kind: kind}
 	case tokenizer.KindString:
 		// An @-string stays a string here; variable references resolve
 		// lazily, at validation or projection, so definition order and

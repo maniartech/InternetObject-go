@@ -50,7 +50,7 @@ func decodeRaw(s *tokenizer.Stream, m RawMember) (any, bool) {
 		case tokenizer.SubTime:
 			k = value.KindTime
 		}
-		return value.Temporal{T: s.Temporal(t), Kind: k}, true
+		return value.Temporal{Time: s.Temporal(t), Kind: k}, true
 	}
 	return nil, false // a container: compared structurally below
 }
@@ -73,7 +73,7 @@ func sameScalar(a, b any) bool {
 		return ok && string(x) == string(y)
 	case value.Temporal:
 		y, ok := b.(value.Temporal)
-		return ok && x.Kind == y.Kind && x.T.Equal(y.T)
+		return ok && x.Kind == y.Kind && x.Time.Equal(y.Time)
 	}
 	return a == b
 }

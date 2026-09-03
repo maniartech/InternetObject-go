@@ -31,16 +31,16 @@ func TestTemporalKeepsItsKind(t *testing.T) {
 		want string
 	}{
 		{"midnight datetime", io.Temporal{
-			T: time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC), Kind: io.KindDateTime,
+			Time: time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC), Kind: io.KindDateTime,
 		}, `dt"2024-03-20T00:00:00.000Z"`},
 		{"1900-01-01 date", io.Temporal{
-			T: time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), Kind: io.KindDate,
+			Time: time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), Kind: io.KindDate,
 		}, `d"1900-01-01"`},
 		{"time of day", io.Temporal{
-			T: time.Date(1900, 1, 1, 1, 2, 3, 0, time.UTC), Kind: io.KindTime,
+			Time: time.Date(1900, 1, 1, 1, 2, 3, 0, time.UTC), Kind: io.KindTime,
 		}, `t"01:02:03"`},
 		{"ordinary date", io.Temporal{
-			T: time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC), Kind: io.KindDate,
+			Time: time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC), Kind: io.KindDate,
 		}, `d"2024-03-20"`},
 	}
 
@@ -57,7 +57,7 @@ func TestTemporalKeepsItsKind(t *testing.T) {
 		if err := io.Unmarshal(out, &back); err != nil {
 			t.Fatalf("%s: re-read: %v", tc.name, err)
 		}
-		if back.X.Kind != tc.v.Kind || !back.X.T.Equal(tc.v.T) {
+		if back.X.Kind != tc.v.Kind || !back.X.Time.Equal(tc.v.Time) {
 			t.Errorf("%s: round trip changed the value: %+v -> %+v", tc.name, tc.v, back.X)
 		}
 

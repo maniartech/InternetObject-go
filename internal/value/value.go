@@ -98,8 +98,19 @@ const (
 )
 
 // Temporal is a date, time or datetime value.
+//
+// It EMBEDS time.Time, so it is one for every practical purpose — Year(),
+// Format(), Before(), Sub() and the rest promote — and adds the one thing
+// Go's time.Time cannot express: which of the three literals this value is.
+//
+// The kind is not decoration. `d"2024-03-20"` and `dt"2024-03-20T00:00:00Z"`
+// are the same instant, as are `d"1900-01-01"` and `t"00:00:00"` (a
+// time-of-day is anchored at 1900-01-01). With only an instant the writer
+// must guess, which loses data in both directions — the reference does guess,
+// because a JavaScript Date has no kind, and io-test-cases PORTING-NOTES rule
+// 15 records that as a defect a kinded host must not copy.
 type Temporal struct {
-	T    time.Time
+	time.Time
 	Kind TemporalKind
 }
 
