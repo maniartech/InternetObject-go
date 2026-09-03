@@ -194,7 +194,7 @@ Status legend: **open** = not yet reported/resolved upstream.
 - Related to #1: the reference also rejects `t"143045.123"` on input. Its time handling
   disregards fractional seconds in both directions.
 
-## 22. Temporal `min`/`max` compare the whole instant, ignoring the declared precision — open
+## 22. Temporal `min`/`max` compare the whole instant, ignoring the declared precision — **DECIDED 2026-09-03: scope to the declared part**
 
 - **Spec**: says nothing about how a bound is compared against a value of a different temporal
   annotation.
@@ -204,16 +204,26 @@ Status legend: **open** = not yet reported/resolved upstream.
   - `{time, max: t"15:00:00"}` rejects `dt"2024-03-20T14:30:00Z"`, although 14:30 precedes
     15:00. It fails because the bound is anchored at 1900-01-01 and the value is not — a
     comparison between a real date and the time-of-day anchor, which is not meaningful.
-- **This port**: matches the reference (`temporal_test.go :: TestTemporalBoundsCompareWholeInstant`
-  pins it). No corpus case covers temporal bounds across annotations.
+- **This port**: **scopes the comparison to the declared part** (`schema.compareAs`, pinned by
+  `temporal_test.go :: TestTemporalBoundsCompareDeclaredPart`) — a deliberate divergence from
+  io-js2 until the other ports follow. It matched the reference until the decision below. No
+  corpus case covers temporal bounds across annotations, so nothing pinned either behavior and
+  the full ladder stayed green through the change.
 - **The case for changing it upstream:** the format already decided that the annotation governs
   precision — `validation/temporal-depth.io` permits any temporal under any annotation, and the
   serializer truncates to the declared kind on write (a `date` member writes `d"…"` and drops
   the clock). Comparison is the one place that precision is *not* applied, so a value can be
   rejected on a component that the same schema will discard on output. Scoping the comparison
   to the declared precision — date vs date, clock vs clock — would make the three operations
-  agree. This needs a spec decision before any port implements it, since it changes accept/reject
-  outcomes; raised here rather than diverging unilaterally.
+  agree.
+- **DECIDED 2026-09-03 by the format's owner: scope the comparison to the declared part.**
+  Implemented here. Still owed at the core level, and tracked in
+  [CORE-ESCALATIONS.md](CORE-ESCALATIONS.md): the spec text, a corpus case (none exists), and
+  the same change in the other five ports. Until those land, io-go and io-js2 disagree on
+  bounds across annotations — deliberately, and in the direction the decision names.
+  **Suggested cases:** `{date, max: d"2024-03-20"}` must ACCEPT `dt"2024-03-20T14:30:45.123Z"`;
+  `{time, max: t"15:00:00"}` must ACCEPT `dt"2024-03-20T14:30:00.000Z"` and REJECT
+  `dt"2024-03-20T15:30:00.000Z"`.
 
 ## Suggested corpus cases (gaps the fuzzers exposed; all fixed in this port)
 

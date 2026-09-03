@@ -115,24 +115,49 @@ func TestDeclaredKindDoesNotTruncateTheValue(t *testing.T) {
 	}
 }
 
-// min/max compare the WHOLE instant, not the declared part — so a datetime
-// under a `time` member is compared against the bound's 1900 anchor and fails
-// for a reason that has nothing to do with its clock. Reference-confirmed
-// 2026-09-03 and matched deliberately; the case against it is in FINDINGS.
-func TestTemporalBoundsCompareWholeInstant(t *testing.T) {
+// min/max compare the part the DECLARED type governs — dates against dates,
+// clocks against clocks, whole instants only under `datetime`. FINDINGS #22,
+// decided 2026-09-03; this DIVERGES from io-js2, which compares raw instants
+// and so rejects a value on a component the same schema discards on output.
+//
+// No corpus case covers a bound across annotations, so this test is the only
+// thing pinning the rule until io-test-cases carries one.
+func TestTemporalBoundsCompareDeclaredPart(t *testing.T) {
 	for _, tc := range []struct {
+		what    string
 		src     string
 		wantErr bool
 	}{
-		{`d: {date, max: d"2024-03-20"}` + "\n---\n" + `dt"2024-03-20T14:30:45.123Z"`, true},
-		{`d: {date, min: d"2024-03-20"}` + "\n---\n" + `dt"2024-03-20T14:30:45.123Z"`, false},
-		{`d: {time, max: t"15:00:00"}` + "\n---\n" + `dt"2024-03-20T14:30:00.000Z"`, true},
-		{`d: {time, max: t"14:00:00"}` + "\n---\n" + `t"14:30:00"`, true},
-		{`d: {time, min: t"14:00:00"}` + "\n---\n" + `t"14:30:00"`, false},
+		// A `date` bound reads only the date part of the value.
+		{"same date, later clock, is within max",
+			`d: {date, max: d"2024-03-20"}` + "\n---\n" + `dt"2024-03-20T14:30:45.123Z"`, false},
+		{"same date, later clock, is within min",
+			`d: {date, min: d"2024-03-20"}` + "\n---\n" + `dt"2024-03-20T14:30:45.123Z"`, false},
+		{"a later date still exceeds max",
+			`d: {date, max: d"2024-03-19"}` + "\n---\n" + `dt"2024-03-20T00:00:00.000Z"`, true},
+		{"an earlier date still precedes min",
+			`d: {date, min: d"2024-03-20"}` + "\n---\n" + `d"2024-03-19"`, true},
+
+		// A `time` bound reads only the clock, so the 1900 anchor never enters.
+		{"a 2024 datetime is compared by its clock alone",
+			`d: {time, max: t"15:00:00"}` + "\n---\n" + `dt"2024-03-20T14:30:00.000Z"`, false},
+		{"and still fails on the clock when the clock is late",
+			`d: {time, max: t"15:00:00"}` + "\n---\n" + `dt"2024-03-20T15:30:00.000Z"`, true},
+		{"time against time is unchanged (max)",
+			`d: {time, max: t"14:00:00"}` + "\n---\n" + `t"14:30:00"`, true},
+		{"time against time is unchanged (min)",
+			`d: {time, min: t"14:00:00"}` + "\n---\n" + `t"14:30:00"`, false},
+
+		// `datetime` still compares the whole instant — nothing to scope away.
+		{"datetime compares the whole instant",
+			`d: {datetime, max: dt"2024-03-20T12:00:00.000Z"}` + "\n---\n" + `dt"2024-03-20T14:00:00.000Z"`, true},
+		{"a bare date under datetime is midnight, within a noon max",
+			`d: {datetime, max: dt"2024-03-20T12:00:00.000Z"}` + "\n---\n" + `d"2024-03-20"`, false},
 	} {
 		_, err := io.Parse(tc.src)
 		if got := err != nil; got != tc.wantErr {
-			t.Errorf("%q: error=%v, want error=%v (%v)", tc.src, got, tc.wantErr, err)
+			t.Errorf("%s\n  %q: error=%v, want error=%v (%v)",
+				tc.what, tc.src, got, tc.wantErr, err)
 		}
 	}
 }

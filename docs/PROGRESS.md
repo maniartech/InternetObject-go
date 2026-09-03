@@ -174,11 +174,14 @@ Deliberate divergence from PORTING-NOTES rule 15, argued and recorded in
 1. **ADR 0004 phase 1** — `io.Object` base (`New[T]`/`Attach`/`Set`/`Get`/`Validate`/
    `Marshal`), package twins `io.Set`/`io.Get`, `Object`→`Record` rename; then phase 2
    (documents/sections/collections/definitions, `With` functions), then `iogen`.
-2. **Report upstream** — every entry in [FINDINGS.md](FINDINGS.md) (22 numbered + corpus-case
-   suggestions) belongs in io-test-cases/io-specs/io-js2 issues. Per ADR 0007 this output
-   outranks the library. **#22 needs a spec decision from the format's owner** (should temporal
-   min/max compare the declared precision or the whole instant — it changes accept/reject in
-   every port), and #21 is a reference defect (io-js2 drops non-zero ms writing a `time`).
+2. **Agree a core-escalation process, then report upstream.**
+   [CORE-ESCALATIONS.md](CORE-ESCALATIONS.md) is the interim substitute: there is no agreed rule
+   for what a port does when it finds a defect in the spec or in io-js2, and each port has been
+   deciding case by case. Nothing is filed upstream yet, deliberately — filing 22 issues without
+   a handling rule just moves the backlog. **#22 was decided 2026-09-03** (temporal min/max
+   scope to the declared part; implemented here, still owed spec text, a corpus case and five
+   ports). **#21 is open** — io-js2 drops non-zero ms writing a `time`, contradicting the spec;
+   io-go follows the spec and diverges deliberately.
 3. **CI** — there is none. Every gate is currently run by hand; the corpus ladder, the soak and
    the fuzz corpora only protect the port if something runs them. Highest-value non-code item
    ([STATE.md](STATE.md) §5).
