@@ -1,7 +1,7 @@
 # ADR 0002 — The public Go API, v0
 
 - **Status:** Accepted, 2026-09-02
-- **Context:** the full conformance corpus passes (see PROGRESS.md); the pipeline lives under
+- **Context:** the full conformance corpus passes; the pipeline lives under
   `internal/`. Upstream ADR 0007 D3: the format is portable, the API is not — nothing from the
   JavaScript surface (`safeParse`, tag functions, proxies) is ported.
 

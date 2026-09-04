@@ -11,7 +11,7 @@ import (
 // The conformance corpus asserts error CODES only — in every implementation.
 // Positions, paths, categories and record indexes are therefore ungated
 // anywhere, which is exactly how this port drifted to a hardcoded 1:1 at 13
-// sites while staying green (docs/FINDINGS.md #16). These tests are the only
+// sites while staying green. These tests are the only
 // gate that exists for them; treat a failure here as a real defect, not a
 // brittle assertion.
 

@@ -1,7 +1,7 @@
 # ADR 0003 — Native struct Marshal/Unmarshal
 
 - **Status:** Accepted, 2026-09-02
-- **Context:** the corpus and three fuzz layers are green (PROGRESS.md); the public API v0
+- **Context:** the corpus and three fuzz layers are green; the public API v0
   (ADR 0002) exposes Parse/ParseSchema/Stream over the dynamic value model. Requested: working
   with plain Go structs the way `encoding/json` does — tags included — "super easy, intuitive
   to a Go developer".

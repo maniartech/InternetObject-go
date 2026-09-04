@@ -291,7 +291,7 @@ func (s *scanner) peekPastSpace(i int) int {
 // unknown-annotation). A longer word before a quote is an ordinary open
 // string, and the quote starts a fresh token. The specification states no
 // length rule; 4 matches the reference implementation, from which the corpus
-// derives. Tracked as a spec gap in docs/FINDINGS.md.
+// derives. Reported to the format owners as a spec gap.
 const maxAnnotationLen = 4
 
 // scanValue scans one value starting at a non-structural character: a number,

@@ -13,7 +13,9 @@ go run ./examples/01-parse
 | [03-constraints](03-constraints/main.go) | `schema` tags, auto-validating Marshal, `Validate` after mutation, `SchemaFor` | shipped |
 | [04-streaming](04-streaming/main.go) | `Stream`: incremental records, recoverable row faults, chunk independence | shipped |
 | [05-runtime-schema](05-runtime-schema/main.go) | Runtime schemas: compile once with `ParseSchema`, then `UnmarshalWith` / `ValidateWith` / `MarshalWith` / `ParseWith` / `StreamOptions.Schema` | shipped |
-| [PROPOSED.md](PROPOSED.md) | The full native surface from [ADR 0004](../docs/decisions/0004-native-api-design.md): embeddable bases, documents/sections/collections, typed definitions, `With` functions, `iogen` | design |
+[ADR 0004](../docs/decisions/0004-native-api-design.md) designs a further native surface —
+embeddable bases, documents/sections/collections, typed definitions and `iogen` code
+generation. **None of it is implemented**; the five examples above are the whole API today.
 
 ## One verb per direction
 

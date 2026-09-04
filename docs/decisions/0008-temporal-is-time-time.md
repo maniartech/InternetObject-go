@@ -52,7 +52,8 @@ and drops the clock; a `time` member writes the clock and drops the date; a `dat
 widens. All six cross-kind combinations were probed against io-js2 on 2026-09-03 and match,
 with one deliberate exception: a `time` carrying non-zero milliseconds writes them
 (`t"23:59:59.999"`) where the reference drops them, because the spec's canonical Time form is
-`HH:mm:ss.SSS` and dropping a non-zero field is data loss ([FINDINGS](../FINDINGS.md) #21).
+`HH:mm:ss.SSS` and dropping a non-zero field is data loss. Reported to the format owners,
+who confirmed it as a reference defect.
 
 **The value is never truncated.** `validation/temporal-depth.io` pins both directions — a date
 under `time` keeps its 2024 date, a time under `date` keeps its 12:00 clock — under the heading
@@ -76,7 +77,7 @@ Rule 15 asks a host to keep the three kinds distinct end to end. It scopes itsel
 **kinded host** and names the types it expects there — Rust's `Temporal`, Python's
 `date`/`time`/`datetime`. Go's standard library has one temporal type, so Go is not such a
 host, and honoring rule 15 here would mean *inventing* the kinded host the rule presumes.
-Recorded as a deliberate divergence in [FINDINGS.md](../FINDINGS.md) rather than absorbed
+Recorded as a deliberate divergence, reported to the format owners, rather than absorbed
 silently.
 
 ## What it costs and what it buys

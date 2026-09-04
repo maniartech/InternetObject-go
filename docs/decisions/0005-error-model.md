@@ -1,7 +1,7 @@
 # ADR 0005 — The error model
 
 - **Status:** Accepted, 2026-09-02
-- **Context:** [reports/error-model.md](../reports/error-model.md) measured this port against
+- **Context:** an internal error-model report measured this port against
   the TypeScript reference. The collection *mechanism* is right (accumulate-and-continue, in
   the correct order — the one dimension the corpus gates, which we pass); the *content* of
   each error is far thinner, and four of the gaps are defects rather than missing features.

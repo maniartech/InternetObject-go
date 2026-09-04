@@ -8,8 +8,8 @@ import (
 // These tests pin behaviors the bootstrap CSV does not cover. Each expected
 // stream was either derived from the reference tokenizer (io-js2, the oracle)
 // on 2026-09-02, or — where the oracle and the specification disagree —
-// follows the specification, with the divergence recorded in
-// docs/FINDINGS.md. The corpus remains the primary gate; these keep the
+// follows the specification, with the divergence reported to the format
+// owners. The corpus remains the primary gate; these keep the
 // derived rules from regressing silently.
 
 // render prints one stream compactly: KIND[/SUB](text[,code]) per token.

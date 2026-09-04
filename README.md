@@ -7,8 +7,8 @@ conformance corpus (`io-test-cases`) with the specification (`io-specs`) as the 
 **Status: the full conformance corpus passes** — all eight suites, 1,572 cases
 (tokenizer 262 · parser 195 · schema 160 · validation 538 · serializer 148 · document 100 ·
 streaming 118 · regression 51), against `io-test-cases` commit `15e02ce`. See
-[docs/PROGRESS.md](docs/PROGRESS.md) for the live scoreboard and [docs/decisions/](docs/decisions/)
-for the architecture decisions.
+[docs/decisions/](docs/decisions/) for the architecture decisions and
+[docs/reports/benchmarks.md](docs/reports/benchmarks.md) for the performance work.
 
 ## Usage
 
@@ -118,8 +118,9 @@ go test ./...
 ```
 
 Divergences between the specification and the reference implementation found by this port are
-recorded in [docs/FINDINGS.md](docs/FINDINGS.md) and belong upstream — per the corpus's porting
-guide, that output outranks the library.
+reported to the format owners and handled through the shared escalation process — per the
+corpus's porting guide, that output outranks the library. Where a divergence is deliberate and
+still open, the code says so at the site.
 
 ## Design
 

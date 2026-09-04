@@ -300,8 +300,11 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 // declared member without consuming anything, so if the chain of "first
 // member's schema" cycles before some schema on it declares the record's own
 // first key (which is what stops absorption), the record would be absorbed
-// forever — `~ $P: {A: $P}` fed `{$P: 0}`, which stack-overflows the
-// reference implementation (docs/FINDINGS.md #14).
+// forever. A cyclic schema that is APPLIED to an object record — `~ $P: {A: $P}`
+// with `--- $P` and `{x: 1}` — stack-overflows the reference implementation with
+// an uncoded RangeError. Merely DECLARING the cycle is harmless: nothing
+// recurses until the schema is reached, which is why the obvious-looking
+// `{$P: 0}` does not reproduce it. Measured against the oracle 2026-09-04.
 //
 // Skipping absorption here is not an invented rule: the record then takes the
 // ordinary path and reports the fault it actually has (unknown-member), which
