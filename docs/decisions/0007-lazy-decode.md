@@ -1,6 +1,10 @@
 # ADR 0007 — Lazy, token-backed decoding
 
-- **Status:** Proposed, 2026-09-02 — awaiting a decision before implementation.
+- **Status:** Accepted, 2026-09-02. **Implemented** — the framed decode path
+  (`internal/parser/raw.go`, `internal/document/framed.go`, `unmarshal_lazy.go`), forced off by
+  `IO_NO_LAZY=1`, held to the tree path by `FuzzLazyMatchesTreePath`. The status line said
+  "Proposed, awaiting a decision" until 2026-09-04, long after the work shipped; corrected here
+  rather than left to mislead the next reader.
 - **Context:** decode allocates ~22 objects per record where `encoding/json` allocates ~6
   ([reports/benchmarks.md](../reports/benchmarks.md)). The gap is not tuning: we materialize
   the document as a boxed tree, copy it during validation, then bind it into the caller's
