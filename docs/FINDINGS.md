@@ -111,18 +111,46 @@ Status legend: **open** = not yet reported/resolved upstream.
   milliseconds); beyond it the claim is broken — `invalid-bigint`. Deliberate divergence,
   needs an upstream decision on the designed bound.
 
-## 14. A self-absorbing schema stack-overflows the reference — open, rule-10 violation
+## 14. A self-absorbing schema stack-overflows the reference — **CORRECTED 2026-09-04**; the bug is real, my reproducer was not
 
-- `~ $P: {A: $P}` fed `{$P: 0}` (or `{x: 1}`) throws V8's uncoded
-  `RangeError: Maximum call stack size exceeded`; so does the mutual pair `$P: {A: $Q}`,
-  `$Q: {A: $P}`. The lone-object absorption rule (ISSUE-15) hands the WHOLE record to the
-  first declared member without consuming anything, so a cycle in the "first member's
-  schema" chain absorbs forever. Legitimate recursion (`{A: {A: N}}`) works in both
-  implementations — real nesting consumes a level of data per step.
-- **This port**: absorption is skipped when that chain cycles before some schema on it
-  declares the record's own first key; the record then reports the fault it actually has
-  (`unknown-member`). No invented code, and recursive schemas keep working. Found by the
-  stream byte fuzzer.
+> **My error, and the process caught it.** The original entry cited `~ $P: {A: $P}` fed
+> `{$P: 0}` or `{x: 1}`. Confirmation tried exactly that, saw no overflow, and closed the
+> finding as "does not reproduce" — correctly, because **those inputs do not reproduce it**.
+> They declare the cyclic schema but never apply it, so nothing recurses. The defect is real;
+> the INPUT field was wrong. Re-measured against the oracle 2026-09-04 and restated below.
+> This is the clearest possible argument for that field being load-bearing.
+
+```
+INPUT   ~ $P: {A: $P}
+        --- $P
+        {x: 1}
+
+PORT    unknown-member  (a designated code; no crash)
+ORACLE  RangeError: Maximum call stack size exceeded  — uncoded, V8's own
+SPEC    rule 10: an implementation must not fail with an uncoded host-runtime error
+```
+
+- **The trigger is application, not declaration.** The cyclic schema must actually be reached
+  AND applied to an object record. Measured against io-js2 2026-09-04:
+
+  | Input | io-js2 | io-go |
+  | --- | --- | --- |
+  | `~ $P: {A: $P}` · `--- $P` · `{x: 1}` | **RangeError** | `unknown-member` |
+  | `~ $P: {A: $P}` · `~ $schema: {p: $P}` · `{p: {x: 1}}` | **RangeError** | `unknown-member` |
+  | mutual `$P: {A: $Q}`, `$Q: {A: $P}`, applied | **RangeError** | `unknown-member` |
+  | `~ $P: $P` · `~ $schema: {p: $P}` · `{p: 1}` | **RangeError** | `invalid-definition` |
+  | `~ $P: {A: $P}` · `~ $schema: {q: int}` · `{q: 1}` (declared, unreferenced) | ok | ok |
+  | `~ $P: {A: $P}` · `{$P: 0}` — **the original, wrong reproducer** | ok | ok |
+  | applied to a SCALAR: `{p: 1}` under `{p: $P}` | `invalid-object` | — |
+
+- **Why:** the lone-object absorption rule (ISSUE-15) hands the WHOLE record to the first
+  declared member without consuming anything, so a cycle in the "first member's schema" chain
+  absorbs forever. A scalar escapes it because absorption never applies. Legitimate recursion
+  (`{A: {A: N}}`) is unaffected in both implementations — real nesting consumes a level of data
+  per step.
+- **This port**: absorption is skipped when that chain cycles before some schema on it declares
+  the record's own first key; the record then reports the fault it actually has. No invented
+  code, and recursive schemas keep working. Found by the stream byte fuzzer.
 
 ## 15. Stream-absolute error positions: required by the spec, done by nobody — open
 
