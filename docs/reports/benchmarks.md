@@ -1,7 +1,8 @@
 # Performance report — where io-go stands
 
-**Date:** 2026-09-02, re-measured 2026-09-03 · **Machine:** AMD Ryzen 7 5700G, Go 1.26.0,
-windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$' -count=6 .`
+**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05 · **Machine:** AMD Ryzen 7
+5700G, Go 1.26.0, windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$'
+-count=6 .`, and `go test -bench . -benchmem ./examples/06-codegen/` for the generated path.
 
 ## Headline
 
@@ -16,6 +17,14 @@ dynamic path's bytes. It also turned up **a shipped data race** in `pattern` val
 is the more important finding of the two ([ADR 0009](../decisions/0009-shared-compiled-state.md)).
 What remains slower than JSON is the **dynamic** parse alone, and the two structural items that
 would close it are named in the roadmap.
+
+**Pass 8 (2026-09-05)** turned to the marshal path after code generation landed, and found three
+layers of work being performed and then discarded — a re-rendered constant header, document
+scaffolding nothing read, and a validated tree the caller threw away. Generated marshal went
+**57 → 17 allocations**, `io.Validate` shed 2,000 allocations per thousand records, and neither
+needed a public API change. An inlined prototype shows the remaining ceiling: **~250 ns against
+`encoding/json`'s ~450**, blocked on exported spelling primitives
+([ADR 0010](../decisions/0010-code-generation.md) D4).
 
 The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
 competitive with any JSON parser. Everything above it is where the time goes.
@@ -151,6 +160,57 @@ on the header text would collect most of the same win automatically. Filed as ro
 
 The residual 2.1× after hoisting is the honest floor of doing more work — schema binding and
 per-member validation with designated codes — on a payload too small to amortize anything.
+
+## What changed — pass 8 (the marshal path stops doing work it discards)
+
+Driven by a question with an obvious answer once asked: `MarshalWith` re-rendered the schema
+header on every call, and for a generated type that header is a compile-time constant. Profiling
+from there found two more layers of the same mistake — work performed and then thrown away.
+
+1. **The schema header is rendered once per `*Schema`.** A schema-only document's header is a
+   pure function of the compiled schema, and a compiled schema is read-only (ADR 0009 D1). It was
+   ~45% of the allocations of a single-record marshal. Cached **lazily through a `sync.Once`**:
+   `Schema()` and `SchemaOf()` mint a wrapper per call and must not pay for a header nobody
+   marshals, while a `*Schema` is meant to be compiled once and shared across goroutines. The
+   distinction from the pattern-regexp race is that a `sync.Once` is *synchronised*; that bug was
+   an unsynchronised lazy write.
+2. **The document scaffolding is gone from the marshal path** (~38% of what was left).
+   `MarshalWith` built a `parser.Header` with a map and a defs slice, a `docDefs` with two more
+   maps, and a per-section schema map — structures that exist so a header can be RENDERED and
+   names RESOLVED. With the header cached and nothing to resolve, the writer read none of them:
+   `appendSection` wants one thing, the section's schema. `document.WriteSchemaDoc` writes header
+   + records with none of it.
+3. **Validation stopped assembling a tree its callers discard** (~24%). `checkRecords` called
+   `ValidateRecord` and dropped the assembled record — `_, verrs :=` — after paying for a whole
+   second object and member slice per record. `schema.CheckRecord` returns only the faults. Nested
+   objects still assemble, because a child's validated value goes into its parent's slot; only the
+   top-level result was ever optional.
+
+| | before | after |
+| --- | ---: | ---: |
+| generated `Marshal` (single record) | 5,108 ns · 2,992 B · 57 allocs | **~2,300 ns · 1,312 B · 17 allocs** |
+| `io.Validate`, 1,000 records | 979,156 B · 14,009 allocs | **659,157 B · 12,009 allocs** |
+
+Generated code now allocates **less than the hand-tagged struct** through `io.Marshal` (17 vs 21).
+The validation win is the wider one — it is not codegen-specific, so every `Validate` and
+`ValidateWith` call gets 2,000 fewer allocations per thousand records.
+
+None of the three touches the public API, adds a semantic decision, or duplicates one.
+
+### The ceiling, and what stands between us and it
+
+A hand-written prototype of what an **inlined** generator would emit reaches **~250 ns · 176 B ·
+1 alloc**, against `encoding/json`'s ~450 ns · 192 B · 2 — faster, while emitting a
+*self-describing* document (174 bytes to JSON's 97). So generated code CAN beat `encoding/json`;
+it does not today.
+
+Two things stand in the way, and one of them is a warning rather than a task. The prototype's
+first string speller **quoted `alice@example.com`**, because it treated `@` as always-significant
+when `@` only introduces a variable reference at the START of a value. One realistic email address
+disproved a copied format decision. Generated code lives in the user's package and cannot import
+`internal/document`, where that decision already lives exactly once — so the inlined path needs
+**exported spelling primitives**, not a copy of them. See
+[ADR 0010](../decisions/0010-code-generation.md) D4.
 
 ## What changed — pass 7 (the two gaps, and a race found on the way)
 
@@ -339,6 +399,9 @@ Ordered by value per unit of risk. Estimates are from the profiles, not measured
 | 7 | **Generated code (`iogen`)** removes reflection entirely from the struct path | Encode/decode −30…50% on top | Larger project |
 | ~~8~~ | ~~Cache the compiled schema across `Unmarshal` calls~~ | **DONE (pass 7)** — small payload −72% bytes, −73% allocs | landed; ADR 0009 D2 |
 | ~~9~~ | ~~`Project()` deep-clone~~ | **DONE (pass 7)** — dynamic −20% bytes, −14% allocs | landed; ADR 0009 D3 |
+| ~~a~~ | ~~Cache the schema header / drop the marshal scaffolding / stop assembling a discarded tree~~ | **DONE (pass 8)** — generated marshal 57 → 17 allocs; io.Validate −2,000 allocs per 1k records | landed; ADR 0010 D4 |
+| b | **`MarshalWith` should use the fast encode path.** `Marshal` calls `marshalFast` and skips the intermediate tree; `MarshalWith` never does. Not a drop-in — `marshalFast` derives its schema from struct tags, and `MarshalWith` must use the supplied one and emit members in ITS order | ~37% of what remains on that path | Medium, no public API |
+| c | **Export the spelling primitives, then emit an inlined writer from `iogen`** — the step that crosses `encoding/json` (~250 ns vs ~450 measured). Public API expansion; the corpus gate for generated code already exists to hold it | Single-record marshal ~9× | Needs an API decision (ADR 0010 D4) |
 | 10 | **Arena-allocate `[]value.Member`** (ADR 0006 P4, still unclaimed). `parser.go`'s `make([]value.Member, 0, 8)` per record and `assemble`'s per-record slice are now the two largest remaining allocation sites on the dynamic path. Note the objection recorded at `assemble` does NOT apply: an arena still yields a *fresh* Object, so no reference cycle is possible — only the backing array is shared | Dynamic −8…15% | Medium |
 | 11 | **Frame the data instead of building the parser's tree**, materializing the tree once (validated) with `Project` as the view it now already is. The only version where the dynamic path costs one tree instead of two | Dynamic, structural | Larger |
 
