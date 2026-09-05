@@ -1,4 +1,4 @@
-package main
+package gen
 
 import (
 	"bytes"
@@ -28,6 +28,7 @@ type unit struct {
 	Type       string // the generated type name, e.g. "User"
 	PrivType   string // its unexported form, e.g. "user" — names the plain twin
 	Recv       string // its receiver, e.g. "u"
+	CtorLocal  string // the constructor's local, distinct from every parameter
 	SchemaText string // the verbatim schema source
 	Fields     []field
 	Imports    []string
@@ -56,7 +57,6 @@ func Generate(pkg, typeName, schemaText string) (code, tests []byte, err error) 
 		Package:    pkg,
 		Type:       typeName,
 		PrivType:   unexported(typeName),
-		Recv:       strings.ToLower(typeName[:1]),
 		SchemaText: schemaText,
 	}
 	for _, name := range s.Names {
@@ -79,6 +79,24 @@ func Generate(pkg, typeName, schemaText string) (code, tests []byte, err error) 
 	if len(u.Fields) == 0 {
 		return nil, nil, fmt.Errorf("schema declares no members")
 	}
+
+	// Every generated local must be distinct from every FIELD name, because a
+	// member name is arbitrary user input and the constructor takes one
+	// parameter per member. Two bugs the corpus gate caught: a member named
+	// "t" collided with the receiver of a type starting with T, and a type
+	// starting with V would have had its receiver shadowed by every setter's
+	// own `v` parameter.
+	taken := map[string]bool{"v": true} // the setter parameter, always present
+	for _, f := range u.Fields {
+		taken[f.priv] = true
+	}
+	u.Recv = pick(strings.ToLower(typeName[:1]), taken)
+	taken[u.Recv] = true
+	// "t" is reserved too: the generated TESTS use CtorLocal as their subject,
+	// and it must not shadow *testing.T.
+	taken["t"] = true
+	u.CtorLocal = pick("out", taken)
+
 	u.Imports = imports(u.Fields)
 
 	if code, err = render(codeTemplate, u); err != nil {
@@ -129,6 +147,17 @@ func exportedIdent(name string) (string, error) {
 		return "", fmt.Errorf("cannot be spelled as a Go identifier")
 	}
 	return id, nil
+}
+
+// pick returns base, or base with enough underscores appended to be unused.
+func pick(base string, taken map[string]bool) string {
+	if goKeywords[base] {
+		base += "_"
+	}
+	for taken[base] {
+		base += "_"
+	}
+	return base
 }
 
 func unexported(id string) string {

@@ -23,6 +23,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/maniartech/InternetObject-go/internal/gen"
 )
 
 func main() {
@@ -58,7 +60,7 @@ func run(schemaPath, typeName, outPath, pkgName string) error {
 		}
 	}
 
-	code, tests, err := Generate(pkgName, typeName, strings.TrimSpace(string(src)))
+	code, tests, err := gen.Generate(pkgName, typeName, strings.TrimSpace(string(src)))
 	if err != nil {
 		return fmt.Errorf("%s: %w", schemaPath, err)
 	}

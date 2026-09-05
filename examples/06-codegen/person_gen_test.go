@@ -26,8 +26,8 @@ func TestPersonValidateDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var p Person
-	got, want := p.Validate(), io.ValidateWith(p.plain(), s)
+	var out Person
+	got, want := out.Validate(), io.ValidateWith(out.plain(), s)
 	if (got == nil) != (want == nil) {
 		t.Fatalf("Validate() = %v, engine = %v", got, want)
 	}
@@ -44,9 +44,9 @@ func TestPersonMarshalDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var p Person
-	got, gotErr := p.Marshal()
-	want, wantErr := io.MarshalWith(p.plain(), s)
+	var out Person
+	got, gotErr := out.Marshal()
+	want, wantErr := io.MarshalWith(out.plain(), s)
 	if (gotErr == nil) != (wantErr == nil) {
 		t.Fatalf("Marshal() error = %v, engine = %v", gotErr, wantErr)
 	}
@@ -59,58 +59,58 @@ func TestPersonMarshalDelegates(t *testing.T) {
 // Proven without inventing a valid value — whatever the zero value marshals
 // to before a failed setter, it must marshal to after.
 func TestPersonRejectedSetterRollsBack(t *testing.T) {
-	var p Person
-	before, beforeErr := p.Marshal()
+	var out Person
+	before, beforeErr := out.Marshal()
 
-	if err := p.SetName(p.Name()); err != nil {
+	if err := out.SetName(out.Name()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetName(current) failed on a valid record: %v", err)
 		}
 	}
 
-	if err := p.SetAge(p.Age()); err != nil {
+	if err := out.SetAge(out.Age()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetAge(current) failed on a valid record: %v", err)
 		}
 	}
 
-	if err := p.SetEmail(p.Email()); err != nil {
+	if err := out.SetEmail(out.Email()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetEmail(current) failed on a valid record: %v", err)
 		}
 	}
 
-	if err := p.SetActive(p.Active()); err != nil {
+	if err := out.SetActive(out.Active()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetActive(current) failed on a valid record: %v", err)
 		}
 	}
 
-	if err := p.SetScore(p.Score()); err != nil {
+	if err := out.SetScore(out.Score()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetScore(current) failed on a valid record: %v", err)
 		}
 	}
 
-	if err := p.SetTags(p.Tags()); err != nil {
+	if err := out.SetTags(out.Tags()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Errorf("SetTags(current) failed on a valid record: %v", err)
 		}
 	}
 
-	after, afterErr := p.Marshal()
+	after, afterErr := out.Marshal()
 	if (beforeErr == nil) != (afterErr == nil) || before != after {
 		t.Errorf("setting members to their own values changed the record:\n before %q (%v)\n after  %q (%v)",
 			before, beforeErr, after, afterErr)
@@ -123,10 +123,10 @@ func TestPersonRejectedSetterRollsBack(t *testing.T) {
 // the zero value — that is what a guarded type is FOR — and in that case the
 // available property is that Marshal and Validate agree about it.
 func TestPersonRoundTrips(t *testing.T) {
-	var p Person
-	text, err := p.Marshal()
+	var out Person
+	text, err := out.Marshal()
 	if err != nil {
-		if p.Validate() == nil {
+		if out.Validate() == nil {
 			t.Fatalf("Marshal failed (%v) on a record Validate accepts", err)
 		}
 		return

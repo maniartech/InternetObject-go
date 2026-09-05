@@ -13,18 +13,18 @@ import (
 const PersonSchema = `name: {string, minLen: 2, maxLen: 50}, age: {int, min: 0, max: 130}, email: string, active: bool, score: number, tags: [string]`
 
 var (
-	pSchemaOnce sync.Once
-	pSchemaVal  *io.Schema
-	pSchemaErr  error
+	personSchemaOnce sync.Once
+	personSchemaVal  *io.Schema
+	personSchemaErr  error
 )
 
 // PersonSchemaOf compiles the embedded schema once and reuses it. A compiled
 // schema is read-only and safe to share across goroutines.
 func PersonSchemaOf() (*io.Schema, error) {
-	pSchemaOnce.Do(func() {
-		pSchemaVal, pSchemaErr = io.ParseSchema(PersonSchema)
+	personSchemaOnce.Do(func() {
+		personSchemaVal, personSchemaErr = io.ParseSchema(PersonSchema)
 	})
-	return pSchemaVal, pSchemaErr
+	return personSchemaVal, personSchemaErr
 }
 
 // Person is a guarded Internet Object record. Its fields are unexported: a
@@ -75,7 +75,7 @@ func (p *Person) adopt(src personPlain) {
 
 // NewPerson builds a Person and returns an error if the schema rejects it.
 func NewPerson(name string, age int, email string, active bool, score float64, tags []string) (*Person, error) {
-	p := &Person{
+	out := &Person{
 		name:   name,
 		age:    age,
 		email:  email,
@@ -83,10 +83,10 @@ func NewPerson(name string, age int, email string, active bool, score float64, t
 		score:  score,
 		tags:   tags,
 	}
-	if err := p.Validate(); err != nil {
+	if err := out.Validate(); err != nil {
 		return nil, err
 	}
-	return p, nil
+	return out, nil
 }
 
 // Name returns the name member.

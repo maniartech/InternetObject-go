@@ -1,4 +1,4 @@
-package main
+package gen
 
 import "text/template"
 
@@ -27,18 +27,18 @@ import (
 const {{.Type}}Schema = ` + "`" + `{{.SchemaText}}` + "`" + `
 
 var (
-	{{.Recv}}SchemaOnce sync.Once
-	{{.Recv}}SchemaVal  *io.Schema
-	{{.Recv}}SchemaErr  error
+	{{.PrivType}}SchemaOnce sync.Once
+	{{.PrivType}}SchemaVal  *io.Schema
+	{{.PrivType}}SchemaErr  error
 )
 
 // {{.Type}}SchemaOf compiles the embedded schema once and reuses it. A compiled
 // schema is read-only and safe to share across goroutines.
 func {{.Type}}SchemaOf() (*io.Schema, error) {
-	{{.Recv}}SchemaOnce.Do(func() {
-		{{.Recv}}SchemaVal, {{.Recv}}SchemaErr = io.ParseSchema({{.Type}}Schema)
+	{{.PrivType}}SchemaOnce.Do(func() {
+		{{.PrivType}}SchemaVal, {{.PrivType}}SchemaErr = io.ParseSchema({{.Type}}Schema)
 	})
-	return {{.Recv}}SchemaVal, {{.Recv}}SchemaErr
+	return {{.PrivType}}SchemaVal, {{.PrivType}}SchemaErr
 }
 
 // {{.Type}} is a guarded Internet Object record. Its fields are unexported: a
@@ -69,13 +69,13 @@ func ({{.Recv}} *{{.Type}}) adopt(src {{.PrivType}}Plain) {
 
 // New{{.Type}} builds a {{.Type}} and returns an error if the schema rejects it.
 func New{{.Type}}({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f.Priv}} {{$f.GoType}}{{end}}) (*{{.Type}}, error) {
-	{{.Recv}} := &{{.Type}}{
+	{{.CtorLocal}} := &{{.Type}}{
 {{range .Fields}}		{{.Priv}}: {{.Priv}},
 {{end}}	}
-	if err := {{.Recv}}.Validate(); err != nil {
+	if err := {{.CtorLocal}}.Validate(); err != nil {
 		return nil, err
 	}
-	return {{.Recv}}, nil
+	return {{.CtorLocal}}, nil
 }
 {{range .Fields}}
 // {{.Go}} returns the {{.Member}} member.
@@ -159,8 +159,8 @@ func Test{{.Type}}ValidateDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var {{.Recv}} {{.Type}}
-	got, want := {{.Recv}}.Validate(), io.ValidateWith({{.Recv}}.plain(), s)
+	var {{.CtorLocal}} {{.Type}}
+	got, want := {{.CtorLocal}}.Validate(), io.ValidateWith({{.CtorLocal}}.plain(), s)
 	if (got == nil) != (want == nil) {
 		t.Fatalf("Validate() = %v, engine = %v", got, want)
 	}
@@ -177,9 +177,9 @@ func Test{{.Type}}MarshalDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var {{.Recv}} {{.Type}}
-	got, gotErr := {{.Recv}}.Marshal()
-	want, wantErr := io.MarshalWith({{.Recv}}.plain(), s)
+	var {{.CtorLocal}} {{.Type}}
+	got, gotErr := {{.CtorLocal}}.Marshal()
+	want, wantErr := io.MarshalWith({{.CtorLocal}}.plain(), s)
 	if (gotErr == nil) != (wantErr == nil) {
 		t.Fatalf("Marshal() error = %v, engine = %v", gotErr, wantErr)
 	}
@@ -192,18 +192,18 @@ func Test{{.Type}}MarshalDelegates(t *testing.T) {
 // Proven without inventing a valid value — whatever the zero value marshals
 // to before a failed setter, it must marshal to after.
 func Test{{.Type}}RejectedSetterRollsBack(t *testing.T) {
-	var {{.Recv}} {{.Type}}
-	before, beforeErr := {{.Recv}}.Marshal()
+	var {{.CtorLocal}} {{.Type}}
+	before, beforeErr := {{.CtorLocal}}.Marshal()
 {{range .Fields}}
-	if err := {{$.Recv}}.Set{{.Go}}({{$.Recv}}.{{.Go}}()); err != nil {
+	if err := {{$.CtorLocal}}.Set{{.Go}}({{$.CtorLocal}}.{{.Go}}()); err != nil {
 		// Setting a member to the value it already holds must fail only when
 		// the record was already invalid — never because of the set itself.
-		if {{$.Recv}}.Validate() == nil {
+		if {{$.CtorLocal}}.Validate() == nil {
 			t.Errorf("Set{{.Go}}(current) failed on a valid record: %v", err)
 		}
 	}
 {{end}}
-	after, afterErr := {{$.Recv}}.Marshal()
+	after, afterErr := {{$.CtorLocal}}.Marshal()
 	if (beforeErr == nil) != (afterErr == nil) || before != after {
 		t.Errorf("setting members to their own values changed the record:\n before %q (%v)\n after  %q (%v)",
 			before, beforeErr, after, afterErr)
@@ -216,10 +216,10 @@ func Test{{.Type}}RejectedSetterRollsBack(t *testing.T) {
 // the zero value — that is what a guarded type is FOR — and in that case the
 // available property is that Marshal and Validate agree about it.
 func Test{{.Type}}RoundTrips(t *testing.T) {
-	var {{.Recv}} {{.Type}}
-	text, err := {{.Recv}}.Marshal()
+	var {{.CtorLocal}} {{.Type}}
+	text, err := {{.CtorLocal}}.Marshal()
 	if err != nil {
-		if {{.Recv}}.Validate() == nil {
+		if {{.CtorLocal}}.Validate() == nil {
 			t.Fatalf("Marshal failed (%v) on a record Validate accepts", err)
 		}
 		return

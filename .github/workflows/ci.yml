@@ -104,6 +104,16 @@ jobs:
           IO_NO_FAST_PATH=1 go test -count=1 ./...
           IO_NO_HEADER_CACHE=1 go test -count=1 ./...
 
+      # Generated types are a third path, so they face the corpus too. It
+      # compiles ~450 generated types, so it runs once rather than per matrix
+      # cell. It caught three name-collision bugs on its first run that the
+      # hand-written example could not have.
+      - name: corpus through generated code
+        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        env:
+          IO_GEN_CORPUS: "1"
+        run: go test -count=1 -timeout=20m ./internal/gen/
+
       - name: examples
         run: |
           for d in examples/*/; do
