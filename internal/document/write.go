@@ -38,7 +38,7 @@ func (d *Doc) String() string {
 	dst := make([]byte, 0, 64+64*n)
 
 	wrote := false
-	if d.Header != nil {
+	if d.Header != nil || d.cachedHeader != "" {
 		if h := d.writeHeader(); h != "" {
 			dst = append(dst, h...)
 			wrote = true
@@ -400,7 +400,7 @@ func (w *partWriter) sep(dst []byte) []byte {
 func (w *partWriter) empty() { w.pending++ }
 
 func (d *Doc) appendSection(dst []byte, sec *parser.Section) []byte {
-	sch := d.SecSchemas[sec]
+	sch := d.schemaFor(sec)
 	if sec.Collection {
 		first := true
 		for _, rec := range sec.Records {

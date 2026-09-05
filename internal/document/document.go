@@ -24,6 +24,19 @@ type Doc struct {
 	// only by NewWithSchemaHeader, whose caller has rendered it once for a
 	// schema it reuses.
 	cachedHeader string
+	// soloSchema is the schema every section binds to, for a document that has
+	// exactly one of each. It exists so the marshal path need not allocate a
+	// map to state a fact it already knows.
+	soloSchema *schema.Schema
+}
+
+// schemaFor is THE lookup for a section's schema, so the one-section marshal
+// path and the parsed path answer the question the same way.
+func (d *Doc) schemaFor(sec *parser.Section) *schema.Schema {
+	if d.soloSchema != nil {
+		return d.soloSchema
+	}
+	return d.SecSchemas[sec]
 }
 
 // Load parses and validates one document, binding each section to the schema
@@ -169,11 +182,22 @@ func SchemaHeaderText(s *schema.Schema) string {
 	return NewWithSchema(&parser.Document{}, s).writeHeader()
 }
 
-// NewWithSchemaHeader is NewWithSchema with the header text already rendered.
-func NewWithSchemaHeader(pdoc *parser.Document, s *schema.Schema, header string) *Doc {
-	d := NewWithSchema(pdoc, s)
-	d.cachedHeader = header
-	return d
+// WriteSchemaDoc renders an already-rendered header followed by one section's
+// records, and allocates nothing else.
+//
+// The parsed-document scaffolding — a parser.Header carrying a map and a defs
+// slice, a docDefs carrying two more maps, and a per-section schema map —
+// exists so a header can be RENDERED and names RESOLVED. A marshal has already
+// rendered its header (cached on the schema) and has no names to resolve, so it
+// was paying for four maps it never read: ~38% of the allocations of a
+// single-record MarshalWith, measured 2026-09-05.
+func WriteSchemaDoc(header string, sec *parser.Section, s *schema.Schema) string {
+	d := &Doc{
+		Document:     &parser.Document{Sections: []*parser.Section{sec}},
+		cachedHeader: header,
+		soloSchema:   s,
+	}
+	return d.String()
 }
 
 func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {

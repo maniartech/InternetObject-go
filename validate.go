@@ -94,8 +94,9 @@ func schemaOr(override *schema.Schema, plan *structPlan) *schema.Schema {
 func checkRecords(s *schema.Schema, records []any) error {
 	var all []errs.Error
 	for _, rec := range records {
-		_, verrs := schema.ValidateRecord(rec.(*value.Object), s, noDefs{}, true)
-		all = append(all, verrs...)
+		// CheckRecord, not ValidateRecord: this caller wants the faults, and
+		// the assembled record it used to build was discarded on every call.
+		all = append(all, schema.CheckRecord(rec.(*value.Object), s, noDefs{}, true)...)
 	}
 	return toErrorList(all)
 }

@@ -69,11 +69,27 @@ func ValidateRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) (*
 	return ValidateRecordAt(rec, s, defs, accumulate, "$")
 }
 
+// CheckRecord validates a record and returns ONLY its faults.
+//
+// It is ValidateRecord without the assembled result — which the callers that
+// merely check (Validate, ValidateWith, and MarshalWith before it writes)
+// discarded anyway, after paying for a whole second object and member slice per
+// record. Nested objects are still assembled: a child's validated value is
+// placed into its parent's slot, so only the TOP-level result is optional.
+func CheckRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) []errs.Error {
+	_, acc := validateAt(rec, s, defs, accumulate, "$", false)
+	return acc
+}
+
 // ValidateRecordAt is ValidateRecord with the structural path this record
 // occupies, so faults report where they are (ADR 0005 D3): "$" for a bare
 // record, "$[2]" for the third record of a collection.
 func ValidateRecordAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path string) (*value.Object, []errs.Error) {
-	out, acc, fatal := validateObject(rec, s, defs, path)
+	return validateAt(rec, s, defs, accumulate, path, true)
+}
+
+func validateAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path string, wantOut bool) (*value.Object, []errs.Error) {
+	out, acc, fatal := validateObject(rec, s, defs, path, wantOut)
 	switch {
 	case fatal != nil && accumulate:
 		return nil, append(acc, *fatal)
@@ -90,7 +106,7 @@ func ValidateRecordAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, 
 // validateObject implements the record/object algorithm. It returns the
 // validated object, the accumulated member errors, and the fatal membership
 // error (which aborted processing) if any.
-func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
+func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOut bool) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
 	// Validated members: schema-order slots first, then extras by arrival.
 	// Slots are addressed by POSITION, not by name — the schema is compiled
 	// and its member positions are fixed, so two maps per record became two
@@ -178,6 +194,9 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 			try(0, name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
 			slots[0].processed = true
 			fillMissing(false)
+			if !wantOut {
+				return nil, acc, nil
+			}
 			return assemble(rec, s, slots, extras), acc, nil
 		}
 	}
@@ -292,6 +311,9 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string) (out *
 	}
 
 	fillMissing(true)
+	if !wantOut {
+		return nil, acc, nil
+	}
 	return assemble(rec, s, slots, extras), acc, nil
 }
 
@@ -921,7 +943,7 @@ func validateObjectMember(val any, md *MemberDef, defs Defs) any {
 	if sch == nil {
 		return obj // a bare `object` member constrains nothing
 	}
-	v, acc, fatal := validateObject(obj, sch, defs, md.Path)
+	v, acc, fatal := validateObject(obj, sch, defs, md.Path, true)
 	if fatal != nil {
 		panic(valFail{*fatal})
 	}

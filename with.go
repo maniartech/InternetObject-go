@@ -105,8 +105,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 	if err := checkRecords(s.s, sec.Records); err != nil {
 		return "", err
 	}
-	pdoc := &parser.Document{Sections: []*parser.Section{sec}}
-	return document.NewWithSchemaHeader(pdoc, s.s, s.header()).String(), nil
+	return document.WriteSchemaDoc(s.header(), sec, s.s), nil
 }
 
 // Schema returns the schema a section of the parsed document was validated
