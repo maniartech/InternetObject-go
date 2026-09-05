@@ -106,7 +106,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 		return "", err
 	}
 	pdoc := &parser.Document{Sections: []*parser.Section{sec}}
-	return document.NewWithSchema(pdoc, s.s).String(), nil
+	return document.NewWithSchemaHeader(pdoc, s.s, s.header()).String(), nil
 }
 
 // Schema returns the schema a section of the parsed document was validated
@@ -114,7 +114,7 @@ func MarshalWith(v any, s *Schema) (string, error) {
 func (d *Document) Schema() *Schema {
 	for _, sec := range d.doc.Sections {
 		if s := d.doc.SecSchemas[sec]; s != nil {
-			return &Schema{s: s}
+			return newSchema(s)
 		}
 	}
 	return nil
@@ -128,7 +128,7 @@ func (d *Document) SchemaOf(name string) (*Schema, error) {
 	if cerr != nil {
 		return nil, ErrorList{{Code: cerr.Code, Line: int(cerr.Line), Col: int(cerr.Col)}}
 	}
-	return &Schema{s: s}, nil
+	return newSchema(s), nil
 }
 
 // Records returns the document's records as live values, faulted ones

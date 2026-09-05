@@ -98,6 +98,9 @@ func SchemaText(s *schema.Schema) string {
 // ── header ─────────────────────────────────────────────────────────────────
 
 func (d *Doc) writeHeader() string {
+	if d.cachedHeader != "" {
+		return d.cachedHeader
+	}
 	h := d.Header
 	// Schema-only mode: a header holding nothing but the default schema is
 	// written as the bare schema line.

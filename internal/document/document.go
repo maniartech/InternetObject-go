@@ -20,6 +20,10 @@ type Doc struct {
 	*parser.Document
 	Defs       *docDefs
 	SecSchemas map[*parser.Section]*schema.Schema
+	// cachedHeader, when non-empty, is the already-rendered header text. Set
+	// only by NewWithSchemaHeader, whose caller has rendered it once for a
+	// schema it reuses.
+	cachedHeader string
 }
 
 // Load parses and validates one document, binding each section to the schema
@@ -156,6 +160,22 @@ func NewUnvalidated(pdoc *parser.Document) (*Doc, *errs.Error) {
 // already-compiled schema: every section binds to it (records emit
 // positionally) and it is written as the document header. Records are not
 // re-validated here — the caller validates.
+// SchemaHeaderText renders the header a schema-only document carries. It is a
+// PURE FUNCTION of the compiled schema — NewWithSchema builds a header holding
+// nothing but that schema — which is what makes it safe to compute once and
+// reuse. Rendering it is not cheap: it was ~45% of the allocations of every
+// single-record MarshalWith, for a value that never changes.
+func SchemaHeaderText(s *schema.Schema) string {
+	return NewWithSchema(&parser.Document{}, s).writeHeader()
+}
+
+// NewWithSchemaHeader is NewWithSchema with the header text already rendered.
+func NewWithSchemaHeader(pdoc *parser.Document, s *schema.Schema, header string) *Doc {
+	d := NewWithSchema(pdoc, s)
+	d.cachedHeader = header
+	return d
+}
+
 func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
 	header := &parser.Header{
 		Schemas: map[string]any{"schema": s},

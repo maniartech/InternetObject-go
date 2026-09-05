@@ -127,7 +127,7 @@ func SchemaFor[T any]() (*Schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Schema{s: plan.compiled}, nil
+	return newSchema(plan.compiled), nil
 }
 
 // String renders the schema in canonical Internet Object syntax — valid as a
