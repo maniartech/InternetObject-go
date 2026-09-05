@@ -1,5 +1,10 @@
-// Example 06 — code generation. The schema file is the source of truth; the
-// guarded type is generated from it and cannot be put into an invalid state.
+// Example 06 — code generation (EXPERIMENTAL). The schema file is the source of
+// truth; the guarded type is generated from it and cannot be put into an invalid
+// state.
+//
+// iogen generates one record against one schema today. Collections and
+// multi-section documents are not supported yet and the generated shape may
+// change with them — see ADR 0010. The library API used below is stable.
 package main
 
 import "fmt"

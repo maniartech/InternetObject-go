@@ -1,7 +1,16 @@
 # ADR 0010 — Code generation (`iogen`)
 
-- **Status:** Accepted, 2026-09-05. **Implemented in its delegating form.** The inlined form is
-  deliberately deferred — see D4, which names exactly what it needs and why it is not built yet.
+- **Status:** **EXPERIMENTAL**, 2026-09-05. Implemented in its delegating form and gated by the
+  shared corpus, but the generated API is **not stable**: it covers a single record and will grow
+  to cover documents (D6), and that growth may change what it emits. The inlined form is
+  deliberately deferred — see D4.
+- **What "experimental" costs:** nothing structural. `iogen` adds **no public API surface** — a
+  separate binary (`cmd/iogen`) over an internal package (`internal/gen`). Nothing in the library
+  depends on it, so it can change or be withdrawn without touching the stable surface. What it
+  does affect is *checked-in generated code*, which is why the marker is on the generated file
+  itself and not only here.
+- **What would make it stable:** D6's document support, collections, and a decision on D4. Until
+  then, regenerate rather than hand-edit, and expect the shape to move.
 - **Implements:** [ADR 0004](0004-native-api-design.md) D6, whose text this ADR supersedes on two
   points (naming, and what "zero semantic logic" costs).
 - **Does NOT depend on** ADR 0004 phases 1-2. `iogen` is the *Level 2* alternative to the
@@ -109,6 +118,49 @@ inlined form, keep the delegating form as the fallback for shapes it declines, g
 `IO_NO_INLINE_GEN=1` the way `IO_NO_LAZY` and `IO_NO_FAST_PATH` gate the other two fast paths, and
 let the D3 corpus gate hold them byte-identical. **The gate already exists**, which is the single
 most useful thing this ADR leaves behind.
+
+## D6. Supporting a full document — the path out of experimental
+
+Today a generated type is ONE record against ONE schema. A real document has a header of named
+schemas and variables, and one or more sections, each bound to a schema and holding a collection.
+That is the shape `iogen` has to reach, and it is why the tool is experimental rather than done.
+
+The intended source is an actual `.io` document that declares the shape and carries no data —
+the schema file generalised:
+
+```
+~ $Employee: {name: string, age: int}
+~ $Stat:     {key: string, value: number}
+--- employees: $Employee
+--- stats: $Stat
+```
+
+from which the generator would emit a guarded record type per named schema, and a document type
+whose fields are the sections:
+
+```go
+type Employee struct{ … }   // guarded, as today
+type Stat     struct{ … }
+type Report struct {        // the document
+    employees []Employee
+    stats     []Stat
+}
+```
+
+Three things must be settled before that is built, and they are the reason it is not:
+
+1. **Collections.** A generated record is a single record; `[]Person` still goes through the
+   engine. Collection support is a prerequisite for sections, not an extra.
+2. **Multi-section marshalling.** `MarshalWith` takes a struct or a slice of structs — one
+   section. Emitting a document with several named sections needs a path that does not exist yet,
+   and inventing one inside generated code would violate the delegation rule this ADR rests on.
+3. **Alignment with ADR 0004 D1/D4.** `io.Document`, `io.Collection[T]` and `io.Definitions` are
+   already designed there, for the *tagged* route. A generated document type should be the Level 2
+   twin of that design, not a second, differently-shaped answer to the same question. Building
+   codegen's document story before phase 2 exists would fork it.
+
+So the order is: collections → the engine's multi-section path (or ADR 0004 phase 2) → generated
+documents. Doing it in the other order produces two document models.
 
 ## D5. What is still on the table, in order
 

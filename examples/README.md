@@ -13,6 +13,12 @@ go run ./examples/01-parse
 | [03-constraints](03-constraints/main.go) | `schema` tags, auto-validating Marshal, `Validate` after mutation, `SchemaFor` | shipped |
 | [04-streaming](04-streaming/main.go) | `Stream`: incremental records, recoverable row faults, chunk independence | shipped |
 | [05-runtime-schema](05-runtime-schema/main.go) | Runtime schemas: compile once with `ParseSchema`, then `UnmarshalWith` / `ValidateWith` / `MarshalWith` / `ParseWith` / `StreamOptions.Schema` | shipped |
+| [06-codegen](06-codegen/main.go) | **Experimental.** `iogen` generates a guarded type from a schema file: unexported fields, constructor, typed setters — a value that exists is one the schema accepted | experimental |
+
+`iogen` covers a single record against a single schema. Collections and multi-section documents
+are not supported yet, so the generated shape may change ([ADR 0010](../docs/decisions/0010-code-generation.md)).
+Nothing in the library depends on the tool, so this carries no risk for the stable API.
+
 [ADR 0004](../docs/decisions/0004-native-api-design.md) designs a further native surface —
 embeddable bases, documents/sections/collections, typed definitions and `iogen` code
 generation. **None of it is implemented**; the five examples above are the whole API today.

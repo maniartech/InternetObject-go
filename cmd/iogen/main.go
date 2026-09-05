@@ -1,5 +1,11 @@
 // Command iogen generates a guarded Go type from an Internet Object schema.
 //
+// EXPERIMENTAL. It generates a single record against a single schema; collections
+// and multi-section documents are not supported yet, and the generated shape may
+// change as they arrive (ADR 0010 D6). It declines any schema it cannot bind
+// exactly rather than emitting code that binds it approximately. Nothing in the
+// library depends on this tool, so it carries no stability promise of its own.
+//
 // The schema file is the source of truth (ADR 0004 D6). The generated type
 // keeps its fields unexported and exposes a constructor, getters and typed
 // setters, so a value that exists is one the schema accepted — the guarantee a
