@@ -399,7 +399,12 @@ func (d *Doc) constraintValue(typeName string, v any) string {
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
 	}
-	return ""
+	// Anything the cases above do not name — an object default, binary, a
+	// deferred literal — is still a VALUE, and the writer must spell it. This
+	// used to return "", emitting `default:` with nothing after it: text the
+	// reader rejects with expected-value. Found by the round-trip fuzzer on
+	// `A:[{any,{}}]`, where the positional form binds `{}` to default.
+	return d.writeValue(v, nil)
 }
 
 // ── sections and records ───────────────────────────────────────────────────

@@ -141,6 +141,94 @@ func allowedKeys(typeName string) map[string]bool {
 	}
 }
 
+// ── a typedef is a record, and every type declares its schema ───────────────
+//
+// `{string, minLen: 2}` is not special syntax: it is a RECORD, and the type it
+// must satisfy is the type's own memberdef schema — an ordered list of keys and
+// the value each takes. Order is the contract behind the positional form, which
+// is why `{bool, F}` works at all: position 0 binds to `type`, position 1 to
+// `default`, exactly as `~ Alice, 30` binds to `{name, age}`.
+//
+// This table is transcribed from io-js2's per-type schemas
+// (io-js2/src/schema/types/*.ts), where it is normative. io-go previously
+// carried the same information as key SETS plus a hand-written per-family
+// switch — which threw the ORDER away, and with it the positional form
+// entirely, and left two copies of one decision to drift apart.
+type typedefMember struct {
+	name string
+	// valueType is what the key's value must be:
+	//   "self"    the family's own type — default, min, max, multipleOf
+	//   "[self]"  an array of the family's own type — choices
+	//   ""        a SHAPE this pass does not type-check — of, schema, anyOf
+	//   else      a concrete type name
+	valueType string
+}
+
+var typedefSchemas = map[family][]typedefMember{
+	famString: {
+		{"type", "string"}, {"default", "self"}, {"choices", "[self]"},
+		{"pattern", "string"}, {"flags", "string"},
+		{"len", "number"}, {"minLen", "number"}, {"maxLen", "number"},
+		{"format", "string"}, {"escapeLines", "bool"}, {"encloser", "string"},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famNumber: {
+		{"type", "string"}, {"default", "self"}, {"choices", "[self]"},
+		{"min", "self"}, {"max", "self"}, {"multipleOf", "self"},
+		{"format", "string"}, {"optional", "bool"}, {"null", "bool"},
+	},
+	famBigInt: {
+		{"type", "string"}, {"default", "self"}, {"choices", "[self]"},
+		{"min", "self"}, {"max", "self"}, {"multipleOf", "self"},
+		{"format", "string"}, {"optional", "bool"}, {"null", "bool"},
+	},
+	famDecimal: {
+		{"type", "string"}, {"default", "self"}, {"choices", "[self]"},
+		{"precision", "number"}, {"scale", "number"},
+		{"min", "self"}, {"max", "self"}, {"multipleOf", "self"},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famBool: {
+		{"type", "string"}, {"default", "self"},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famTemporal: {
+		{"type", "string"}, {"default", "self"}, {"choices", "[self]"},
+		{"min", "self"}, {"max", "self"},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famArray: {
+		{"type", "string"}, {"default", "self"}, {"of", ""},
+		{"len", "number"}, {"minLen", "number"}, {"maxLen", "number"},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famObject: {
+		{"type", "string"}, {"default", "self"}, {"schema", ""},
+		{"optional", "bool"}, {"null", "bool"},
+	},
+	famAny: {
+		{"type", "string"}, {"default", ""}, {"choices", ""}, {"anyOf", ""},
+		{"isSchema", "bool"}, {"optional", "bool"}, {"null", "bool"},
+	},
+}
+
+// typedefSchemaFor returns the memberdef schema a typedef of this type must
+// satisfy.
+func typedefSchemaFor(typeName string) []typedefMember {
+	return typedefSchemas[familyOf(typeName)]
+}
+
+// typedefKey returns the member a key names, or false when the type does not
+// declare it — which is unknown-member.
+func typedefKey(typeName, key string) (typedefMember, bool) {
+	for _, m := range typedefSchemaFor(typeName) {
+		if m.name == key {
+			return m, true
+		}
+	}
+	return typedefMember{}, false
+}
+
 // Compile compiles a parsed schema expression (the value model of a schema
 // body) rooted at the given path.
 func Compile(shape any, path string) (s *Schema, cerr *errs.Error) {
@@ -337,20 +425,30 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 		fail(unusableTypeCode(typeName))
 	}
 	md.Type = typeName
-	allowed := allowedKeys(typeName)
 	if hasAbsentMember(obj) {
 		fail(errs.EmptyMemberdef)
 	}
 
+	tdSchema := typedefSchemaFor(typeName)
+	positionalPrefix := true
+
 	for i, m := range obj.Members {
+		key := m.Key
 		if m.Positional {
 			if i == 0 {
-				continue // the type name itself
+				continue // the type name itself, already read by typedefTypeName
 			}
-			// A stray positional in a typedef declares nothing it can keep.
-			fail(errs.UnknownMember)
+			// A positional entry binds to the memberdef schema's member at this
+			// POSITION — `{bool, F}` is type, default. This used to fail as
+			// unknown-member on the belief that a positional "declares nothing
+			// it can keep", which the schema contradicts.
+			if !positionalPrefix || i >= len(tdSchema) {
+				fail(errs.UnknownMember)
+			}
+			key = tdSchema[i].name
+		} else {
+			positionalPrefix = false
 		}
-		key := m.Key
 		switch key {
 		case "type":
 			continue
@@ -366,7 +464,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			md.HasDefault, md.Default = true, m.Value
 			md.Keys = append(md.Keys, "default")
 		case "choices":
-			if !allowed["choices"] {
+			if _, ok := typedefKey(typeName, "choices"); !ok {
 				fail(errs.UnknownMember)
 			}
 			arr, ok := m.Value.([]any)
@@ -377,7 +475,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			md.Choices = arr
 			md.Keys = append(md.Keys, "choices")
 		case "anyOf":
-			if !allowed["anyOf"] {
+			if _, ok := typedefKey(typeName, "anyOf"); !ok {
 				fail(errs.UnknownMember)
 			}
 			arr, ok := m.Value.([]any)
@@ -389,14 +487,14 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			}
 			md.Keys = append(md.Keys, "anyOf")
 		case "of":
-			if !allowed["of"] {
+			if _, ok := typedefKey(typeName, "of"); !ok {
 				fail(errs.UnknownMember)
 			}
 			// The object-form element def starts a fresh path (matching the
 			// reference: `of: {id: int}` compiles child paths from the root).
 			md.Of = compileOfDef(m.Value)
 		case "schema":
-			if !allowed["schema"] {
+			if _, ok := typedefKey(typeName, "schema"); !ok {
 				fail(errs.UnknownMember)
 			}
 			// `schema: $Name` is a reference like the short form `a: $Name`
@@ -407,7 +505,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 				md.Schema = compileSchema(m.Value, path)
 			}
 		default:
-			if !allowed[key] {
+			if _, ok := typedefKey(typeName, key); !ok {
 				fail(errs.UnknownMember)
 			}
 			checkConstraintValue(typeName, key, m.Value)
@@ -419,6 +517,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 		}
 	}
 	compilePattern(md)
+
 }
 
 // compilePattern builds the `pattern` regexp once, here, so that validation

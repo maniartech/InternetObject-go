@@ -73,18 +73,15 @@ var playgroundExpect = map[string]struct {
 	// Advanced and complex
 	"complex-library": {samplePasses, ""},
 	"variables":       {samplePasses, ""},
-	"separate-schema": {sampleGap, "the sample keeps DEFINITIONS in one panel and a " +
-		"document WITH ITS OWN HEADER in the other; io-go has no way to parse a " +
-		"document against preloaded definitions, so the two headers cannot be joined. " +
-		"Stream already takes StreamOptions.Definitions; Parse has no equivalent"},
+	"separate-schema": {samplePasses, ""},
 
 	// Applications and use cases
 	"api-multiple-collections-response": {samplePasses, ""},
 	"app-seed-data":                     {samplePasses, ""},
 	"ml-training-data":                  {samplePasses, ""},
 	"structured-logging":                {samplePasses, ""},
-	"api-collection-response":           {sampleGap, "joining a bare schema panel to the document is not yet right; needs the definitions route above"},
-	"as-config":                         {sampleGap, "positional defaults in a typedef, e.g. {bool, F} and {int, 8000}"},
+	"api-collection-response":           {samplePasses, ""},
+	"as-config":                         {samplePasses, ""},
 }
 
 func TestPlaygroundSamples(t *testing.T) {
@@ -234,11 +231,35 @@ func playgroundSource(t *testing.T, file string) (string, bool) {
 	if schema == "" {
 		return doc, true
 	}
+	// Only add a separator when the document declares NO section of its own.
+	// HasPrefix was wrong: separate-schema carries its own header and puts the
+	// `---` in the middle, so joining added a second one and the sample
+	// "failed" for a reason that was the harness's, not the library's.
 	sep := nl + "---" + nl
-	if strings.HasPrefix(doc, "---") {
+	if strings.Contains(doc, "---") {
 		sep = nl
 	}
+	// A BARE schema panel (`pid: {...}, name: string`) and a document that
+	// carries `~` definitions of its own are two different header FORMS and do
+	// not concatenate. A bare panel means "this is the default schema", so say
+	// that explicitly and the two forms compose.
+	if sep == nl && !hasDefinitionLine(schema) {
+		schema = "~ $schema: {" + schema + nl + "}"
+	}
 	return schema + sep + doc, true
+}
+
+// hasDefinitionLine reports whether a schema panel is written in the
+// DEFINITION form (`~ $name: {…}`, `~ @var: …`) rather than as a bare schema
+// expression. A leading comment line means the first character cannot answer
+// this — separate-schema opens with one.
+func hasDefinitionLine(s string) bool {
+	for _, line := range strings.Split(s, nl) {
+		if strings.HasPrefix(strings.TrimSpace(line), "~") {
+			return true
+		}
+	}
+	return false
 }
 
 // unescapeTemplate resolves the escapes a TypeScript TEMPLATE LITERAL applies,
