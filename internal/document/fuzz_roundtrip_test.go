@@ -353,36 +353,170 @@ func diffPath(a, b any, path string) string {
 	return path + ": " + dumpVal(a) + " became " + dumpVal(b)
 }
 
+// ── properties and shrinking ───────────────────────────────────────────────
+//
+// The property list is aligned with io-js2's own generative fuzzer
+// (io-js2/tools/fuzz), minus the two properties that describe a feature this
+// port does not have (schema inference). Its SHRINKING is the part worth
+// copying outright: a soak reports a seed and a round number, and reproducing a
+// failure from "document 18,431 of seed 0xC0FFEE" is archaeology. A minimized
+// counterexample is one you can read in the failure message.
+
+// fuzzProperty checks every property against one document and returns the first
+// violation, or "" when the document is clean. A panic is itself a violation —
+// that is the `does-not-throw` half of the list.
+func fuzzProperty(d *Doc) (violation string) {
+	defer func() {
+		if r := recover(); r != nil {
+			violation = fmt.Sprintf("panic: %v", r)
+		}
+	}()
+
+	original := d.Project() // result-projects
+	text := d.String()      // stringify-does-not-throw
+	back := Parse(text)
+	if len(back.Errors) > 0 { // output-reparses
+		codes := make([]string, len(back.Errors))
+		for i, e := range back.Errors {
+			codes[i] = e.Code
+		}
+		return "output does not re-parse: " + strings.Join(codes, ", ")
+	}
+	reparsed := back.Project()
+	if !fuzzEq(original, reparsed) { // value-preserved
+		return "value changed at " + diffPath(original, reparsed, "$")
+	}
+	if second := back.String(); second != text { // stringify-idempotent
+		return "not idempotent: second write differs"
+	}
+	return ""
+}
+
+// fuzzDocOf rebuilds a one-section document around the given records.
+func fuzzDocOf(collection bool, records []any) *Doc {
+	sec := &parser.Section{Name: "data", Collection: collection, Records: records}
+	return &Doc{
+		Document:   &parser.Document{Sections: []*parser.Section{sec}},
+		Defs:       newDefs(nil),
+		SecSchemas: map[*parser.Section]*schema.Schema{},
+	}
+}
+
+// shrinkFuzzValue offers simpler versions of one value: fewer members, fewer
+// elements, and finally nothing at all. Sub-values are SHARED rather than
+// cloned, which is safe because nothing on this path mutates a document.
+func shrinkFuzzValue(v any) []any {
+	switch x := v.(type) {
+	case *value.Object:
+		var out []any
+		for i := range x.Members {
+			ms := append(append([]value.Member{}, x.Members[:i]...), x.Members[i+1:]...)
+			out = append(out, &value.Object{Members: ms})
+		}
+		for i := range x.Members {
+			for _, simpler := range shrinkFuzzValue(x.Members[i].Value) {
+				ms := append([]value.Member{}, x.Members...)
+				ms[i].Value = simpler
+				out = append(out, &value.Object{Members: ms})
+			}
+		}
+		return out
+	case []any:
+		var out []any
+		for i := range x {
+			out = append(out, append(append([]any{}, x[:i]...), x[i+1:]...))
+		}
+		for i := range x {
+			for _, simpler := range shrinkFuzzValue(x[i]) {
+				es := append([]any{}, x...)
+				es[i] = simpler
+				out = append(out, es)
+			}
+		}
+		return out
+	case nil:
+		return nil // already minimal
+	default:
+		return []any{nil} // a scalar reduces to null
+	}
+}
+
+// shrinkFuzzDoc minimizes a failing document while it keeps failing. Greedy and
+// bounded: each pass takes the first candidate that still fails, and the whole
+// search is capped so a pathological case cannot turn a test run into a hang.
+func shrinkFuzzDoc(d *Doc) *Doc {
+	const maxSteps = 500
+	for step := 0; step < maxSteps; step++ {
+		sec := d.Sections[0]
+		var improved bool
+		if len(sec.Records) > 1 {
+			for i := range sec.Records {
+				cand := fuzzDocOf(sec.Collection,
+					append(append([]any{}, sec.Records[:i]...), sec.Records[i+1:]...))
+				if fuzzProperty(cand) != "" {
+					d, improved = cand, true
+					break
+				}
+			}
+		}
+		if !improved {
+			for i := range sec.Records {
+				for _, simpler := range shrinkFuzzValue(sec.Records[i]) {
+					recs := append([]any{}, sec.Records...)
+					recs[i] = simpler
+					cand := fuzzDocOf(sec.Collection, recs)
+					if fuzzProperty(cand) != "" {
+						d, improved = cand, true
+						break
+					}
+				}
+				if improved {
+					break
+				}
+			}
+		}
+		if !improved {
+			return d
+		}
+	}
+	return d
+}
+
 func runFuzzSeed(t *testing.T, seed uint64, rounds int) (failures int) {
 	t.Helper()
 	r := newFuzzRng(seed)
 	for round := 0; round < rounds; round++ {
 		doc := genFuzzDoc(r)
-		original := doc.Project()
-
-		text := doc.String()
-		back := Parse(text)
-		if len(back.Errors) > 0 {
-			codes := make([]string, len(back.Errors))
-			for i, e := range back.Errors {
-				codes[i] = e.Code
-			}
-			t.Errorf("seed %#x round %d: output does not re-parse: %v on %q", seed, round, codes, text)
-			failures++
+		why := fuzzProperty(doc)
+		if why == "" {
 			continue
 		}
-		if reparsed := back.Project(); !fuzzEq(original, reparsed) {
-			t.Errorf("seed %#x round %d: value changed at %s\n  in=%s\n  out=%s\n  text=%q",
-				seed, round, diffPath(original, reparsed, "$"), dumpVal(original), dumpVal(reparsed), text)
-			failures++
-			continue
-		}
-		if second := back.String(); second != text {
-			t.Errorf("seed %#x round %d: not idempotent:\n  first=%q\n  second=%q", seed, round, text, second)
-			failures++
-		}
+		failures++
+		// Report the SHRUNK document, not the generated one. The generated one
+		// is whatever the RNG happened to build around the defect; the shrunk
+		// one is the defect.
+		small := shrinkFuzzDoc(doc)
+		t.Errorf("seed %#x round %d: %s"+nlFuzz+
+			"  shrunk to: %s"+nlFuzz+
+			"  it writes: %q",
+			seed, round, why, dumpVal(small.Project()), safeString(small))
 	}
 	return failures
+}
+
+// nlFuzz is a newline, named so this file needs no escape in its format
+// strings when they are assembled by tooling.
+var nlFuzz = string(rune(10))
+
+// safeString renders a document without letting a panic escape the reporter —
+// the failure being reported may BE that panic.
+func safeString(d *Doc) (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = fmt.Sprintf("<panic: %v>", r)
+		}
+	}()
+	return d.String()
 }
 
 var fuzzSeeds = []uint64{
