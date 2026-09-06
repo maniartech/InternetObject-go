@@ -13,6 +13,7 @@ go run ./examples/01-parse
 | [03-constraints](03-constraints/main.go) | `schema` tags, auto-validating Marshal, `Validate` after mutation, `SchemaFor` | shipped |
 | [04-streaming](04-streaming/main.go) | `Stream`: incremental records, recoverable row faults, chunk independence | shipped |
 | [05-runtime-schema](05-runtime-schema/main.go) | Runtime schemas: compile once with `ParseSchema`, then `UnmarshalWith` / `ValidateWith` / `MarshalWith` / `ParseWith` / `StreamOptions.Schema` | shipped |
+| [07-dashboard](07-dashboard/main.go) | **One request, several entity types.** A document carrying employees, alerts and stats, each section bound to its own schema; the receiver takes each one typed with `io.SectionAs[T]` | shipped |
 | [06-codegen](06-codegen/main.go) | **Experimental.** `iogen` generates a guarded type from a schema file: unexported fields, constructor, typed setters — a value that exists is one the schema accepted | experimental |
 
 `iogen` covers a single record against a single schema. Collections and multi-section documents

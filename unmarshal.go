@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
@@ -44,6 +45,16 @@ func bindDoc(doc *document.Doc, v any) error {
 	elem := rv.Elem()
 	switch {
 	case elem.Kind() == reflect.Slice && isStructElem(elem.Type().Elem()):
+		// A document carrying SEVERAL sections carries several entity types,
+		// and flattening them into one slice binds an Alert into an Employee
+		// as a zero value with no error at all — silent corruption, on the
+		// format's own headline capability. Name the sections instead.
+		if n := len(doc.Sections); n > 1 {
+			return &UnmarshalError{Path: "$", Msg: fmt.Sprintf(
+				"document has %d sections (%s); unmarshal into a struct with "+
+					"section-named fields, or take one with io.SectionAs[T]",
+				n, sectionNames(doc))}
+		}
 		records := allRecords(doc)
 		out := reflect.MakeSlice(elem.Type(), len(records), len(records))
 		for i, rec := range records {
@@ -75,6 +86,19 @@ type UnmarshalError struct {
 }
 
 func (e *UnmarshalError) Error() string { return e.Path + ": " + e.Msg }
+
+// sectionNames lists a document's section names for an error message.
+func sectionNames(doc *document.Doc) string {
+	names := make([]string, 0, len(doc.Sections))
+	for _, sec := range doc.Sections {
+		n := sec.Name
+		if n == "" {
+			n = DefaultSectionName
+		}
+		names = append(names, n)
+	}
+	return strings.Join(names, ", ")
+}
 
 // allRecords collects every record in document order.
 func allRecords(doc *document.Doc) []*value.Object {
