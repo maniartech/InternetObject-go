@@ -104,10 +104,12 @@ func parseTimeString(s string, t *temporal) bool {
 	}
 	t.h = atoi(s[:2])
 	i := 2
+	sep := false
 	for _, dst := range []*int{&t.mi, &t.sec} {
 		j := i
 		if j < len(s) && s[j] == ':' {
 			j++
+			sep = true
 		}
 		if j+2 > len(s) || !allDigits(s[j:j+2]) {
 			break
@@ -116,13 +118,47 @@ func parseTimeString(s string, t *temporal) bool {
 		i = j + 2
 	}
 	if i < len(s) {
-		if s[i] != '.' || len(s)-i-1 != 3 || !allDigits(s[i+1:]) {
+		// Fractional seconds, in the two spellings the reference accepts
+		// (measured 2026-09-06; it used to be exactly three digits after a
+		// dot, which rejected documents the playground itself ships):
+		//
+		//	14:35:58.123456   dotted, ANY number of digits, truncated to ms
+		//	143548123         compact, the digits run on POSITIONALLY
+		//
+		// A dot after the COMPACT form (t"143045.123") stays accepted here even
+		// though the reference rejects it: the spec's format table lists
+		// compact HHmmss.SSS, so this is the port's existing, deliberate
+		// divergence — already reported to the format owners — and is pinned by
+		// TestOracleDerivedBehaviors. Do not "fix" it by requiring separators.
+		var frac string
+		if s[i] == '.' {
+			frac = s[i+1:]
+		} else {
+			if sep {
+				return false
+			}
+			frac = s[i:]
+		}
+		if frac == "" || !allDigits(frac) {
 			return false
 		}
-		t.ms = atoi(s[i+1:])
-		i = len(s)
+		t.ms = fracMillis(frac)
 	}
 	return t.h <= 23 && t.mi <= 59 && t.sec <= 59
+}
+
+// fracMillis reduces a fractional-second run to milliseconds: the first three
+// digits, a shorter run scaled. The reference truncates rather than rounds —
+// .123456 is .123, not .123 rounded from .1234…
+func fracMillis(frac string) int {
+	switch len(frac) {
+	case 1:
+		return atoi(frac) * 100
+	case 2:
+		return atoi(frac) * 10
+	default:
+		return atoi(frac[:3])
+	}
 }
 
 // parseZone reads a whole-string timeZone: Z, or a signed offset in ±HH,

@@ -462,9 +462,15 @@ func compileArrayElem(v any, path string) *MemberDef {
 	switch tv := v.(type) {
 	case string:
 		if strings.HasPrefix(tv, "$") {
-			// A reference is not usable as a bracket element in the reference
-			// implementation; it reports unknown-type.
-			fail(errs.UnknownType)
+			// `[$Name]` is an array of a referenced schema, resolved lazily at
+			// validation exactly as the short member form `a: $Name` is.
+			//
+			// This used to fail with unknown-type, on a comment asserting the
+			// reference implementation did the same. Re-probed 2026-09-06: it
+			// does NOT — io-js2 accepts `books:[$B]` and projects the elements.
+			// The playground's own "Multiple Sections" sample uses the form, so
+			// io-go was rejecting a document the format advertises.
+			return &MemberDef{Type: "object", SchemaRef: tv, Path: path}
 		}
 		if !registeredTypes[tv] {
 			fail(unusableTypeCode(tv))
