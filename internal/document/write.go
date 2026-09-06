@@ -25,6 +25,14 @@ import (
 // reservedSectionNames are the parser defaults a writer treats as no name.
 var reservedSectionNames = map[string]bool{"data": true, "schema": true, "$schema": true}
 
+// IsDefaultSectionName reports a name the parser supplied rather than the
+// document: `---` becomes the section "data". Callers that ask "did the author
+// NAME this section?" must go through here, not compare against "data"
+// themselves, or the answer drifts between the writer and everyone else.
+func IsDefaultSectionName(name string) bool {
+	return name == "" || reservedSectionNames[name]
+}
+
 // String renders the loaded document in canonical form: header included,
 // schemas spelled with types, keys emitted only where a name is not
 // recoverable ("extras" mode).
@@ -212,6 +220,9 @@ func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 		return "object, schema: " + d.nestedSchemaAnnotation(md.Schema)
 	}
 	if md.Type == "array" && md.Of != nil {
+		if isUntypedElem(md.Of) {
+			return "array"
+		}
 		return "array, of: " + d.arrayElemAnnotation(md.Of)
 	}
 	typeName := md.Type
@@ -284,7 +295,23 @@ func (d *Doc) nestedSchemaAnnotation(s *schema.Schema) string {
 	return "{" + strings.Join(fields, ", ") + "}"
 }
 
+// isUntypedElem reports the element `[]` compiles to: a NULLABLE any with
+// nothing else said about it (schema.compileArrayElem).
+//
+// It has no spelling of its own. In the bracket form it is written by writing
+// nothing — `[]` — and in the long form by leaving `of:` off entirely, since an
+// array with no `of` is equally untyped. Writing it as `any` instead silently
+// drops the nullability, and the document stops re-parsing the moment it holds
+// a null element.
+func isUntypedElem(of *schema.MemberDef) bool {
+	return of != nil && of.Type == "any" && of.Null && of.SchemaRef == "" &&
+		of.Schema == nil && of.Of == nil && len(of.Keys) == 0
+}
+
 func (d *Doc) arrayElemAnnotation(of *schema.MemberDef) string {
+	if isUntypedElem(of) {
+		return ""
+	}
 	if of.SchemaRef != "" {
 		return refSpelling(of.SchemaRef)
 	}
@@ -322,7 +349,9 @@ func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string 
 		parts = append(parts, key+":"+d.constraintValue(v))
 	}
 	if md.Type == "array" && md.Of != nil {
-		parts = append(parts[:1], append([]string{"of: " + d.arrayElemAnnotation(md.Of)}, parts[1:]...)...)
+		if !isUntypedElem(md.Of) {
+			parts = append(parts[:1], append([]string{"of: " + d.arrayElemAnnotation(md.Of)}, parts[1:]...)...)
+		}
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
 }

@@ -39,6 +39,25 @@ func sectionBinding(t reflect.Type, doc *document.Doc) (map[string]fieldPlan, er
 	if err != nil {
 		return nil, err
 	}
+	// Only a document with an EXPLICITLY NAMED section can bind by section, and
+	// the unnamed one is never the reason to start.
+	//
+	// The unnamed section is NAMED "data" by the parser, so without this a
+	// perfectly ordinary record struct with a member called `data` would take
+	// the section path and fail — which is exactly what a generated type did,
+	// caught by the generated-code corpus gate. A tag naming a section is only
+	// an opt-in when the section was named on purpose, and only the writer's
+	// own predicate can say whether it was.
+	named := false
+	for _, sec := range doc.Sections {
+		if !document.IsDefaultSectionName(sec.Name) {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return nil, nil
+	}
 	present := make(map[string]bool, len(doc.Sections))
 	for _, sec := range doc.Sections {
 		n := sec.Name

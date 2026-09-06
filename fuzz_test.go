@@ -39,6 +39,15 @@ func FuzzParse(f *testing.F) {
 	for _, s := range fuzzSeedDocs {
 		f.Add(s)
 	}
+	// Seed with the playground samples too. A fuzzer is only as good as where
+	// it starts: mutating a hand-written toy document explores the shapes near
+	// a toy, while these carry variables, schema references, nested and
+	// recursive schemas, several sections and every scalar type — so a single
+	// mutation lands somewhere structurally interesting instead of somewhere
+	// trivially malformed.
+	for _, s := range playgroundSeeds(f) {
+		f.Add(s)
+	}
 	f.Fuzz(func(t *testing.T, src string) {
 		doc, err := io.Parse(src)
 		if doc == nil {

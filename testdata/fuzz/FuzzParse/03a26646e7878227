@@ -1,0 +1,2 @@
+go test fuzz v1
+string("~@r:{e,l:email,t:date,r:{string,choices:[@r,g]}}---n ,ohn.doe@xample.com,'',@@")

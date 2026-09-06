@@ -367,33 +367,72 @@ func sectionSchema(sec *parser.Section, defs *docDefs) (*schema.Schema, *errs.Er
 // open, by design references in any string form (io-test-cases FINDINGS #3).
 // Keys stay literal. Returns the first resolution error.
 func resolveVars(v any, defs *docDefs) *errs.Error {
+	return resolveVarsAt(v, defs, nil)
+}
+
+// resolveVarsAt substitutes @-references, following them INTO the values they
+// substitute — a variable's value may hold references of its own, and leaving
+// those alone made io-go accept `~ @r: {{[@0]}}` with an undefined @0 that the
+// reference rejects (oracle-confirmed 2026-09-06).
+//
+// `seen` carries the variable names on the current path, which is what makes
+// that safe. A self-referential variable (`~ @r: {r: @r}`) is reported as
+// invalid-definition — the same answer SchemaOf gives a self-referential $ref
+// chain — and the check happens BEFORE the substitution, deliberately:
+// assigning first and detecting after would leave the variable's own value
+// pointing at itself, and the header writer would then never terminate. The
+// first version of this did exactly that and died on the stack; rule 10 says a
+// designated code, never a crash.
+func resolveVarsAt(v any, defs *docDefs, seen map[string]bool) *errs.Error {
+	sub := func(s string, set func(any)) (bool, *errs.Error) {
+		if !strings.HasPrefix(s, "@") || len(s) <= 1 {
+			return false, nil
+		}
+		name := s[1:]
+		if seen[name] {
+			return true, &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
+		}
+		r, verr := defs.Var(name)
+		if verr != nil {
+			return true, verr
+		}
+		set(r)
+		if seen == nil {
+			seen = map[string]bool{}
+		}
+		seen[name] = true
+		verr = resolveVarsAt(r, defs, seen)
+		delete(seen, name)
+		return true, verr
+	}
+
 	switch x := v.(type) {
 	case *value.Object:
 		for i := range x.Members {
 			mv := x.Members[i].Value
-			if s, ok := mv.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
-				r, verr := defs.Var(s[1:])
-				if verr != nil {
-					return verr
+			if s, ok := mv.(string); ok {
+				if done, verr := sub(s, func(r any) { x.Members[i].Value = r }); done {
+					if verr != nil {
+						return verr
+					}
+					continue
 				}
-				x.Members[i].Value = r
-				continue
 			}
-			if verr := resolveVars(mv, defs); verr != nil {
+			if verr := resolveVarsAt(mv, defs, seen); verr != nil {
 				return verr
 			}
 		}
 	case []any:
 		for i, e := range x {
-			if s, ok := e.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
-				r, verr := defs.Var(s[1:])
-				if verr != nil {
-					return verr
+			if s, ok := e.(string); ok {
+				if done, verr := sub(s, func(r any) { x[i] = r }); done {
+					if verr != nil {
+						return verr
+					}
+					continue
 				}
-				x[i] = r
-				continue
 			}
-			if verr := resolveVars(e, defs); verr != nil {
+			if verr := resolveVarsAt(e, defs, seen); verr != nil {
 				return verr
 			}
 		}

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	io "github.com/maniartech/InternetObject-go"
+	"github.com/maniartech/InternetObject-go/internal/conformance"
+	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The io-playground samples, as a second corpus.
@@ -124,6 +126,49 @@ func TestPlaygroundSamples(t *testing.T) {
 	}
 }
 
+// Every sample that parses must survive a round trip: what the writer emits
+// must re-parse to the SAME value.
+//
+// This is a stronger claim than "it parses", and the samples are the right
+// documents to make it against - they are far richer than anything written by
+// hand for a test, carrying variables, nested schemas, references, collections
+// and several sections at once. A writer bug on a shape like that is exactly
+// what a reader of the playground would hit first.
+func TestPlaygroundSamplesRoundTrip(t *testing.T) {
+	dir := playgroundDir(t)
+	for _, f := range playgroundFiles(t, dir) {
+		name := strings.TrimSuffix(filepath.Base(f), ".ts")
+		want, known := playgroundExpect[name]
+		if !known || want.state != samplePasses {
+			continue // only the samples that parse clean have a value to compare
+		}
+		t.Run(name, func(t *testing.T) {
+			src, ok := playgroundSource(t, f)
+			if !ok {
+				t.Fatalf("no doc literal in %s", f)
+			}
+			doc, err := io.Parse(src)
+			if err != nil {
+				t.Fatalf("sample no longer parses: %v", err)
+			}
+			text := doc.String()
+			back, err := io.Parse(text)
+			if err != nil {
+				t.Fatalf("the writer produced text that does not re-parse: %v"+nl+"---8<---"+nl+"%s"+nl+"---8<---", err, text)
+			}
+			if !value.Equal(doc.Value(), back.Value()) {
+				t.Errorf("round trip changed the value"+nl+"  first  %s"+nl+"  second %s",
+					conformance.Show(doc.Value()), conformance.Show(back.Value()))
+			}
+			// And the SECOND writing must be identical to the first: a
+			// canonical writer is idempotent, or it is not canonical.
+			if again := back.String(); again != text {
+				t.Errorf("writing is not idempotent"+nl+"  first  %q"+nl+"  again  %q", text, again)
+			}
+		})
+	}
+}
+
 func playgroundDir(t *testing.T) string {
 	t.Helper()
 	if d := os.Getenv("IO_PLAYGROUND_DIR"); d != "" {
@@ -221,6 +266,54 @@ func unescapeTemplate(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// playgroundSeeds returns every playground sample as fuzz-seed text.
+//
+// Best-effort by design: TestPlaygroundSamples is the ONE place that enforces
+// the samples' presence, and enforcing it again here would only turn one clear
+// failure into several confusing ones.
+func playgroundSeeds(f *testing.F) []string {
+	f.Helper()
+	dir := os.Getenv("IO_PLAYGROUND_DIR")
+	if dir == "" {
+		_, thisFile, _, _ := runtime.Caller(0)
+		repo := filepath.Dir(thisFile)
+		dir = filepath.Join(filepath.Dir(repo), "io-playground", "src", "sample-data")
+	}
+	var out []string
+	filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil || fi.IsDir() || !strings.HasSuffix(p, ".ts") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		var schema, doc string
+		for _, m := range reSampleLit.FindAllStringSubmatch(string(b), -1) {
+			if m[1] == "schema" {
+				schema = strings.TrimSpace(unescapeTemplate(m[2]))
+			} else {
+				doc = strings.TrimSpace(unescapeTemplate(m[2]))
+			}
+		}
+		if doc == "" {
+			return nil
+		}
+		if schema != "" {
+			sep := nl + "---" + nl
+			if strings.HasPrefix(doc, "---") {
+				sep = nl
+			}
+			out = append(out, schema+sep+doc)
+			// The panels alone are interesting inputs in their own right.
+			out = append(out, schema)
+		}
+		out = append(out, doc)
+		return nil
+	})
+	return out
 }
 
 // nl is a newline without writing an escape sequence in this source.

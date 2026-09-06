@@ -1,0 +1,2 @@
+go test fuzz v1
+string("~ @r: {\r\n  name: string,\r\n  email: email,\r\n  joiningDt: date,\r\n  color: {string, choices: [@r, @g, @b]}\r\n}\n---\n~ John Doe, john.doe@example.com, d'2020-01-01', @j")

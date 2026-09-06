@@ -373,6 +373,7 @@ func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path stri
 			if !ok {
 				fail(errs.ExpectedArray)
 			}
+			checkConstraintValue(typeName, "choices", arr)
 			md.Choices = arr
 			md.Keys = append(md.Keys, "choices")
 		case "anyOf":
@@ -523,7 +524,29 @@ func checkConstraintValue(typeName, key string, v any) {
 	case "escapeLines":
 		_, ok := v.(bool)
 		expect(errs.ExpectedBoolean, ok)
+	case "choices":
+		// Every choice must be a value of the member's own type. The elements
+		// used to go unchecked, so `{string, choices: [0B]}` compiled with a
+		// malformed literal inside it and the writer then emitted an EMPTY
+		// element — text its own reader rejects. The reference reports
+		// expected-string here; found by fuzzing, oracle-confirmed 2026-09-06.
+		list, ok := v.([]any)
+		expect(errs.ExpectedArray, ok)
+		for _, e := range list {
+			if es, isStr := e.(string); isStr && strings.HasPrefix(es, "@") {
+				continue // a variable reference, resolved later
+			}
+			expectFamily(typeName, e, expect)
+		}
 	case "min", "max", "multipleOf", "default":
+		expectFamily(typeName, v, expect)
+	}
+}
+
+// expectFamily checks one value against a type's family — the shared rule
+// behind min/max/multipleOf/default and every element of choices.
+func expectFamily(typeName string, v any, expect func(string, bool)) {
+	{
 		switch familyOf(typeName) {
 		case famString:
 			_, ok := v.(string)
