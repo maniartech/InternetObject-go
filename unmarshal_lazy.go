@@ -305,7 +305,19 @@ var errUnsupportedLazy = &UnmarshalError{Path: "$", Msg: "unsupported by the laz
 
 // lazyFault builds a designated wire fault positioned at the offending token.
 func lazyFault(code string, f *document.Framed, m parser.RawMember, recIndex int, name string) error {
-	tok := f.Stream.Tokens[m.Tok]
+	// An EMPTY member — a trailing comma slot, as in `a,b,c` against a schema
+	// of two — has no token of its own, and its Tok is one PAST the end. It
+	// used to index out of range and panic, which rule 10 forbids outright: a
+	// designated code, never a host-runtime crash. Found by fuzzing the lazy
+	// path against the tree path with `name,age,score,active,tags---,,,,,`.
+	line, col := int32(1), int32(1)
+	if toks := f.Stream.Tokens; len(toks) > 0 {
+		i := int(m.Tok)
+		if i < 0 || i >= len(toks) {
+			i = len(toks) - 1 // the nearest real position we have
+		}
+		line, col = toks[i].Line, toks[i].Col
+	}
 	at := rootPath.record(recIndex)
 	if name != "" {
 		at = at.member(name)
@@ -313,6 +325,6 @@ func lazyFault(code string, f *document.Framed, m parser.RawMember, recIndex int
 	path := at.String()
 	return ErrorList{{
 		Code: code, Category: errs.CategoryOf(code), Path: path,
-		RecordIndex: recIndex, Line: int(tok.Line), Col: int(tok.Col),
+		RecordIndex: recIndex, Line: int(line), Col: int(col),
 	}}
 }

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("~@g:0~@b:0~$000000:{A:{string,choices:[0A,@b]}}---#0")

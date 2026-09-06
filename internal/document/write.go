@@ -240,7 +240,7 @@ func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 		default:
 			v = md.Constraints[key]
 		}
-		parts = append(parts, key+":"+d.constraintValue(v))
+		parts = append(parts, key+":"+d.constraintValue(typeName, v))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -346,7 +346,7 @@ func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string 
 		default:
 			v = md.Constraints[key]
 		}
-		parts = append(parts, key+":"+d.constraintValue(v))
+		parts = append(parts, key+":"+d.constraintValue(typeName, v))
 	}
 	if md.Type == "array" && md.Of != nil {
 		if !isUntypedElem(md.Of) {
@@ -358,9 +358,19 @@ func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string 
 
 // constraintValue renders a constraint's value: @-references resolved,
 // strings always quoted.
-func (d *Doc) constraintValue(v any) string {
+func (d *Doc) constraintValue(typeName string, v any) string {
+	// A @-reference is resolved — the corpus pins that
+	// (serializer/headers.io :: header_variable_in_choices) — but ONLY when the
+	// resolved value is legal for this member's type.
+	//
+	// `{string, choices: [@b]}` with `~ @b: 0` resolved to `choices: [0]`, a
+	// NUMBER in a string member's choices. The re-parse rejected the schema,
+	// writeHeader dropped the definition it could not compile, and the second
+	// write differed from the first. Keeping the reference in that case obeys
+	// this file's own law: never emit text your own reader rejects. Found by
+	// the idempotence property.
 	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
-		if r, verr := d.Defs.Var(s[1:]); verr == nil {
+		if r, verr := d.Defs.Var(s[1:]); verr == nil && schema.ValueFitsType(typeName, r) {
 			v = r
 		}
 	}
@@ -385,7 +395,7 @@ func (d *Doc) constraintValue(v any) string {
 	case []any:
 		var elems []string
 		for _, e := range x {
-			elems = append(elems, d.constraintValue(e))
+			elems = append(elems, d.constraintValue(typeName, e))
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
 	}

@@ -543,6 +543,19 @@ func checkConstraintValue(typeName, key string, v any) {
 	}
 }
 
+// ValueFitsType reports whether v is a legal value for the named type. It is
+// the same family rule the compiler enforces, exported so the WRITER can ask
+// before it substitutes something that would not compile back.
+func ValueFitsType(typeName string, v any) (ok bool) {
+	ok = true
+	expectFamily(typeName, v, func(_ string, pass bool) {
+		if !pass {
+			ok = false
+		}
+	})
+	return ok
+}
+
 // expectFamily checks one value against a type's family — the shared rule
 // behind min/max/multipleOf/default and every element of choices.
 func expectFamily(typeName string, v any, expect func(string, bool)) {
