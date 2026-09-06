@@ -35,6 +35,7 @@ env:
   # The corpus is located as a sibling checkout; set it explicitly rather than
   # relying on the relative-path fallback in internal/conformance/corpus.go.
   IO_CORPUS_DIR: ${{ github.workspace }}/io-test-cases
+  IO_PLAYGROUND_DIR: ${{ github.workspace }}/io-playground/src/sample-data
 
 jobs:
   test:
@@ -64,6 +65,13 @@ jobs:
           token: ${{ secrets.CORPUS_TOKEN || github.token }}
           path: io-test-cases
           fetch-depth: 0 # the pinned commit may not be HEAD
+      # The playground samples are a second corpus: the documents the format
+      # SHOWS PEOPLE. A sample this port cannot read is one a reader will copy
+      # out of the playground and find broken. Public, so no token needed.
+      - uses: actions/checkout@v4
+        with:
+          repository: maniartech/InternetObject-Playground
+          path: io-playground
 
       # The pin lives in ONE place — the source that reports it. Reading it here
       # rather than repeating the hash keeps that true.
@@ -143,6 +151,10 @@ jobs:
           token: ${{ secrets.CORPUS_TOKEN || github.token }}
           path: io-test-cases
           fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: maniartech/InternetObject-Playground
+          path: io-playground
       - name: Pin the corpus
         run: |
           pin=$(sed -n 's/.*CorpusPin = "\([0-9a-f]*\)".*/\1/p' internal/conformance/corpus.go)
@@ -177,6 +189,10 @@ jobs:
           token: ${{ secrets.CORPUS_TOKEN || github.token }}
           path: io-test-cases
           fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: maniartech/InternetObject-Playground
+          path: io-playground
       - name: Pin the corpus
         run: |
           pin=$(sed -n 's/.*CorpusPin = "\([0-9a-f]*\)".*/\1/p' internal/conformance/corpus.go)
@@ -243,6 +259,10 @@ jobs:
           # at which point this falls back to the default token and still works.
           token: ${{ secrets.CORPUS_TOKEN || github.token }}
           path: io-test-cases
+      - uses: actions/checkout@v4
+        with:
+          repository: maniartech/InternetObject-Playground
+          path: io-playground
       - uses: actions/setup-go@v5
         with:
           go-version: stable
