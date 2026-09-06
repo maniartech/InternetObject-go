@@ -114,3 +114,76 @@ func TestSingleSectionStillUnmarshals(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
+
+// The no-ceremony form: a struct whose io tags name sections binds the whole
+// document, one field per section.
+func TestDocumentStructBinding(t *testing.T) {
+	type dash struct {
+		Employees []secEmployee `io:"employees"`
+		Alerts    []secAlert    `io:"alerts"`
+	}
+	var d dash
+	if err := io.Unmarshal(dashboardDoc, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Employees) != 2 || d.Employees[0].Name != "Alice" {
+		t.Errorf("employees = %+v", d.Employees)
+	}
+	if len(d.Alerts) != 1 || d.Alerts[0].Level != "warn" {
+		t.Errorf("alerts = %+v", d.Alerts)
+	}
+}
+
+// A section the struct does not name is ignored, as encoding/json ignores an
+// unknown key; a field the document does not carry stays zero.
+func TestDocumentStructPartial(t *testing.T) {
+	type onlyAlerts struct {
+		Alerts  []secAlert    `io:"alerts"`
+		Missing []secEmployee `io:"nowhere"`
+	}
+	var d onlyAlerts
+	if err := io.Unmarshal(dashboardDoc, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Alerts) != 1 {
+		t.Errorf("alerts = %+v", d.Alerts)
+	}
+	if d.Missing != nil {
+		t.Errorf("a field naming no section should stay zero, got %+v", d.Missing)
+	}
+}
+
+// Section binding must not fire for a RECORD struct. The rule is that a tag
+// has to name a section the document ACTUALLY HAS, so adding a field can never
+// silently change what an existing struct means.
+func TestRecordStructUnaffectedBySectionBinding(t *testing.T) {
+	const one = "name: string, age: int\n---\nAlice, 30"
+	var e secEmployee
+	if err := io.Unmarshal(one, &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Name != "Alice" || e.Age != 30 {
+		t.Fatalf("record = %+v", e)
+	}
+}
+
+// Validation is native to the document struct: the element types' `schema`
+// tags are enforced by io.Validate.
+func TestDocumentStructValidates(t *testing.T) {
+	type tagged struct {
+		Name string `io:"name" schema:"{string, minLen: 2}"`
+	}
+	type dash struct {
+		Employees []tagged `io:"employees"`
+	}
+	if err := io.Validate(dash{Employees: []tagged{{Name: "Alice"}}}); err != nil {
+		t.Fatalf("valid document rejected: %v", err)
+	}
+	err := io.Validate(dash{Employees: []tagged{{Name: "X"}}})
+	if err == nil {
+		t.Fatal("a member violating its schema tag was accepted")
+	}
+	if !strings.Contains(err.Error(), "mismatched-min-len") {
+		t.Errorf("error = %v, want mismatched-min-len", err)
+	}
+}

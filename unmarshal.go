@@ -66,6 +66,16 @@ func bindDoc(doc *document.Doc, v any) error {
 		return nil
 
 	case elem.Kind() == reflect.Struct && !isModelStruct(elem.Type()):
+		// A struct whose `io` tags name sections binds the WHOLE document:
+		// one field per section, no ceremony. Chosen only when a tag actually
+		// names a section the document has, so a record struct is unaffected.
+		fields, err := sectionBinding(elem.Type(), doc)
+		if err != nil {
+			return err
+		}
+		if len(fields) > 0 {
+			return bindSections(doc, elem, fields)
+		}
 		records := allRecords(doc)
 		if len(records) != 1 {
 			return &UnmarshalError{Path: "$",

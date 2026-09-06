@@ -4,8 +4,6 @@
 // document carrying employees, alerts and stats, each section bound to its OWN
 // schema and validated as itself. A JSON equivalent needs an envelope object,
 // and nothing checks that `alerts` really holds alerts.
-//
-// The receiver takes the parts it wants, typed, with io.SectionAs[T].
 package main
 
 import (
@@ -15,7 +13,7 @@ import (
 )
 
 // One request from a service to a dashboard.
-const payload = `~ $Employee: {name: string, age: {int, min: 0}}
+const payload = `~ $Employee: {name: string, age: {int, min: 0, max: 130}}
 ~ $Alert:    {level: {string, choices: [info, warn, error]}, msg: string}
 ~ $Stat:     {key: string, value: number}
 --- employees: $Employee
@@ -30,8 +28,8 @@ const payload = `~ $Employee: {name: string, age: {int, min: 0}}
 `
 
 type Employee struct {
-	Name string `io:"name"`
-	Age  int    `io:"age"`
+	Name string `io:"name" schema:"{string, minLen: 2}"`
+	Age  int    `io:"age"  schema:"{int, min: 0, max: 130}"`
 }
 
 type Alert struct {
@@ -44,37 +42,43 @@ type Stat struct {
 	Value float64 `io:"value"`
 }
 
+// Dashboard is the WHOLE document: one field per section, named by its io tag.
+type Dashboard struct {
+	Employees []Employee `io:"employees"`
+	Alerts    []Alert    `io:"alerts"`
+	Stats     []Stat     `io:"stats"`
+}
+
 func main() {
+	// ── The no-ceremony path ────────────────────────────────────────────────
+	// The document binds straight into the struct. Every section was validated
+	// against its own schema on the way in, so a bad row never reaches here.
+	var d Dashboard
+	if err := io.Unmarshal(payload, &d); err != nil {
+		panic(err)
+	}
+	fmt.Printf("employees %v\nalerts    %v\nstats     %v\n", d.Employees, d.Alerts, d.Stats)
+
+	// Validation is native to the struct too — the `schema` tags above.
+	fmt.Printf("\nValidate(dashboard)          -> %v\n", io.Validate(d))
+	bad := Dashboard{Employees: []Employee{{Name: "X", Age: -5}}}
+	fmt.Printf("Validate(negative age, X)     -> %v\n", io.Validate(bad))
+
+	// ── Or take one entity type at a time ───────────────────────────────────
 	doc, err := io.Parse(payload)
 	if err != nil {
 		panic(err)
 	}
-
-	// What arrived, without knowing the shape in advance.
-	fmt.Println("sections received:")
+	fmt.Println("\nsections received:")
 	for _, s := range doc.Sections() {
-		fmt.Printf("  %-10s schema %-10s %d records\n", s.Name(), "$"+s.SchemaName(), s.Len())
+		fmt.Printf("  %-10s schema $%-9s %d records\n", s.Name(), s.SchemaName(), s.Len())
 	}
 
-	// Take each entity type, typed. Each was validated against its own schema
-	// during Parse — an alert with level "critical" would have failed there,
-	// not here.
 	employees, err := io.SectionAs[Employee](doc, "employees")
 	if err != nil {
 		panic(err)
 	}
-	alerts, err := io.SectionAs[Alert](doc, "alerts")
-	if err != nil {
-		panic(err)
-	}
-	stats, err := io.SectionAs[Stat](doc, "stats")
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("\n%d employees: %v\n", len(employees), employees)
-	fmt.Printf("%d alerts:    %v\n", len(alerts), alerts)
-	fmt.Printf("%d stats:     %v\n", len(stats), stats)
+	fmt.Printf("\nSectionAs[Employee] -> %v\n", employees)
 
 	// A section the sender did not send is an ERROR, not an empty slice:
 	// "not sent" and "sent none" are different facts.
@@ -83,7 +87,7 @@ func main() {
 	}
 
 	// And the mistake this API exists to prevent: a multi-section document
-	// cannot be flattened into one slice by accident.
+	// cannot be flattened into one SLICE by accident. Bind a struct instead.
 	var wrong []Employee
 	if err := io.Unmarshal(payload, &wrong); err != nil {
 		fmt.Printf("\nflattening a multi-section document is refused:\n  %v\n", err)
