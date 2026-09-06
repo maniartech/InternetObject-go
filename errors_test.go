@@ -198,3 +198,40 @@ func TestNestedMemberPath(t *testing.T) {
 		t.Errorf("line = %d, want 3 (%+v)", list[0].Line, list[0])
 	}
 }
+
+// A named schema is compiled EAGERLY, whether or not anything references it.
+//
+// io-go used to compile them lazily, so `~ $Draft: {title: nosuchtype}` that
+// nothing referenced parsed CLEAN while the reference rejects it with
+// unknown-type. That leniency was also the cause of a writer bug: writeHeader
+// compiled a definition in order to write it, found it broken, and silently
+// DROPPED it — so a valid-looking document lost data on save. Compiling here
+// removes both at the source.
+func TestNamedSchemaCompilesEvenIfUnreferenced(t *testing.T) {
+	_, err := io.Parse("~ $Draft: {title: nosuchtype}" + nlHdr2 +
+		"~ $schema: {id: int}" + nlHdr2 + "---" + nlHdr2 + "~ 1")
+	var list io.ErrorList
+	if !errors.As(err, &list) || !list.Has("unknown-type") {
+		t.Fatalf("an unreferenced broken definition must not parse clean, got %v", err)
+	}
+
+	// A sound one survives the write, and writing is idempotent.
+	good := "~ $Draft: {title: string}" + nlHdr2 + "~ $schema: {id: int}" + nlHdr2 + "---" + nlHdr2 + "~ 1"
+	doc, err := io.Parse(good)
+	if err != nil {
+		t.Fatalf("%q: %v", good, err)
+	}
+	first := doc.String()
+	if !strings.Contains(first, "$Draft") {
+		t.Fatalf("the definition was dropped: %q", first)
+	}
+	back, err := io.Parse(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := back.String(); second != first {
+		t.Errorf("not idempotent: %q vs %q", first, second)
+	}
+}
+
+var nlHdr2 = string(rune(10))

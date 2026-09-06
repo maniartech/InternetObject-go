@@ -73,6 +73,25 @@ func parse(src string, override *schema.Schema) *Doc {
 			doc.Errors = append(doc.Errors, herrs[0])
 			return doc
 		}
+
+		// Every NAMED schema is compiled here, whether or not anything
+		// references it. io-go used to compile them lazily, so a header could
+		// carry a `$Draft: {title: nosuchtype}` that nothing referenced and the
+		// document parsed CLEAN — the reference rejects it with unknown-type
+		// (probed 2026-09-06). Lazy compilation was also what made the writer
+		// silently drop such a definition: it compiled in order to write, found
+		// it broken, and skipped it. Compiling here fixes the divergence and
+		// removes the writer's problem at the source rather than teaching the
+		// writer to render shapes it cannot compile.
+		for _, def := range pdoc.Header.Defs {
+			if def.Kind != parser.DefSchema {
+				continue
+			}
+			if _, cerr := defs.SchemaOf(def.Key); cerr != nil {
+				doc.Errors = append(doc.Errors, *cerr)
+				return doc
+			}
+		}
 	}
 
 	for _, sec := range pdoc.Sections {

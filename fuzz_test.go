@@ -35,6 +35,19 @@ var fuzzSeedDocs = []string{
 // FuzzParse asserts, for every input: Parse and String never panic, and for a
 // document that parses CLEANLY the canonical writer's output re-parses
 // cleanly and a second write is byte-identical (writer/reader agreement).
+// KNOWN FORMAT LIMIT, so it is not re-chased every time mutation finds it: a
+// schema may declare a `default` its OWN member would reject —
+// `{string, A, [B]}`, `{string, A, pattern:'0'}`, `{int, 5, min: 10}`. The
+// default is applied unchecked (the reference does the same, probed
+// 2026-09-06), so an absent member is filled with a value that same schema
+// rejects and the output cannot be re-read. The corpus PINS the permissive
+// behaviour — validation/defaults.io :: default_not_a_choice — so no port may
+// tighten it alone; io-go tried and the corpus refused the change.
+//
+// The round-trip property below is therefore stricter than the format. A seed
+// that encodes this shape is REMOVED rather than kept red, because it asserts
+// something the corpus explicitly permits. Recorded upstream as finding #23.
+
 func FuzzParse(f *testing.F) {
 	for _, s := range fuzzSeedDocs {
 		f.Add(s)
@@ -59,6 +72,14 @@ func FuzzParse(f *testing.F) {
 		}
 		back, err2 := io.Parse(out)
 		if err2 != nil {
+			// The one shape where a clean document legitimately cannot be
+			// re-read: its schema declares a default the same schema rejects,
+			// so an absent member is filled with an invalid value. See the
+			// note above this function - the corpus permits it and the
+			// reference does the same, so it is not this port's defect.
+			if io.SchemaRejectsItsOwnDefault(doc) {
+				return
+			}
 			t.Fatalf("clean document's output does not re-parse: %v\n  in=%q\n  out=%q", err2, src, out)
 		}
 		if second := back.String(); second != out {
