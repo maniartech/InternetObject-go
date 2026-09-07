@@ -81,9 +81,19 @@ already applied to `internal/schema` and `internal/core`:
 - **kebab-case file names throughout** (`enc-kind.go`, not `document_struct.go`), matching
   what `internal/core` and `internal/schema` already do.
 
-Concretely: `internal/document/write.go` becomes `internal/writer/` (header, typedef, record,
-value, literal, key); the root package's marshal/unmarshal/plan files group by direction, and
-every remaining snake_case name is renamed.
+Concretely: the 1,235-line `internal/document/write.go` becomes ten `write-*.go` files, one
+per job — document, header, typedef, record, number, temporal, string-scan, string, key, and
+the exported spellers. It stays in `internal/document` rather than becoming its own package:
+every one of those functions is a method on `*Doc` reading its unexported state, so a package
+boundary would mean exporting the loader's internals to serve a split that the file names
+already achieve. One file per job is the goal; a package per job is ceremony.
+
+The two string files are worth naming apart: `write-string-scan.go` only *decides* whether
+text would read back as itself, and `write-string.go` only *emits* the spelling that decision
+chose. They were interleaved before, and the question and the answer are different jobs.
+
+Source files are kebab-case (`document-struct.go`, not `document_struct.go`); test files keep
+Go's universal `_test.go` spelling.
 
 ## D4. Performance is a constraint on this work, not a casualty of it
 
