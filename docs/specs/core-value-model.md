@@ -213,9 +213,9 @@ fault is reported at the call that caused it — which is also what the referenc
 
 ```go
 b := io.NewBuilder()
-b.Define("Employee", empSchema)         // *Schema; a header definition
+b.Define("employee", empSchema)         // *Schema; a header definition
 b.Var("region", "apac")                 // an @variable
-emp := b.Section("employees", "Employee")   // named, bound; "" name = the default section
+emp := b.Section("employees", "employee")   // named, bound; "" name = the default section
 if err := emp.Add(map[string]any{"name": "Alice", "age": 30}); err != nil {…}  // struct, map or *Object
 doc, err := b.Document()                // immutable from here on
 text := doc.String()
@@ -234,7 +234,7 @@ Rev 1 named this `StreamWriter.Write`, which ADR 0004 bans. The verb for Go valu
 ```go
 sm, err := io.NewStreamMarshaler(w, &io.StreamOptions{Schema: s})
 err = sm.Marshal(rec)                   // one record, validated, buffered
-err = sm.MarshalAs(rec, "$Alert")       // explicit schema switch for a heterogeneous stream
+err = sm.MarshalAs(rec, "$alert")       // explicit schema switch for a heterogeneous stream
 err = sm.Flush()
 err = sm.Close()                        // flushes; the header is emitted even if nothing was
 ```

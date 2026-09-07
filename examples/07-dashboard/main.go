@@ -13,16 +13,16 @@ import (
 )
 
 // One request from a service to a dashboard.
-const payload = `~ $Employee: {name: string, age: {int, min: 0, max: 130}}
-~ $Alert:    {level: {string, choices: [info, warn, error]}, msg: string}
-~ $Stat:     {key: string, value: number}
---- employees: $Employee
+const payload = `~ $employee: {name: string, age: {int, min: 0, max: 130}}
+~ $alert:    {level: {string, choices: [info, warn, error]}, msg: string}
+~ $stat:     {key: string, value: number}
+--- employees: $employee
 ~ Alice, 30
 ~ Bob, 41
---- alerts: $Alert
+--- alerts: $alert
 ~ warn, disk nearly full
 ~ error, replica lagging
---- stats: $Stat
+--- stats: $stat
 ~ uptime, 99.9
 ~ rps, 1420.5
 `

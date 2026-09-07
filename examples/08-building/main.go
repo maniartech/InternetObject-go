@@ -27,9 +27,9 @@ func main() {
 	// The shape is decided here, at runtime. A record may be a map, an
 	// *io.Object, or a struct — whatever the caller happens to hold.
 	b := io.NewBuilder()
-	b.Define("Employee", employee).Define("Alert", alert)
+	b.Define("employee", employee).Define("alert", alert)
 
-	emp := b.Section("employees", "Employee")
+	emp := b.Section("employees", "employee")
 	_ = emp.Add(map[string]any{"name": "Alice", "age": 30})
 	_ = emp.Add(io.NewObject(2).Append("name", "Bob").Append("age", 41))
 
@@ -39,7 +39,7 @@ func main() {
 		fmt.Println("rejected at Add:", err)
 	}
 
-	_ = b.Section("alerts", "Alert").Add(map[string]any{"level": "warn", "msg": "disk nearly full"})
+	_ = b.Section("alerts", "alert").Add(map[string]any{"level": "warn", "msg": "disk nearly full"})
 
 	doc, err := b.Document()
 	if err != nil {
@@ -57,14 +57,14 @@ func main() {
 	// actually changes.
 	var wire bytes.Buffer
 	sm, err := io.NewStreamMarshaler(&wire, &io.StreamOptions{
-		Definitions: "~ $Employee: {name: string, age: int}\n~ $Alert: {level: string, msg: string}",
+		Definitions: "~ $employee: {name: string, age: int}\n~ $alert: {level: string, msg: string}",
 	})
 	if err != nil {
 		panic(err)
 	}
-	_ = sm.MarshalAs(map[string]any{"name": "Alice", "age": 30}, "Employee")
-	_ = sm.MarshalAs(map[string]any{"name": "Bob", "age": 41}, "Employee")
-	_ = sm.MarshalAs(map[string]any{"level": "warn", "msg": "disk nearly full"}, "Alert")
+	_ = sm.MarshalAs(map[string]any{"name": "Alice", "age": 30}, "employee")
+	_ = sm.MarshalAs(map[string]any{"name": "Bob", "age": 41}, "employee")
+	_ = sm.MarshalAs(map[string]any{"level": "warn", "msg": "disk nearly full"}, "alert")
 	if err := sm.Close(); err != nil {
 		panic(err)
 	}

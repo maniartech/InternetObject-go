@@ -120,7 +120,7 @@ func (d *Document) Schema() *Schema {
 }
 
 // SchemaOf returns a named schema defined in the document's header — the way
-// to lift a `$Person` definition out of one document and reuse it against
+// to lift a `$person` definition out of one document and reuse it against
 // others.
 func (d *Document) SchemaOf(name string) (*Schema, error) {
 	s, cerr := d.doc.Defs.SchemaOf(name)

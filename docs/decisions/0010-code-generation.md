@@ -129,10 +129,10 @@ The intended source is an actual `.io` document that declares the shape and carr
 the schema file generalised:
 
 ```
-~ $Employee: {name: string, age: int}
-~ $Stat:     {key: string, value: number}
---- employees: $Employee
---- stats: $Stat
+~ $employee: {name: string, age: int}
+~ $stat:     {key: string, value: number}
+--- employees: $employee
+--- stats: $stat
 ```
 
 from which the generator would emit a guarded record type per named schema, and a document type

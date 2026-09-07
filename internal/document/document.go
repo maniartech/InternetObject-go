@@ -78,7 +78,7 @@ func parseWith(src string, override *schema.Schema, parent *Frozen) *Doc {
 
 		// Every NAMED schema is compiled here, whether or not anything
 		// references it. io-go used to compile them lazily, so a header could
-		// carry a `$Draft: {title: nosuchtype}` that nothing referenced and the
+		// carry a `$draft: {title: nosuchtype}` that nothing referenced and the
 		// document parsed CLEAN — the reference rejects it with unknown-type
 		// (probed 2026-09-06). Lazy compilation was also what made the writer
 		// silently drop such a definition: it compiled in order to write, found
