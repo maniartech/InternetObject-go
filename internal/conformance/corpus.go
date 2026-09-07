@@ -19,7 +19,7 @@ import (
 // gains one, this pin moves to the tag. A conformance number with no version on
 // it is a rumour, so every report prints this pin — and warns when the sibling
 // checkout's actual HEAD differs.
-const CorpusPin = "70c8956aa720ff1e0c1053255528fabd8bd267fd"
+const CorpusPin = "39f2d2de54c45f2966bd229abbd05ffdb8a8e245"
 
 // CorpusDir returns the root of the io-test-cases checkout, or an error when it
 // cannot be found. Resolution order: IO_CORPUS_DIR, then the sibling directory
