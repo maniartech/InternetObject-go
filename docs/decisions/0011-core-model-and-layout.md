@@ -106,6 +106,12 @@ construction and inspection APIs layered over what the parser already produces. 
 here is gated by the existing benchmark suite, and a regression outside noise is a defect,
 not a trade.
 
+## The contract
+
+This ADR decides; **[SPEC 0001](../specs/core-value-model.md) is the contract to build
+against** - the lowering the containers must respect, each type's invariants, the API
+signatures, and the test obligations every landing carries.
+
 ## ▶ RESUME HERE
 
 Order of work, each landing green (corpus 1,572 + 262, `-race`, five fuzzers):
