@@ -22,10 +22,32 @@ type Definitions struct {
 	compiled map[string]*schema.Schema
 	failed   map[string]*errs.Error
 	inline   *schema.Schema // the compiled bare-expression header schema
+	// parent is a frozen header in scope, consulted only when this document
+	// defines no such name. It is READ-ONLY and may be shared across
+	// goroutines; checking it second is what makes an in-stream definition
+	// override a preloaded one (io-specs/streaming/schema-and-state.md).
+	parent *Frozen
 }
 
 func NewDefinitions(h *parser.Header) *Definitions {
 	return &Definitions{Header: h, compiled: map[string]*schema.Schema{}, failed: map[string]*errs.Error{}}
+}
+
+// NewDefinitionsWith is NewDefinitions with a frozen header in scope.
+func NewDefinitionsWith(h *parser.Header, parent *Frozen) *Definitions {
+	d := NewDefinitions(h)
+	d.parent = parent
+	return d
+}
+
+// fromParent reads a name out of the frozen header without writing anything,
+// which is what keeps a shared *Frozen safe to read concurrently.
+func (d *Definitions) fromParent(name string) (*schema.Schema, bool) {
+	if d.parent == nil {
+		return nil, false
+	}
+	s, ok := d.parent.Schemas[name]
+	return s, ok
 }
 
 // SchemaOf resolves and compiles the named schema, chasing `$ref` aliases. A
@@ -55,6 +77,10 @@ func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 			}
 		}
 		if shape == nil {
+			// Not ours: a frozen header in scope may define it.
+			if s, ok := d.fromParent(name); ok {
+				return s, nil
+			}
 			e := &errs.Error{Code: errs.UndefinedSchema, Line: 1, Col: 1}
 			d.failed[name] = e
 			return nil, e
@@ -81,6 +107,11 @@ func (d *Definitions) Var(name string) (any, *errs.Error) {
 	seen := map[string]bool{}
 	for {
 		if d.Header == nil {
+			if d.parent != nil {
+				if pv, ok := d.parent.Vars[name]; ok {
+					return pv, nil
+				}
+			}
 			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
 		}
 		if seen[name] {
@@ -89,6 +120,11 @@ func (d *Definitions) Var(name string) (any, *errs.Error) {
 		seen[name] = true
 		v, ok := d.Header.Vars[name]
 		if !ok {
+			if d.parent != nil {
+				if pv, pok := d.parent.Vars[name]; pok {
+					return pv, nil
+				}
+			}
 			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
 		}
 		if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {

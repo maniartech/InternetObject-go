@@ -40,17 +40,20 @@ func (d *Doc) schemaFor(sec *parser.Section) *schema.Schema {
 
 // Load parses and validates one document, binding each section to the schema
 // its own header names.
-func Parse(src string) *Doc { return parse(src, nil) }
+func Parse(src string) *Doc { return parseWith(src, nil, nil) }
 
 // ParseWith parses and validates one document against an ALREADY COMPILED
 // schema, which overrides whatever the document's own header would bind (ADR
 // 0004 D5: attached > header > tag-derived). The header is still read, so
 // `@variables` and `$refs` it defines stay resolvable inside records.
-func ParseWith(src string, override *schema.Schema) *Doc { return parse(src, override) }
+func ParseWith(src string, override *schema.Schema) *Doc { return parseWith(src, override, nil) }
 
-func parse(src string, override *schema.Schema) *Doc {
+// parseWith is THE parse: an optional compiled schema that overrides whatever
+// the header would bind, and an optional frozen header in scope whose
+// definitions this document's own header overrides.
+func parseWith(src string, override *schema.Schema, parent *Frozen) *Doc {
 	pdoc := parser.Parse(src)
-	defs := NewDefinitions(pdoc.Header)
+	defs := NewDefinitionsWith(pdoc.Header, parent)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 
 	// A fatal parse error abandons everything, as the reference does; the
@@ -98,6 +101,12 @@ func parse(src string, override *schema.Schema) *Doc {
 		if sch == nil {
 			var cerr *errs.Error
 			sch, cerr = sectionSchema(sec, defs)
+			// A stream or document that declares no schema of its own falls
+			// back to the frozen header's default, which is the whole point of
+			// supplying one out of band.
+			if cerr == nil && sch == nil && parent != nil && sec.SchemaName == "" {
+				sch = parent.Default
+			}
 			if cerr != nil {
 				doc.Errors = append(doc.Errors, *cerr)
 				return doc // a broken binding is fatal, like a thrown compile error
