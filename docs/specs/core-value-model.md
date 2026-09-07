@@ -288,10 +288,21 @@ must be visible, not silent.
 
 ### 4.9 Errors
 
-`type Code string` with the 46 designated codes as constants (`io.ExpectedInteger`, …).
-`Error.Code` changes from `string` to `Code`; pre-1.0, and `e.Code == "expected-integer"`
-still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `Error`,
-`ErrorList`, `ErrorItem`/`IsError` otherwise as ADR 0005.
+**Delivered.** `Code` is `core.Code`, defined in the value model because `ErrorNode` carries
+one — a failed record is a value, so its code belongs to the value model too, and that is what
+lets the public package name the codes without `core` learning about anything above it.
+
+`Error.Code`, `ErrorItem.Code`, `ErrorValue.Code` and the stream item's code are all the same
+type, so a caller never converts between two spellings. `ErrorList.Has(Code)` and
+`Codes() []Code`. Comparison against a bare literal still compiles (untyped constant), so the
+change breaks no caller.
+
+A code does **not** determine a `Category`: io-specs requires the category to be derived from
+where the fault arose, so `Code` deliberately has no `Category()` method.
+
+The catalogue cannot drift: `TestPublicCodesCoverEveryInternalCode` reads the two files where
+codes are declared and fails in **both** directions — an internal code with no constant, and a
+constant nothing raises. Verified by breaking it deliberately.
 
 ### 4.10 `Decimal`
 
@@ -311,7 +322,7 @@ still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `
 | `IOErrorItem` | `ErrorItem`, `IsError` | ✅ |
 | `Decimal` | `Decimal` (SPEC 0002) | ✅ |
 | `IOError`, `IOSyntaxError`, `IOValidationError` | `Error` with `Category` (syntax/validation/stream) — one type, a field, not a hierarchy | ✅ |
-| `ErrorCodes` | `Code` constants (§4.9) | ❌ |
+| `ErrorCodes` | `Code` constants (§4.9) | ✅ |
 | `IOSchema`, `parseSchema` | `Schema`, `ParseSchema`, `SchemaFor[T]` | ✅ |
 | `parse`, `parseDocument`, `safeParse*` | `Parse`, `ParseWith` — `(v, err)` **is** safeParse | ✅ |
 | `parseDefinitions` + `parse(data, defs)` | `ParseDefinitions`, `defs.Parse` | ❌ |
@@ -327,7 +338,7 @@ still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `
 | `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
 | `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-Delivered: 15. Missing: 7. Partial: 2.
+Delivered: 16. Missing: 6. Partial: 2.
 
 ---
 
@@ -414,9 +425,9 @@ Rules this spec adds:
 ## ▶ RESUME HERE
 
 - Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split,
-  **`Decimal` (§4.10 / SPEC 0002)**.
-- **Next, in order, each landing green under §8:** (1) §4.9 `Code` constants — small, unblocks tests that name codes; (3) §4.5 `Definitions`;
-  (4) §4.6 `Builder`; (5) §4.4 `Collection[T]`; (6) §4.7 `StreamMarshaler`; (7) §4.8 `JSON`;
-  (8) §2 file renames, last, so history stays readable.
+  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**.
+- **Next, in order, each landing green under §8:** (1) §4.5 `Definitions`; (2) §4.6 `Builder`;
+  (3) §4.4 `Collection[T]`; (4) §4.7 `StreamMarshaler`; (5) §4.8 `JSON`; (6) §2 file renames,
+  last, so history stays readable.
 - Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded
   object base is still unchosen (ADR 0004 D4 note) but nothing in this spec depends on it.

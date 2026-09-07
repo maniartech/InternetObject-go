@@ -378,7 +378,7 @@ func fuzzProperty(d *Doc) (violation string) {
 	if len(back.Errors) > 0 { // output-reparses
 		codes := make([]string, len(back.Errors))
 		for i, e := range back.Errors {
-			codes[i] = e.Code
+			codes[i] = string(e.Code)
 		}
 		return "output does not re-parse: " + strings.Join(codes, ", ")
 	}

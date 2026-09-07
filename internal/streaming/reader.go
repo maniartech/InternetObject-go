@@ -375,7 +375,7 @@ func (r *Reader) legacyFlush() []Item {
 
 // categoryOf maps a designated code to its wire category, mirroring the core
 // error class that raises it in the reference implementation.
-func categoryOf(code string) string {
+func categoryOf(code errs.Code) string {
 	switch code {
 	case errs.UnexpectedToken, errs.ExpectedClosingBracket, errs.ExpectedValue,
 		errs.InvalidKey, errs.InvalidDefinition, errs.DuplicateSectionName,

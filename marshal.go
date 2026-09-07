@@ -139,7 +139,7 @@ func Marshal(v any) (string, error) {
 
 	doc, cerr := document.NewUnvalidated(pdoc)
 	if cerr != nil {
-		return "", &MarshalError{Path: "$", Msg: "derived schema does not compile: " + cerr.Code}
+		return "", &MarshalError{Path: "$", Msg: "derived schema does not compile: " + string(cerr.Code)}
 	}
 	return doc.String(), nil
 }

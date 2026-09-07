@@ -20,7 +20,7 @@ func RunSchemaDefCase(row SuiteRow) []string {
 	compiled, cerr := document.ParseSchema(row.SchemaDef)
 	var codes []string
 	if cerr != nil {
-		codes = []string{cerr.Code}
+		codes = []string{string(cerr.Code)}
 	}
 	if !stringsEqual(codes, row.ErrorCodes) {
 		return []string{fmt.Sprintf("codes  expected=%v  actual=%v", row.ErrorCodes, codes)}

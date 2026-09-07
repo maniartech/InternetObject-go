@@ -31,7 +31,7 @@ var reservedTypes = map[string]bool{
 
 // unusableTypeCode names why a type name cannot be used: reserved for a
 // future version, or no such type at all.
-func unusableTypeCode(name string) string {
+func unusableTypeCode(name string) errs.Code {
 	if reservedTypes[name] {
 		return errs.ReservedType
 	}
@@ -80,7 +80,7 @@ func familyOf(typeName string) family {
 // before it substitutes something that would not compile back.
 func ValueFitsType(typeName string, v any) (ok bool) {
 	ok = true
-	expectFamily(typeName, v, func(_ string, pass bool) {
+	expectFamily(typeName, v, func(_ errs.Code, pass bool) {
 		if !pass {
 			ok = false
 		}
@@ -90,7 +90,7 @@ func ValueFitsType(typeName string, v any) (ok bool) {
 
 // expectFamily checks one value against a type's family — the shared rule
 // behind min/max/multipleOf/default and every element of choices.
-func expectFamily(typeName string, v any, expect func(string, bool)) {
+func expectFamily(typeName string, v any, expect func(errs.Code, bool)) {
 	{
 		switch familyOf(typeName) {
 		case famString:

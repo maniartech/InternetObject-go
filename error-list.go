@@ -20,8 +20,8 @@ func (l ErrorList) Error() string {
 
 // Codes returns the designated codes in order — the conformance-relevant
 // projection of the list.
-func (l ErrorList) Codes() []string {
-	out := make([]string, len(l))
+func (l ErrorList) Codes() []Code {
+	out := make([]Code, len(l))
 	for i, e := range l {
 		out[i] = e.Code
 	}
@@ -29,7 +29,7 @@ func (l ErrorList) Codes() []string {
 }
 
 // Has reports whether any fault carries the given code.
-func (l ErrorList) Has(code string) bool {
+func (l ErrorList) Has(code Code) bool {
 	for _, e := range l {
 		if e.Code == code {
 			return true

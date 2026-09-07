@@ -103,7 +103,7 @@ func FuzzStream(f *testing.F) {
 					return items, err.Error()
 				}
 				if item.Err != nil {
-					items = append(items, "err:"+item.Err.Code)
+					items = append(items, "err:"+string(item.Err.Code))
 				} else {
 					items = append(items, "ok:"+item.SchemaName)
 				}

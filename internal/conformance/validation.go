@@ -15,7 +15,7 @@ func RunValidationCase(row SuiteRow) []string {
 	doc := document.Parse(src)
 	var codes []string
 	for _, e := range doc.Errors {
-		codes = append(codes, e.Code)
+		codes = append(codes, string(e.Code))
 	}
 
 	var problems []string

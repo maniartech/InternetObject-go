@@ -10,7 +10,8 @@ import (
 // Codes — never messages — are the conformance contract.
 type Error struct {
 	// Code is the designated kebab-case code — the conformance contract.
-	Code string
+	// Compare it against the constants in this package, never a bare literal.
+	Code Code
 	// Category is derived from where the fault arose, never from the code's
 	// spelling: "syntax", "validation", "stream" or "general".
 	Category string

@@ -11,7 +11,7 @@ import (
 // validateObject know which member and record the fault belongs to and stamp
 // it there (ADR 0005 D2), which is why every validation error used to report
 // a fabricated 1:1.
-func vfail(code string) {
+func vfail(code errs.Code) {
 	panic(valFail{errs.Error{Code: code, RecordIndex: -1}})
 }
 

@@ -92,7 +92,7 @@ func equalRows(a, b []lazyRow) bool {
 // messages and positions are compared separately where they matter.
 func errText(err error) string {
 	if list, ok := err.(io.ErrorList); ok {
-		return strings.Join(list.Codes(), ",")
+		return joinCodes(list.Codes(), ",")
 	}
 	return "non-wire:" + err.Error()
 }
@@ -166,4 +166,13 @@ func FuzzLazyMatchesTreePath(f *testing.F) {
 			t.Fatalf("values differ:\n lazy %#v\n tree %#v\n src %q", lazy, tree, src)
 		}
 	})
+}
+
+// joinCodes renders a code list for a failure message.
+func joinCodes(cs []io.Code, sep string) string {
+	parts := make([]string, len(cs))
+	for i, c := range cs {
+		parts[i] = string(c)
+	}
+	return strings.Join(parts, sep)
 }

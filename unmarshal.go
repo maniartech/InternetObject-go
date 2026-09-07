@@ -177,7 +177,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 		return nil
 	}
 	if ev, ok := v.(core.ErrorValue); ok {
-		return &UnmarshalError{Path: at.String(), Msg: "value carries the deferred error " + ev.Code}
+		return &UnmarshalError{Path: at.String(), Msg: "value carries the deferred error " + string(ev.Code)}
 	}
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {

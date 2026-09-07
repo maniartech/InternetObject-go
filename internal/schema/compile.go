@@ -22,7 +22,7 @@ func Compile(shape any, path string) (s *Schema, cerr *errs.Error) {
 
 type compileFail struct{ err errs.Error }
 
-func fail(code string) {
+func fail(code errs.Code) {
 	panic(compileFail{errs.Error{Code: code, Line: 1, Col: 1}})
 }
 

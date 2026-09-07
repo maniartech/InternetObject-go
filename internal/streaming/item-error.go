@@ -7,8 +7,10 @@
 // and every frame goes through the same path a one-record document uses.
 package streaming
 
+import "github.com/maniartech/InternetObject-go/internal/core"
+
 // ItemError is a record error's wire form.
 type ItemError struct {
 	Category string // syntax | validation | general | stream
-	Code     string
+	Code     core.Code
 }

@@ -9,7 +9,7 @@ package core
 // ErrorNode marks a record that failed to parse or validate inside a
 // collection: the fault was reported and the surrounding records survived.
 type ErrorNode struct {
-	Code        string
+	Code        Code
 	Category    string
 	Path        string
 	RecordIndex int

@@ -107,7 +107,10 @@ func TestDecimalBindsToStructs(t *testing.T) {
 // Validation now runs through the type's own operations, so the constraint
 // codes must still be exactly what the corpus pins.
 func TestDecimalConstraintsStillReportTheirCodes(t *testing.T) {
-	for _, tc := range []struct{ schema, value, code string }{
+	for _, tc := range []struct {
+		schema, value string
+		code          io.Code
+	}{
 		{"{decimal, min: 10m}", "5m", "mismatched-min"},
 		{"{decimal, max: 10m}", "50m", "mismatched-max"},
 		{"{decimal, multipleOf: 5m}", "16m", "mismatched-multiple-of"},

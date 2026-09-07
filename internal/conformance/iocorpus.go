@@ -49,7 +49,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 	if len(doc.Errors) > 0 {
 		codes := make([]string, len(doc.Errors))
 		for i, e := range doc.Errors {
-			codes[i] = e.Code
+			codes[i] = string(e.Code)
 		}
 		return nil, fmt.Errorf("%s: the suite file itself does not parse: %s", file, strings.Join(codes, ", "))
 	}
@@ -125,7 +125,7 @@ func RunParseCase(row SuiteRow) []string {
 	doc := document.Parse(row.Input)
 	var codes []string
 	for _, e := range doc.Errors {
-		codes = append(codes, e.Code)
+		codes = append(codes, string(e.Code))
 	}
 
 	var problems []string
@@ -177,6 +177,11 @@ func show(b *strings.Builder, v any) {
 		b.WriteString(numfmt.Format(x))
 	case string:
 		fmt.Fprintf(b, "%q", x)
+	case core.Code:
+		// A designated code renders as the string it is: the corpus asserts
+		// codes as plain strings and must not learn that io-go gave them a
+		// type of their own.
+		fmt.Fprintf(b, "%q", string(x))
 	case *big.Int:
 		fmt.Fprintf(b, "%sn", x.String())
 	case core.Decimal:

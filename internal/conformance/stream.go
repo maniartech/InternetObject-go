@@ -81,7 +81,10 @@ func runStream(row SuiteRow, strategy string) *core.Object {
 func errObj(e *streaming.ItemError) *core.Object {
 	return &core.Object{Members: []core.Member{
 		{Key: "category", Value: e.Category},
-		{Key: "code", Value: e.Code},
+		// The corpus states codes as plain strings, so the adapter hands
+		// over a string. core.Equal would otherwise compare a Code
+		// against a string and find them different.
+		{Key: "code", Value: string(e.Code)},
 	}}
 }
 

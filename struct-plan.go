@@ -116,7 +116,7 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 	}
 	compiled, cerr := schema.Compile(p.shape, "")
 	if cerr != nil {
-		return nil, &MarshalError{Path: t.String(), Msg: "derived schema does not compile: " + cerr.Code}
+		return nil, &MarshalError{Path: t.String(), Msg: "derived schema does not compile: " + string(cerr.Code)}
 	}
 	p.compiled = compiled
 	p.fastOK = fastEligible(t, p)
@@ -219,7 +219,7 @@ func annotationShape(tag, fieldPath string) (any, error) {
 	}
 	pdoc := parser.Parse("x: " + text)
 	if len(pdoc.Errors) > 0 {
-		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + pdoc.Errors[0].Code}
+		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + string(pdoc.Errors[0].Code)}
 	}
 	var rec *core.Object
 	if len(pdoc.Sections) == 1 && len(pdoc.Sections[0].Records) == 1 {
@@ -230,7 +230,7 @@ func annotationShape(tag, fieldPath string) (any, error) {
 	}
 	shape := rec.Members[0].Value
 	if _, cerr := schema.Compile(&core.Object{Members: []core.Member{{Key: "x", Value: shape}}}, ""); cerr != nil {
-		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + cerr.Code}
+		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + string(cerr.Code)}
 	}
 	return shape, nil
 }

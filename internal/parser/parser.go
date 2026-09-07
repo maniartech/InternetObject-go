@@ -36,13 +36,13 @@ type parser struct {
 type fail struct{ err errs.Error }
 
 // die aborts to the nearest recovery boundary with a designated code.
-func (p *parser) die(code string, t tokenizer.Token) {
+func (p *parser) die(code errs.Code, t tokenizer.Token) {
 	panic(fail{errs.Error{Code: code, Line: t.Line, Col: t.Col}})
 }
 
 // dieToken aborts with a tokenizer ERROR token's own code.
 func (p *parser) dieToken(t tokenizer.Token) {
-	p.die(t.Err.String(), t)
+	p.die(errs.Code(t.Err.String()), t)
 }
 
 // deferrable reports the malformed-literal codes whose errors defer to the
@@ -449,7 +449,7 @@ func (p *parser) parseValue() any {
 		return p.parseArray(t)
 	case tokenizer.KindError:
 		if deferrable(t.Err) {
-			return core.ErrorValue{Code: t.Err.String(), Line: t.Line, Col: t.Col}
+			return core.ErrorValue{Code: core.Code(t.Err.String()), Line: t.Line, Col: t.Col}
 		}
 		p.dieToken(t)
 	}

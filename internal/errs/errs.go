@@ -5,73 +5,82 @@
 // implementation decision.
 package errs
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/maniartech/InternetObject-go/internal/core"
+)
 
 // Parse-stage codes. Tokenizer codes live in the tokenizer's compact enum and
 // surface here through their string form.
 const (
-	UnexpectedToken        = "unexpected-token"
-	ExpectedClosingBracket = "expected-closing-bracket"
-	ExpectedValue          = "expected-value"
-	InvalidKey             = "invalid-key"
-	DuplicateMember        = "duplicate-member"
-	InvalidDefinition      = "invalid-definition"
-	UndefinedVariable      = "undefined-variable"
-	UndefinedSchema        = "undefined-schema"
-	DuplicateSectionName   = "duplicate-section-name"
+	UnexpectedToken        Code = "unexpected-token"
+	ExpectedClosingBracket Code = "expected-closing-bracket"
+	ExpectedValue          Code = "expected-value"
+	InvalidKey             Code = "invalid-key"
+	DuplicateMember        Code = "duplicate-member"
+	InvalidDefinition      Code = "invalid-definition"
+	UndefinedVariable      Code = "undefined-variable"
+	UndefinedSchema        Code = "undefined-schema"
+	DuplicateSectionName   Code = "duplicate-section-name"
 )
 
 // Schema-compilation codes.
 const (
-	InvalidSchema  = "invalid-schema"
-	EmptyMemberdef = "empty-memberdef"
-	UnknownType    = "unknown-type"
-	ReservedType   = "reserved-type"
-	UnknownMember  = "unknown-member"
-	ForbiddenNull  = "forbidden-null"
+	InvalidSchema  Code = "invalid-schema"
+	EmptyMemberdef Code = "empty-memberdef"
+	UnknownType    Code = "unknown-type"
+	ReservedType   Code = "reserved-type"
+	UnknownMember  Code = "unknown-member"
+	ForbiddenNull  Code = "forbidden-null"
 )
 
 // Validation codes. expected-* is a TYPE problem; missing-value a PRESENCE
 // problem; mismatched-* a DECLARED constraint; out-of-range-* the type's own
 // intrinsic range.
 const (
-	ExpectedString   = "expected-string"
-	ExpectedNumber   = "expected-number"
-	ExpectedInteger  = "expected-integer"
-	ExpectedDecimal  = "expected-decimal"
-	ExpectedBigInt   = "expected-bigint"
-	ExpectedBoolean  = "expected-boolean"
-	ExpectedArray    = "expected-array"
-	ExpectedDateTime = "expected-datetime"
-	ExpectedDate     = "expected-date"
-	ExpectedTime     = "expected-time"
-	InvalidObject    = "invalid-object"
+	ExpectedString   Code = "expected-string"
+	ExpectedNumber   Code = "expected-number"
+	ExpectedInteger  Code = "expected-integer"
+	ExpectedDecimal  Code = "expected-decimal"
+	ExpectedBigInt   Code = "expected-bigint"
+	ExpectedBoolean  Code = "expected-boolean"
+	ExpectedArray    Code = "expected-array"
+	ExpectedDateTime Code = "expected-datetime"
+	ExpectedDate     Code = "expected-date"
+	ExpectedTime     Code = "expected-time"
+	InvalidObject    Code = "invalid-object"
 
-	MissingValue = "missing-value"
+	MissingValue Code = "missing-value"
 
-	MismatchedMin        = "mismatched-min"
-	MismatchedMax        = "mismatched-max"
-	MismatchedMultipleOf = "mismatched-multiple-of"
-	MismatchedLen        = "mismatched-len"
-	MismatchedMinLen     = "mismatched-min-len"
-	MismatchedMaxLen     = "mismatched-max-len"
-	MismatchedPattern    = "mismatched-pattern"
-	MismatchedChoice     = "mismatched-choice"
-	MismatchedAnyOf      = "mismatched-any-of"
-	MismatchedScale      = "mismatched-scale"
-	MismatchedPrecision  = "mismatched-precision"
+	MismatchedMin        Code = "mismatched-min"
+	MismatchedMax        Code = "mismatched-max"
+	MismatchedMultipleOf Code = "mismatched-multiple-of"
+	MismatchedLen        Code = "mismatched-len"
+	MismatchedMinLen     Code = "mismatched-min-len"
+	MismatchedMaxLen     Code = "mismatched-max-len"
+	MismatchedPattern    Code = "mismatched-pattern"
+	MismatchedChoice     Code = "mismatched-choice"
+	MismatchedAnyOf      Code = "mismatched-any-of"
+	MismatchedScale      Code = "mismatched-scale"
+	MismatchedPrecision  Code = "mismatched-precision"
 
-	OutOfRangeInteger = "out-of-range-integer"
+	OutOfRangeInteger Code = "out-of-range-integer"
 
-	InvalidEmail = "invalid-email"
-	InvalidURL   = "invalid-url"
+	InvalidEmail Code = "invalid-email"
+	InvalidURL   Code = "invalid-url"
 
-	UnexpectedPositionalMember = "unexpected-positional-member"
+	UnexpectedPositionalMember Code = "unexpected-positional-member"
 )
+
+// Code is the designated error code type, defined in the value model because a
+// failed record carries one (core.ErrorNode). Aliased here so this package -
+// where the codes are declared - reads without a core. prefix on every line.
+type Code = core.Code
 
 // Error is one accumulated fault: a designated code and a 1-based position.
 type Error struct {
-	Code string
+	Code Code
 	// Category is derived from where the fault arose, never from the code's
 	// spelling (io-specs/streaming/error-model.md makes that a MUST).
 	Category string
@@ -97,7 +106,7 @@ const (
 // fault. This is THE category decision, made once and shared by the document
 // and streaming paths (previously the streaming reader owned a private copy
 // and then dropped the result at the public boundary).
-var syntaxCodes = map[string]bool{
+var syntaxCodes = map[Code]bool{
 	UnexpectedToken: true, ExpectedClosingBracket: true, ExpectedValue: true,
 	InvalidKey: true, InvalidDefinition: true, DuplicateSectionName: true,
 	UnexpectedPositionalMember: true, InvalidSchema: true, EmptyMemberdef: true,
@@ -110,12 +119,12 @@ var syntaxCodes = map[string]bool{
 	"invalid-section-name": true, "missing-schema": true,
 }
 
-var streamCodes = map[string]bool{
+var streamCodes = map[Code]bool{
 	"stream-source-error": true, "stream-aborted": true, "stream-buffer-exceeded": true,
 }
 
 // CategoryOf classifies a designated code.
-func CategoryOf(code string) string {
+func CategoryOf(code Code) string {
 	switch {
 	case syntaxCodes[code]:
 		return CategorySyntax

@@ -216,7 +216,8 @@ func TestSectionCollectsItsOwnErrors(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		section, code string
+		section string
+		code    io.Code
 	}{
 		{"employees", "expected-integer"},
 		{"alerts", "expected-string"},
@@ -269,8 +270,9 @@ func TestCleanSectionHasNoErrors(t *testing.T) {
 func TestEveryFaultRouteAttributesToItsSection(t *testing.T) {
 	nl := string(rune(10))
 	for _, tc := range []struct {
-		name, src, code string
-		section         string
+		name, src string
+		code      io.Code
+		section   string
 	}{
 		{
 			name:    "parse recovery",

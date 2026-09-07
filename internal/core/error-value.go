@@ -12,7 +12,7 @@ package core
 // member's own expected-* code (a schema masks it — reference behavior,
 // io-test-cases ISSUE-23).
 type ErrorValue struct {
-	Code string
+	Code Code
 	Line int32
 	Col  int32
 }

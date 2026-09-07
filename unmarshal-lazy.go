@@ -304,7 +304,7 @@ func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed
 var errUnsupportedLazy = &UnmarshalError{Path: "$", Msg: "unsupported by the lazy path"}
 
 // lazyFault builds a designated wire fault positioned at the offending token.
-func lazyFault(code string, f *document.Framed, m parser.RawMember, recIndex int, name string) error {
+func lazyFault(code errs.Code, f *document.Framed, m parser.RawMember, recIndex int, name string) error {
 	// An EMPTY member — a trailing comma slot, as in `a,b,c` against a schema
 	// of two — has no token of its own, and its Tok is one PAST the end. It
 	// used to index out of range and panic, which rule 10 forbids outright: a

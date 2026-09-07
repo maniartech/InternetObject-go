@@ -113,7 +113,7 @@ func checkConstraintValue(typeName, key string, v any) {
 	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") {
 		return
 	}
-	expect := func(code string, ok bool) {
+	expect := func(code errs.Code, ok bool) {
 		if !ok {
 			fail(code)
 		}

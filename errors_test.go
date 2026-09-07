@@ -2,6 +2,7 @@ package internetobject_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,10 +137,13 @@ func TestErrorListHelpers(t *testing.T) {
 	if !errors.As(err, &list) {
 		t.Fatalf("err is not an ErrorList: %T", err)
 	}
-	if got := list.Codes(); strings.Join(got, ",") != "expected-integer,mismatched-min,mismatched-max" {
-		t.Errorf("Codes() = %v", got)
+	// The constants are the point: a typo is now a build error rather than a
+	// comparison that is quietly always false.
+	want := []io.Code{io.ExpectedInteger, io.MismatchedMin, io.MismatchedMax}
+	if got := list.Codes(); !slices.Equal(got, want) {
+		t.Errorf("Codes() = %v, want %v", got, want)
 	}
-	if !list.Has("mismatched-min") || list.Has("nope") {
+	if !list.Has(io.MismatchedMin) || list.Has("nope") {
 		t.Error("Has() is wrong")
 	}
 	if !errors.Is(err, io.Error{Code: "mismatched-min"}) {

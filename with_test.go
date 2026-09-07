@@ -194,7 +194,10 @@ func TestSchemaForFeedsWith(t *testing.T) {
 // stack-overflows here — FINDINGS #14), while legitimate recursion still
 // validates: real nesting consumes a level of data per step.
 func TestRecursiveSchemasTerminate(t *testing.T) {
-	for _, tc := range []struct{ src, want string }{
+	for _, tc := range []struct {
+		src  string
+		want io.Code
+	}{
 		{"~ $P: {A: $P}\n--- $P\n~ $P: 0", "unknown-member"},
 		{"~ $P: {A: $Q}\n~ $Q: {A: $P}\n--- $P\n~ {x: 1}", "unknown-member"},
 	} {
