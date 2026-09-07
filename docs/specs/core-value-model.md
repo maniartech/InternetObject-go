@@ -315,7 +315,7 @@ constant nothing raises. Verified by breaking it deliberately.
 | Reference export | Go spelling | Status |
 | --- | --- | --- |
 | `IOObject` | `Object` | ✅ |
-| `IOCollection` | `Collection[T]` (§4.4) | ❌ |
+| `IOCollection` | `Collection[T]` (§4.4) | ✅ |
 | `IODocument` | `Document` (read) + `Builder` (build) | ✅ |
 | `IOSection`, `IOSectionCollection` | `Section`, `Document.Sections()` | ✅ |
 | `IOHeader`, `IODefinitions` | `Definitions` (§4.5) | ✅ |
@@ -338,7 +338,7 @@ constant nothing raises. Verified by breaking it deliberately.
 | `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
 | `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-Delivered: 20. Missing: 2. Partial: 1.
+Delivered: 21. Missing: 1. Partial: 1.
 
 ---
 
@@ -425,9 +425,8 @@ Rules this spec adds:
 ## ▶ RESUME HERE
 
 - Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split,
-  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**.
-- **Next, in order, each landing green under §8:** (1) §4.4 `Collection[T]`;
-  (2) §4.7 `StreamMarshaler`; (3) §4.8 `JSON`; (4) §2 file renames, last, so history stays
-  readable.
+  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**, **`Collection[T]` (§4.4)**.
+- **Next, in order, each landing green under §8:** (1) §4.7 `StreamMarshaler`; (2) §4.8 `JSON`;
+  (3) §2 file renames, last, so history stays readable.
 - Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded
   object base is still unchosen (ADR 0004 D4 note) but nothing in this spec depends on it.

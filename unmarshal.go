@@ -38,11 +38,14 @@ func bindDoc(doc *document.Doc, v any) error {
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return &UnmarshalError{Path: "$", Msg: "target must be a non-nil pointer"}
 	}
-	if len(doc.Errors) > 0 {
+	elem := rv.Elem()
+	// A row fault does not fail the load when the section it came from binds
+	// to a tolerant Collection[T] — that type exists to absorb it (ADR 0004
+	// D4). Any other fault still fails, and so does a row fault in a section
+	// bound strictly, which is why this asks per SECTION rather than globally.
+	if len(doc.Errors) > 0 && !absorbedByCollections(doc, elem) {
 		return toErrorList(doc.Errors)
 	}
-
-	elem := rv.Elem()
 	switch {
 	case elem.Kind() == reflect.Slice && isStructElem(elem.Type().Elem()):
 		// A document carrying SEVERAL sections carries several entity types,
@@ -307,4 +310,46 @@ func integralOf(v any) (int64, bool) {
 
 func typeMismatch(at pathAt, v any, t reflect.Type) error {
 	return &UnmarshalError{Path: at.String(), Msg: fmt.Sprintf("cannot store %T in %s", v, t)}
+}
+
+// absorbedByCollections reports whether every fault the document carries
+// belongs to a section this target binds tolerantly.
+//
+// It leans on the per-section error attribution the document records as it
+// parses (ADR 0005 D7): without that, a fault could only be matched to its
+// section by guessing from its path, and two sections report the same paths.
+func absorbedByCollections(doc *document.Doc, elem reflect.Value) bool {
+	if elem.Kind() != reflect.Struct || isModelStruct(elem.Type()) {
+		return false
+	}
+	fields, err := sectionBinding(elem.Type(), doc)
+	if err != nil || len(fields) == 0 {
+		return false
+	}
+	accounted := 0
+	for _, sec := range doc.Sections {
+		secErrs := doc.SecErrors[sec]
+		if len(secErrs) == 0 {
+			continue
+		}
+		name := sec.Name
+		if name == "" {
+			name = DefaultSectionName
+		}
+		f, ok := fields[name]
+		if !ok {
+			return false // a fault in a section nothing binds
+		}
+		fv := elem.FieldByIndex(f.index)
+		if !fv.CanAddr() {
+			return false
+		}
+		if _, isColl := fv.Addr().Interface().(collectionBinder); !isColl {
+			return false // that section binds strictly, so its fault stands
+		}
+		accounted += len(secErrs)
+	}
+	// A fault attributed to no section at all — a header or binding fault — is
+	// never a row fault, so it is never absorbed.
+	return accounted == len(doc.Errors)
 }

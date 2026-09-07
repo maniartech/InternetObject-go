@@ -93,6 +93,20 @@ func bindSections(doc *document.Doc, elem reflect.Value, fields map[string]field
 		fv := elem.FieldByIndex(f.index)
 		at := pathAt{root: "$." + name}
 
+		// A Collection[T] binds TOLERANTLY: it keeps the rows that bind and
+		// records the faults of the rest, rather than failing the whole load
+		// (ADR 0004 D4). It knows its own T, so it does the binding itself.
+		if fv.CanAddr() {
+			if cb, ok := fv.Addr().Interface().(collectionBinder); ok {
+				if err := cb.bindFrom(&Section{
+					docp: &Document{doc: doc}, sec: sec, sch: doc.SecSchemas[sec],
+				}, at); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
 		switch fv.Kind() {
 		case reflect.Slice:
 			records := sectionRecords(sec)
