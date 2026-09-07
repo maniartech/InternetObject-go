@@ -1,7 +1,5 @@
 package parser
 
-import "github.com/maniartech/InternetObject-go/internal/tokenizer"
-
 // Lazy, token-backed records (ADR 0007 phase 1).
 //
 // Framing records WHERE each member's value is in the token stream instead of
@@ -19,45 +17,9 @@ import "github.com/maniartech/InternetObject-go/internal/tokenizer"
 // carried a key. Anything it does not recognize makes it decline, and the
 // caller falls back to the value tree.
 
-// RawMember is one member of a framed record: its key (empty when
-// positional) and the half-open token range holding its value.
-//
-// Kind and Sub are the TOKENIZER's own vocabulary, not a parallel one: a
-// member says it is a KindString/SubOpenString or a KindString/SubRawString,
-// a KindNumber/SubHex, a KindDateTime/SubDate, and a container says
-// KindCurlyOpen or KindBracketOpen. Carrying the sub-kind matters — the three
-// string forms decode differently, and a caller inspecting a framed document
-// needs the same distinctions the tokenizer drew.
-type RawMember struct {
-	// Key is the member's name, or "" when positional. It is a substring of
-	// the source in the common case, so carrying it is free.
-	Key       string
-	KeyQuoted bool // the key was written quoted
-
-	Tok int32 // index of the value's first token
-	End int32 // one past the value's last token
-
-	Kind tokenizer.Kind // the value's token kind
-	Sub  tokenizer.Sub  // the value's sub-kind (string form, number base, temporal kind)
-
-	// Absent marks an empty comma slot: a positional hole with no value, and
-	// therefore no tokens (Tok == End).
-	Absent bool
-}
-
-// Positional reports whether the member was written without a key.
-func (m RawMember) Positional() bool { return m.Key == "" }
-
-// IsContainer reports whether the member's value is a braced object or a
-// bracketed array rather than a single scalar token.
-func (m RawMember) IsContainer() bool {
-	return m.Kind == tokenizer.KindCurlyOpen || m.Kind == tokenizer.KindBracketOpen
-}
-
-// RawRecord is one record as a window into the document's member arena.
-type RawRecord struct {
-	Members []RawMember
-}
+import (
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
+)
 
 // RawDoc is a framed document: the token stream, plus one span per record.
 // Members for every record live in a single arena, so a record costs no

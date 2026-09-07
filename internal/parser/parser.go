@@ -11,66 +11,12 @@
 package parser
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
-
-// Document is one parsed Internet Object document.
-type Document struct {
-	Header   *Header
-	Sections []*Section
-	Errors   []errs.Error
-}
-
-// Header holds the definitions written before the first `---`.
-type Header struct {
-	Plain   *core.Object   // plain key: value definitions, in order, last wins
-	Schemas map[string]any // $name → schema shape (sigil stripped), last wins
-	Vars    map[string]any // @name → value (sigil stripped), last wins
-	Inline  any            // the schema shape when the header is a bare schema expression
-
-	// Defs lists every definition in document order (one entry per key, a
-	// duplicate updates in place), so a writer can reproduce the header.
-	Defs []HeaderDef
-}
-
-// DefKind classifies a header definition.
-type DefKind uint8
-
-const (
-	DefPlain DefKind = iota
-	DefSchema
-	DefVar
-)
-
-// HeaderDef is one header definition, with its sigil-less key.
-type HeaderDef struct {
-	Kind  DefKind
-	Key   string
-	Value any
-}
-
-func (h *Header) upsertDef(kind DefKind, key string, val any) {
-	for i := range h.Defs {
-		if h.Defs[i].Kind == kind && h.Defs[i].Key == key {
-			h.Defs[i].Value = val
-			return
-		}
-	}
-	h.Defs = append(h.Defs, HeaderDef{Kind: kind, Key: key, Value: val})
-}
-
-// Section is one data section.
-type Section struct {
-	Name       string // "" when unnamed
-	SchemaName string // explicit `$ref` binding (sigil stripped), "" when none
-	Collection bool   // the body is a `~`-collection
-	Records    []any  // record values; a non-collection section has at most one
-}
 
 // Parse parses one document. It never panics or returns an error: faults are
 // accumulated on the Document per the discipline above.
@@ -80,29 +26,14 @@ func Parse(src string) *Document {
 	return p.doc
 }
 
-// fail carries a fatal parse error to the nearest recovery boundary.
-type fail struct{ err errs.Error }
-
 type parser struct {
 	s   *tokenizer.Stream
 	i   int
 	doc *Document
 }
 
-func (p *parser) peek() (tokenizer.Token, bool) {
-	if p.i < len(p.s.Tokens) {
-		return p.s.Tokens[p.i], true
-	}
-	return tokenizer.Token{}, false
-}
-
-func (p *parser) next() tokenizer.Token {
-	t := p.s.Tokens[p.i]
-	p.i++
-	return t
-}
-
-func (p *parser) atEnd() bool { return p.i >= len(p.s.Tokens) }
+// fail carries a fatal parse error to the nearest recovery boundary.
+type fail struct{ err errs.Error }
 
 // die aborts to the nearest recovery boundary with a designated code.
 func (p *parser) die(code string, t tokenizer.Token) {
@@ -112,6 +43,18 @@ func (p *parser) die(code string, t tokenizer.Token) {
 // dieToken aborts with a tokenizer ERROR token's own code.
 func (p *parser) dieToken(t tokenizer.Token) {
 	p.die(t.Err.String(), t)
+}
+
+// deferrable reports the malformed-literal codes whose errors defer to the
+// end of the pipeline (or to a schema's own type check) rather than aborting
+// the parse: the numeric and temporal claim errors.
+func deferrable(c tokenizer.Code) bool {
+	switch c {
+	case tokenizer.CodeInvalidNumber, tokenizer.CodeInvalidBigInt, tokenizer.CodeInvalidDecimal,
+		tokenizer.CodeInvalidDate, tokenizer.CodeInvalidTime, tokenizer.CodeInvalidDateTime:
+		return true
+	}
+	return false
 }
 
 func (p *parser) run() {
@@ -153,6 +96,51 @@ func (p *parser) run() {
 }
 
 // ── header ─────────────────────────────────────────────────────────────────
+
+func (p *parser) peek() (tokenizer.Token, bool) {
+	if p.i < len(p.s.Tokens) {
+		return p.s.Tokens[p.i], true
+	}
+	return tokenizer.Token{}, false
+}
+
+func (p *parser) peekAt(n int) (tokenizer.Token, bool) {
+	if p.i+n < len(p.s.Tokens) {
+		return p.s.Tokens[p.i+n], true
+	}
+	return tokenizer.Token{}, false
+}
+
+// ── sections ───────────────────────────────────────────────────────────────
+
+func (p *parser) next() tokenizer.Token {
+	t := p.s.Tokens[p.i]
+	p.i++
+	return t
+}
+
+func (p *parser) atEnd() bool { return p.i >= len(p.s.Tokens) }
+
+// recordEnd reports whether a token ends a bare (unbraced) record.
+func recordEnd(t tokenizer.Token) bool {
+	return t.Kind == tokenizer.KindCollectionStart || t.Kind == tokenizer.KindSectionSep
+}
+
+// ── records, objects, arrays, members ──────────────────────────────────────
+
+// addMember appends m, rejecting a duplicate member name (quoting does not
+// make a different key).
+func (p *parser) addMember(obj *core.Object, m core.Member, at tokenizer.Token) {
+	if !m.Positional && obj.Find(m.Key) >= 0 {
+		p.die(errs.DuplicateMember, at)
+	}
+	if obj.Members == nil {
+		// Records are small and uniform; one sized allocation beats the
+		// 1→2→4→8 doubling an unsized append performs on every record.
+		obj.Members = make([]core.Member, 0, 8)
+	}
+	obj.Members = append(obj.Members, m)
+}
 
 func (p *parser) parseHeader() {
 	h := &Header{Schemas: map[string]any{}, Vars: map[string]any{}}
@@ -222,15 +210,6 @@ func (p *parser) parseDefinition(h *Header) {
 		p.die(errs.InvalidDefinition, t)
 	}
 }
-
-func (p *parser) peekAt(n int) (tokenizer.Token, bool) {
-	if p.i+n < len(p.s.Tokens) {
-		return p.s.Tokens[p.i+n], true
-	}
-	return tokenizer.Token{}, false
-}
-
-// ── sections ───────────────────────────────────────────────────────────────
 
 // parseSection reads one section: the optional name/schema tokens the
 // tokenizer produced after `---`, then the body up to the next `---`.
@@ -315,13 +294,6 @@ func (p *parser) parseCollectionRecord() (rec any) {
 	}
 	return rec
 }
-
-// recordEnd reports whether a token ends a bare (unbraced) record.
-func recordEnd(t tokenizer.Token) bool {
-	return t.Kind == tokenizer.KindCollectionStart || t.Kind == tokenizer.KindSectionSep
-}
-
-// ── records, objects, arrays, members ──────────────────────────────────────
 
 // parseRecord parses a bare (unbraced) record: members separated by commas,
 // with lenient commas, ending at `~`, `---` or end of input. A record whose
@@ -429,20 +401,6 @@ func (p *parser) parseMember(obj *core.Object) {
 	}, t)
 }
 
-// addMember appends m, rejecting a duplicate member name (quoting does not
-// make a different key).
-func (p *parser) addMember(obj *core.Object, m core.Member, at tokenizer.Token) {
-	if !m.Positional && obj.Find(m.Key) >= 0 {
-		p.die(errs.DuplicateMember, at)
-	}
-	if obj.Members == nil {
-		// Records are small and uniform; one sized allocation beats the
-		// 1→2→4→8 doubling an unsized append performs on every record.
-		obj.Members = make([]core.Member, 0, 8)
-	}
-	obj.Members = append(obj.Members, m)
-}
-
 // parseMemberValue parses the value after a key's colon, requiring one to be
 // present: the grammar demands a value here, so its absence is
 // expected-value (a token problem, distinct from validation's missing-value).
@@ -497,18 +455,6 @@ func (p *parser) parseValue() any {
 	}
 	p.die(errs.UnexpectedToken, t)
 	return nil
-}
-
-// deferrable reports the malformed-literal codes whose errors defer to the
-// end of the pipeline (or to a schema's own type check) rather than aborting
-// the parse: the numeric and temporal claim errors.
-func deferrable(c tokenizer.Code) bool {
-	switch c {
-	case tokenizer.CodeInvalidNumber, tokenizer.CodeInvalidBigInt, tokenizer.CodeInvalidDecimal,
-		tokenizer.CodeInvalidDate, tokenizer.CodeInvalidTime, tokenizer.CodeInvalidDateTime:
-		return true
-	}
-	return false
 }
 
 // parseObject parses a braced object. Stray commas are tolerated inside
@@ -599,28 +545,3 @@ func (p *parser) parseArray(open tokenizer.Token) any {
 }
 
 // ── section-name uniqueness ────────────────────────────────────────────────
-
-// renameDuplicateSections reports duplicate-section-name for every repeat and
-// renames it by appending _2, _3, … to the ORIGINAL name, counting names
-// already taken, per name and not per document (CONFORMANCE §8).
-func (p *parser) renameDuplicateSections() {
-	if len(p.doc.Sections) < 2 {
-		return
-	}
-	seen := map[string]bool{}
-	for _, sec := range p.doc.Sections {
-		if !seen[sec.Name] {
-			seen[sec.Name] = true
-			continue
-		}
-		p.doc.Errors = append(p.doc.Errors, errs.Error{Code: errs.DuplicateSectionName, Line: 1, Col: 1})
-		for n := 2; ; n++ {
-			candidate := fmt.Sprintf("%s_%d", sec.Name, n)
-			if !seen[candidate] {
-				sec.Name = candidate
-				seen[candidate] = true
-				break
-			}
-		}
-	}
-}
