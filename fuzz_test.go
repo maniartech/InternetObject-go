@@ -1,6 +1,7 @@
 package internetobject_test
 
 import (
+	"bytes"
 	stdio "io"
 	"testing"
 
@@ -223,5 +224,72 @@ func FuzzBuilderRoundTrip(f *testing.F) {
 			t.Fatalf("note changed: %q -> %q (%q)", note, v, text)
 		}
 		checkErrorAttribution(t, back)
+	})
+}
+
+// FuzzStreamRoundTrip asserts the writer's promise against the reader: every
+// record the StreamMarshaler accepts must come back through Stream, in order,
+// with its values intact. The two are the ends of one link, and nothing else
+// checks that they agree.
+func FuzzStreamRoundTrip(f *testing.F) {
+	f.Add("Alice", 30, "apac")
+	f.Add("", 0, "")
+	f.Add("a, b", 1, "~ tilde")
+	f.Add("--- sep", 2, "x: y")
+	f.Add("T", 3, "N")
+	f.Add("\"q\"", 4, "line\nbreak")
+	f.Add("0x10", 5, "1.5m")
+
+	f.Fuzz(func(t *testing.T, a string, n int, b string) {
+		if len(a) > 200 || len(b) > 200 || n < 0 || n > 130 {
+			t.Skip()
+		}
+		s, err := io.ParseSchema("{name: string, age: {int, min: 0, max: 130}, note: string}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		sm, err := io.NewStreamMarshaler(&buf, &io.StreamOptions{Schema: s})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := map[string]any{"name": a, "age": n, "note": b}
+		if err := sm.Marshal(rec); err != nil {
+			return // a record the schema rejects is a legitimate answer
+		}
+		if err := sm.Marshal(rec); err != nil {
+			t.Fatalf("the second identical record was rejected: %v", err)
+		}
+		if err := sm.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		count := 0
+		for item, err := range io.Stream(bytes.NewReader(buf.Bytes()), nil) {
+			if err != nil {
+				t.Fatalf("the writer produced a stream its reader cannot read: %v\n%q", err, buf.String())
+			}
+			if item.Err != nil {
+				t.Fatalf("record %d faulted on read: %s\n%q", item.Index, item.Err.Code, buf.String())
+			}
+			obj, ok := item.Value.(*io.Object)
+			if !ok {
+				t.Fatalf("record %d is %T", item.Index, item.Value)
+			}
+			if v, _ := obj.Get("name"); v != a {
+				t.Fatalf("name changed: %q -> %q\n%q", a, v, buf.String())
+			}
+			if v, _ := obj.Get("note"); v != b {
+				t.Fatalf("note changed: %q -> %q\n%q", b, v, buf.String())
+			}
+			count++
+		}
+		if count != 2 {
+			t.Fatalf("wrote 2 records, read %d\n%q", count, buf.String())
+		}
+		// A stream is also an ordinary document.
+		if _, err := io.Parse(buf.String()); err != nil {
+			t.Fatalf("the stream is not a valid document: %v\n%q", err, buf.String())
+		}
 	})
 }

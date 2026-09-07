@@ -2,6 +2,10 @@ package document
 
 import (
 	"time"
+
+	"github.com/maniartech/InternetObject-go/internal/core"
+	"github.com/maniartech/InternetObject-go/internal/parser"
+	"github.com/maniartech/InternetObject-go/internal/schema"
 )
 
 // The exported spellers, so the fast marshal path can emit one value without
@@ -19,3 +23,15 @@ func AppendTemporalValue(dst []byte, t time.Time, declared string) []byte {
 
 // AppendKey appends an object key, quoted only when it must be.
 func AppendKey(dst []byte, key string) []byte { return appendObjectKey(dst, key) }
+
+// AppendRecord renders ONE record the way a document section would, so a
+// stream writer frames records with the same code the document writer uses
+// rather than a second, drifting copy of it.
+//
+// A nil schema writes the record's own keys; a schema writes it positionally,
+// which is what makes a streamed record readable against the header the stream
+// declared.
+func AppendRecord(dst []byte, obj *core.Object, sch *schema.Schema) []byte {
+	d := &Doc{Document: &parser.Document{}, soloSchema: sch}
+	return d.appendRecord(dst, obj, sch)
+}

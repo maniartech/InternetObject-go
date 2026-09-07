@@ -288,6 +288,16 @@ func hasFatalParse(doc *parser.Document) bool {
 	return n < len(doc.Errors)
 }
 
+// DefaultSchemaOf resolves the schema a bare `---` binds to: the header's
+// `$schema` definition, else its bare schema EXPRESSION. Exported because the
+// streaming reader answers the same question and used to carry its own partial
+// copy that had forgotten the expression form - so a stream whose header was
+// written `name: string, age: int` read its records positionally while Parse
+// bound them by name.
+func DefaultSchemaOf(defs *Definitions) (*schema.Schema, *errs.Error) {
+	return sectionSchema(&parser.Section{}, defs)
+}
+
 // sectionSchema resolves the schema a section is bound to, or nil when it has
 // none.
 func sectionSchema(sec *parser.Section, defs *Definitions) (*schema.Schema, *errs.Error) {

@@ -265,8 +265,10 @@ func (r *Reader) defaultSchema() *schema.Schema {
 	if r.defs == nil {
 		return nil
 	}
-	if _, ok := r.defs.Header.Schemas["schema"]; ok {
-		s, _ := r.defs.SchemaOf("schema")
+	// The in-stream header's own default - `$schema`, or a bare schema
+	// EXPRESSION. Both forms go through the document's single resolution, so a
+	// stream and a Parse can no longer disagree about what `---` binds to.
+	if s, _ := document.DefaultSchemaOf(r.defs); s != nil {
 		return s
 	}
 	if r.opts.DefaultSchema != "" {

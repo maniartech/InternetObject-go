@@ -39,10 +39,12 @@ func CheckRecord(rec *core.Object, s *Schema, defs Defs, accumulate bool) []errs
 // occupies, so faults report where they are (ADR 0005 D3): "$" for a bare
 // record, "$[2]" for the third record of a collection.
 func ValidateRecordAt(rec *core.Object, s *Schema, defs Defs, accumulate bool, path string) (*core.Object, []errs.Error) {
+	defs = defsOr(defs)
 	return validateAt(rec, s, defs, accumulate, path, true)
 }
 
 func validateAt(rec *core.Object, s *Schema, defs Defs, accumulate bool, path string, wantOut bool) (*core.Object, []errs.Error) {
+	defs = defsOr(defs)
 	out, acc, fatal := validateObject(rec, s, defs, path, wantOut)
 	switch {
 	case fatal != nil && accumulate:
