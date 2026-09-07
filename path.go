@@ -34,6 +34,7 @@ var (
 	decimalType    = reflect.TypeOf(Decimal{})
 	timeType       = reflect.TypeOf(time.Time{})
 	bytesType      = reflect.TypeOf([]byte(nil))
+	objectType     = reflect.TypeOf(Object{})
 	anyType        = reflect.TypeOf((*any)(nil)).Elem()
 )
 

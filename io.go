@@ -54,6 +54,10 @@ type (
 	ErrorItem = core.ErrorNode
 )
 
+// NewObject returns an empty ordered record, sized for cap members. It is the
+// starting point for building a document by hand rather than from a Go struct.
+func NewObject(cap int) *Object { return core.NewObject(cap) }
+
 // TimeAnchor is the date a time-of-day carries. The format has no bare clock
 // type, so `t"14:30"` is this date at that clock — the reference's convention,
 // and what makes two implementations agree on the instant.

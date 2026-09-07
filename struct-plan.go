@@ -286,8 +286,34 @@ func isPlainMemberName(s string) bool {
 
 // isModelStruct reports the value-model structs, which marshal as VALUES, not
 // as records with fields.
+// isModelStruct reports a struct the FORMAT owns, which must never be
+// reflected over as if it were a user's record: its fields are representation,
+// not data. Marshalling an Object as a user struct emitted `Members`,
+// `Positional` and `Line` into the document - the library leaking its own
+// internals into the text it produces.
 func isModelStruct(t reflect.Type) bool {
-	return t == decimalType || t == timeType
+	return t == decimalType || t == timeType || t == objectType
+}
+
+// isRecordType reports a value that IS a record - something the format writes
+// as a row - rather than a scalar or an array.
+//
+// The format has three of these and the marshaler used to know only one. A
+// struct derives a schema; a map and an Object do not. All three are records,
+// so all three marshal as one row alone and as a `~`-collection in a slice.
+func isRecordType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch {
+	case t == objectType:
+		return true
+	case t.Kind() == reflect.Struct:
+		return !isModelStruct(t)
+	case t.Kind() == reflect.Map:
+		return t.Key().Kind() == reflect.String
+	}
+	return false
 }
 
 func isStructElem(t reflect.Type) bool {

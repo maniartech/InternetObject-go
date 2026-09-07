@@ -21,9 +21,14 @@ import (
 
 // Marshal renders v as canonical Internet Object text.
 //
-// A struct marshals as a schema header plus one record; a slice of structs as
-// a schema header plus a `~`-collection. Maps, scalars and other values
-// marshal as a schema-less record.
+// A RECORD - a struct, a map with string keys, or an *Object - marshals as one
+// row; a SLICE OF RECORDS as a `~`-collection. Only structs derive a schema
+// header, since only they declare types; maps and Objects are written
+// header-less. Scalars and other values marshal as a schema-less record.
+//
+// Dispatch is on the slice's ELEMENT TYPE, never on what the elements happen
+// to hold: `[]map[string]any` is always a collection and `[]any` is always an
+// array, so an empty slice writes the same shape as a full one.
 func Marshal(v any) (string, error) {
 	rv := reflect.ValueOf(v)
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
@@ -89,6 +94,35 @@ func Marshal(v any) (string, error) {
 		}
 		pdoc = schemaDoc(plan.shape, sec)
 
+	// A slice of MAPS or OBJECTS is a collection too. Only a slice of structs
+	// derives a schema, so this writes a header-less one - but a list of
+	// records is a list of records however the records are spelled, and
+	// writing it as an array inside a single row (what used to happen) does
+	// not even survive Unmarshal, which correctly expects a collection.
+	case rv.Kind() == reflect.Slice && isRecordType(rv.Type().Elem()):
+		sec := &parser.Section{Name: "data", Collection: true}
+		for i := 0; i < rv.Len(); i++ {
+			path := rootPath.record(i)
+			el := rv.Index(i)
+			// A nil map encodes as an empty record and a nil pointer as no
+			// record at all; in a collection BOTH are the absence of a row,
+			// which the format cannot write. Refuse them the same way the
+			// struct path does rather than emitting a silent empty row.
+			if isNilRecord(el) {
+				return "", &MarshalError{Path: path.String(), Msg: "a collection record cannot be nil"}
+			}
+			ev, err := encodeValue(el, "", path)
+			if err != nil {
+				return "", err
+			}
+			rec, ok := ev.(*core.Object)
+			if !ok {
+				return "", &MarshalError{Path: path.String(), Msg: "a collection record cannot be nil"}
+			}
+			sec.Records = append(sec.Records, rec)
+		}
+		pdoc = &parser.Document{Sections: []*parser.Section{sec}}
+
 	default:
 		ev, err := encodeValue(rv, "", rootPath)
 		if err != nil {
@@ -128,6 +162,29 @@ func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*core.Object, 
 
 // encodeValue converts one Go value to the wire value model. Integer values
 // beyond 2^53 are refused rather than silently rounded.
+// encodeObject normalizes an Object a CALLER built: its member values are
+// whatever Go types were stored, and the writer only speaks the format's own.
+// Keys, order and positional-ness are preserved exactly.
+func encodeObject(o *core.Object, at pathAt) (*core.Object, error) {
+	out := &core.Object{Members: make([]core.Member, len(o.Members)), Line: o.Line, Col: o.Col}
+	for i, m := range o.Members {
+		out.Members[i] = m
+		if m.Absent || m.Value == nil {
+			continue
+		}
+		where := at.deeper().member(m.Key)
+		if m.Positional {
+			where = at.elem(i)
+		}
+		ev, err := encodeValue(reflect.ValueOf(m.Value), "", where)
+		if err != nil {
+			return nil, err
+		}
+		out.Members[i].Value = ev
+	}
+	return out, nil
+}
+
 func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
@@ -202,6 +259,13 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		}
 		return out, nil
 	case reflect.Struct:
+		// The format's OWN record type is a value, not a shape to reflect
+		// over: its fields are representation. Normalize its members instead,
+		// so a Go int a caller stored reaches the writer as a number.
+		if t == objectType {
+			o := rv.Interface().(core.Object) // rv may not be addressable
+			return encodeObject(&o, at)
+		}
 		plan, err := planFor(t)
 		if err != nil {
 			return nil, err
@@ -209,6 +273,22 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		return encodeStruct(rv, plan, at.deeper())
 	}
 	return nil, &MarshalError{Path: at.String(), Msg: "unsupported type " + t.String()}
+}
+
+// isNilRecord reports an element that carries no record at all: a nil pointer,
+// a nil map, or an interface holding either.
+func isNilRecord(rv reflect.Value) bool {
+	for rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return true
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // schemaDoc assembles a document with the derived schema as its header.
