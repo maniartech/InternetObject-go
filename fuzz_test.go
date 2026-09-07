@@ -163,3 +163,65 @@ func checkErrorAttribution(t *testing.T, doc *io.Document) {
 		t.Fatalf("sections report %d errors, document only %d", total, got)
 	}
 }
+
+// FuzzBuilderRoundTrip asserts the builder's central promise: it cannot
+// produce a document its own parser rejects. Every record it accepts must
+// survive String → Parse, and the text must be idempotent.
+//
+// The inputs are field values, so mutation explores the spellings the writer
+// has to quote correctly — the place a builder and a parser most easily
+// disagree.
+func FuzzBuilderRoundTrip(f *testing.F) {
+	f.Add("Alice", 30, "apac")
+	f.Add("", 0, "")
+	f.Add("a, b", 1, "x: y")
+	f.Add("~ tilde", -1, "--- sep")
+	f.Add("T", 2, "N")
+	f.Add("0x10", 3, "1.5m")
+	f.Add("\"quoted\"", 4, "line\nbreak")
+	f.Add("d\"2024-01-01\"", 5, "@ref")
+
+	f.Fuzz(func(t *testing.T, name string, age int, note string) {
+		if len(name) > 200 || len(note) > 200 {
+			t.Skip()
+		}
+		if age < 0 || age > 130 {
+			age = 30 // the schema below bounds it; other values are its own test
+		}
+		s, err := io.ParseSchema("{name: string, age: {int, min: 0, max: 130}, note: string}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := io.NewBuilder().Define("R", s)
+		sec := b.Section("rows", "R")
+		if err := sec.Add(map[string]any{"name": name, "age": age, "note": note}); err != nil {
+			// A record the schema rejects is a legitimate answer; what must
+			// never happen is one being accepted and then unreadable.
+			return
+		}
+		doc, err := b.Document()
+		if err != nil {
+			t.Fatalf("Document after a successful Add: %v", err)
+		}
+		text := doc.String()
+		back, err := io.Parse(text)
+		if err != nil {
+			t.Fatalf("the builder produced text its own parser rejects: %v\n%q", err, text)
+		}
+		if back.String() != text {
+			t.Fatalf("writing is not idempotent:\n%q\n%q", text, back.String())
+		}
+		// The values survive unchanged.
+		rec, ok := back.Section("rows").Records()[0].(*io.Object)
+		if !ok {
+			t.Fatalf("row 0 is %T", back.Section("rows").Records()[0])
+		}
+		if v, _ := rec.Get("name"); v != name {
+			t.Fatalf("name changed: %q -> %q (%q)", name, v, text)
+		}
+		if v, _ := rec.Get("note"); v != note {
+			t.Fatalf("note changed: %q -> %q (%q)", note, v, text)
+		}
+		checkErrorAttribution(t, back)
+	})
+}

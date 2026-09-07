@@ -25,3 +25,8 @@ func (h *Header) upsertDef(kind DefKind, key string, val any) {
 	}
 	h.Defs = append(h.Defs, HeaderDef{Kind: kind, Key: key, Value: val})
 }
+
+// Upsert records a definition in document order, replacing one already there
+// with the same kind and key. A writer reproduces Defs verbatim, so this is
+// what keeps a hand-built header renderable.
+func (h *Header) Upsert(def HeaderDef) { h.upsertDef(def.Kind, def.Key, def.Value) }

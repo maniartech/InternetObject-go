@@ -90,6 +90,14 @@ func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 			name = strings.TrimPrefix(ref, "$")
 			continue
 		}
+		// A header may hold a shape the parser read, or a schema already
+		// compiled — Builder.Define stores the latter. Both are legitimate
+		// definitions of a name, so both resolve here rather than only at the
+		// site that happened to be written first.
+		if already, ok := shape.(*schema.Schema); ok {
+			d.compiled[name] = already
+			return already, nil
+		}
 		s, cerr := schema.Compile(shape, "")
 		if cerr != nil {
 			d.failed[name] = cerr
