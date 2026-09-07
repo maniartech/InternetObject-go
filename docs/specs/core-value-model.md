@@ -1,311 +1,422 @@
-# SPEC 0001 — The core value model
+# SPEC 0001 — The public surface and the core model (rev 2)
 
-- **Status:** Draft for implementation, 2026-09-07
-- **Decides:** nothing. [ADR 0011](../decisions/0011-core-model-and-layout.md) decides;
-  this is the contract to build against.
-- **Scope:** the container types, their invariants, where each one lives, and what the
-  public surface projects. Everything here is gated by the existing corpus, `-race` and
-  the fuzzers; nothing here may regress a benchmark.
+- **Status:** Draft for implementation, 2026-09-07. **Supersedes rev 1** (same file, earlier
+  commits), whose critical review found ten defects; §9 says how each is resolved here.
+- **Decides:** nothing new. [ADR 0004](../decisions/0004-native-api-design.md) (the native API
+  gradient and the vocabulary law) and [ADR 0011](../decisions/0011-core-model-and-layout.md)
+  (core model, layout) decide; this is the contract to build against.
+- **Governing principle, from the project owner:** *the Go library delivers everything the
+  TypeScript library delivers (except `loadInferred`), and each does so in its own native
+  style.* io-js2 is the inspiration for **what** must be covered; Go decides **how it is
+  spelled and where it lives**. Nothing here is named after a TS class.
 
 ---
 
-## 1. The lowering, and why the reference's class list does not survive it
+## 1. Principles
 
-io-js2 has one flat set of core classes because JavaScript has one representation. This port
-**lowers** a document through five representations, each strictly cheaper to work with and
-strictly less able to answer questions about the source:
+### 1.1 Delivery parity, measured against `io-js2/src/index.ts`
+
+Every exported capability of the reference has a row in §5 with its Go spelling and status.
+"Not ported" is allowed only with a reason that survives review (§6). The definition of
+delivered is not "an equivalent name exists" but "the corpus, the playground samples and the
+tests prove the behaviour".
+
+### 1.2 Go-native, not translated
+
+These rules are checkable, and a reviewer should check them:
+
+| Rule | Consequence |
+| --- | --- |
+| Package functions first, types second (ADR 0004) | Every capability works on plain structs, maps and slices through `io.Marshal`/`Unmarshal`/`Parse`/`String`/`Stream`/`Validate`. Types are opt-in sugar over the same engine. |
+| The vocabulary law (ADR 0004 D0) | Four verb pairs; `…With(…, *Schema)` and `…As[T]` suffixes; **banned**: `Load`, `Read`, `Decode`, `Write`, `…IO`. |
+| No `IO`/`Io` prefix or suffix anywhere | The package name already says it. `io.Document`, not `IODocument`. |
+| Accessors are nouns, not `Get…` | `sec.Name()`, `obj.Keys()`. `Get` is reserved for keyed lookup with comma-ok: `obj.Get(key) (any, bool)`. |
+| Failure is a return value | `(T, bool)` for absence, `error` for faults. Nothing exported panics on data. |
+| Iteration is `iter.Seq`/`iter.Seq2` | Not `map`/`filter`/`forEach` methods; `slices` and range-over-func are the standard library's job. |
+| Options are structs, not positional flags | `StreamOptions`, `JSONOptions`. Zero value is the default. |
+| Generics where the type is the point | `Collection[T]`, `SectionAs[T]`, `StreamAs[T]`. Never as a substitute for `any`. |
+| Immutable after construction unless the type exists to be built | A parsed `Document` is a value to read and share; the `Builder` is the thing you mutate (§4.6). |
+| One type per file, kebab-case file names, file named for the type | §2. |
+
+### 1.3 The lowering, and where each capability lives
+
+This port lowers a document through five representations, and the measured dependency graph
+is a strict DAG over them:
 
 ```
-  text                                    string
-    |  tokenizer                          - lexical decisions, once
-  tokens                                  []Token over the original string
-    |  parser                             - structure, no meaning
-  parse tree                              *parser.Document - Header, Sections, core.Object
-    |  document (bind + validate)         - meaning, via schema
-  validated tree                          *document.Doc - same nodes, checked values
-    |  root package                       - projection
-  Go values                               structs, maps, []any, *io.Object
+  text ──tokenizer──▶ tokens ──parser──▶ parse tree ──document──▶ validated tree ──root──▶ Go values
 ```
 
-The rule that keeps this honest, and which the measured dependency graph already obeys:
+> **A stage may depend only on stages below it.** `core`, `errs`, `numfmt`, `tokenizer` depend
+> on nothing; `parser` and `schema` on those; `document` on those; `streaming` on `document`;
+> the root package on all of them.
 
-> **A stage may depend only on stages below it.** `core`, `errs`, `numfmt` and `tokenizer`
-> depend on nothing; `parser` and `schema` on those; `document` on those; `streaming` on
-> `document`; the root package on all of them.
+The reference has one flat set of classes because JavaScript has one representation. Here,
+each capability lives at the stage that owns the information it needs — so `Definitions`
+(which holds parser output and compiles schemas) cannot live in `core`, and `core` may never
+import `errs`. This is not a limitation to work around; it is what keeps `schema` ignorant of
+the parser and the stream reader ignorant of documents.
 
-That graph is a DAG today and must stay one. It is why `schema` can compile a typedef without
-knowing what a parser is, and why the streaming reader can reuse the document's binding rules
-without the document knowing a stream exists.
+### 1.4 SOLID, as it actually applies
 
-**The consequence for this work:** the reference's nine core classes are not nine Go types in
-one package. They are capabilities, and each belongs at the stage that owns the information it
-needs. Cloning the flat list would drag `parser` and `schema` into `core` and collapse the
-lowering into a ball of mud.
+- **SRP** — one type, one job, one file. Enforced by §2's layout.
+- **OCP** — *as it stands, adding a scalar type touches six sites* (`type-<name>.go`,
+  `typedefSchemas`, `family.go`, `validate.go`, `write-typedef.go`, `gen/types.go`,
+  `enc-kind.go`). Rev 1 claimed one; that was false. The obligation this rev takes on is
+  honest: a new type's *validation* is one file, and the remaining sites are a documented
+  checklist in `internal/schema/typedef.go` until a later ADR collapses them.
+- **LSP** — the one substitution that matters is **fast path ≡ general path**, enforced by
+  differential fuzzers under `IO_NO_LAZY`, `IO_NO_FAST_PATH`, `IO_NO_HEADER_CACHE`. Every new
+  fast path inherits that gate.
+- **ISP** — no wide interfaces. `error`, `fmt.Stringer`, `iter.Seq2` are the only ones anything
+  satisfies. No `Container` interface unifying `Object` and `Collection`: nothing would consume it.
+- **DIP** — `core` is the bottom and depends on nothing.
 
-| io-js2 class | io-go home | why there |
+---
+
+## 2. The root package, file by file
+
+The public package is where a Go reader forms their opinion of the library. It must read as a
+designed surface, not a collection of files added when needed. Target layout — one exported
+type or one job per file, kebab-case, named for what it holds:
+
+```
+io.go                 package doc; the four verbs' entry points; type aliases to core
+document.go           Document: Parse, ParseWith, String, Value, Records, Errors, Sections, Section
+section.go            Section: Name, SchemaName, Schema, IsCollection, Len, Records, Value, Errors, HasErrors
+object.go             Object = core.Object; NewObject; the doc a caller reads first
+collection.go         Collection[T]: tolerant row binding (ADR 0004 D4)
+definitions.go        Definitions: ParseDefinitions; Schema, Default, Var, Names; Parse, Stream
+builder.go            Builder: NewBuilder, NewBuilderFrom; Define, Var, Section; Document, String
+builder-section.go    SectionBuilder: Add
+schema.go             Schema: ParseSchema, SchemaFor, String, MemberNames, Open
+marshal.go            Marshal, MarshalWith (struct/map/Object → text)
+marshal-fast.go       the fast path (declines; differential-fuzzed)
+marshal-error.go      MarshalError
+unmarshal.go          Unmarshal, UnmarshalWith
+unmarshal-lazy.go     the lazy path (declines; differential-fuzzed)
+unmarshal-error.go    UnmarshalError
+validate.go           Validate, ValidateWith
+stream.go             Stream, StreamAs[T]
+stream-item.go        StreamItem (a record in a stream)
+stream-options.go     StreamOptions
+stream-marshaler.go   StreamMarshaler: NewStreamMarshaler; Marshal, MarshalAs, Flush, Close
+json.go               Document.JSON, JSONOptions
+error.go              Error
+error-code.go         Code and the designated constants
+error-list.go         ErrorList
+error-item.go         ErrorItem = core.ErrorNode; IsError
+decimal.go            Decimal = core.Decimal; ParseDecimal, NewDecimal (SPEC 0002)
+path.go, enc-kind.go, field-plan.go, struct-plan.go   unexported machinery, unchanged
+```
+
+Two files exist today under other names and are renamed to match (`with.go` → folds into the
+files of the verbs it modifies; `document-struct.go` → `unmarshal-sections.go`, since that is
+what it does). Test files keep Go's `_test.go` spelling.
+
+---
+
+## 3. The format's vocabulary, spelled in Go
+
+io-specs is the authority on nouns, and its nouns are what the exported names use:
+
+| io-specs says | means | Go name |
 | --- | --- | --- |
-| `IOObject` | `core.Object` | a pure value; needs nothing |
-| `IOCollection` | `core.Collection` | a pure value; needs nothing |
-| `IOErrorItem` | `core.ErrorNode` | a pure value |
-| `Decimal` | `core.Decimal` | a pure value |
-| `IOHeader` | `parser.Header` | holds unresolved definition *shapes*; parse-stage |
-| `IODefinitions` | `document.Definitions` | **a service, not a value** — see §2 |
-| `IOSection` | `parser.Section` + `io.Section` | parse-stage data, public projection |
-| `IOSectionCollection` | `io.Document.Sections()` | a slice is the Go spelling |
-| `IODocument` | `parser.Document` → `document.Doc` → `io.Document` | one per stage |
+| **object** | the value: ordered members, keyed or positional | `Object` |
+| **record** | a row — the position an object occupies in a collection *or* a stream | `Records()`, `StreamItem`, `RecordIndex` |
+| **collection** | an ordered sequence of records in a section | `Section.IsCollection()`, `Collection[T]` |
+| **section** | one `---` block: a name, an optional schema binding, one object or a collection | `Section` |
+| **document** | header + sections | `Document` |
+| **definitions** | the header's namespace: `$schemas`, `@variables`, plain metadata | `Definitions` |
+| **stream item** | the envelope a reader emits per record | `StreamItem` |
 
-### 1.1 SOLID, as it applies here
-
-- **SRP.** One type, one job, one file. The two live violations are being fixed: the writer
-  held ten jobs in one file (fixed), and `core.Object` held *representation* with no behaviour
-  so every caller did its job for it (fixed).
-- **OCP.** New *types* extend `internal/schema` by adding a `type-<name>.go` carrying its
-  memberdef schema and validator, plus one line in `typedefSchemas`. Nothing else changes.
-  This is already true and must stay true.
-- **LSP.** There is one substitution relationship in the port and it is load-bearing: the
-  **fast path must be indistinguishable from the general path**. It is enforced by
-  differential fuzzers under `IO_NO_LAZY`, `IO_NO_FAST_PATH` and `IO_NO_HEADER_CACHE`, not by
-  types. Any new fast path inherits that obligation.
-- **ISP.** No container implements a wide interface. Go's `error`, `fmt.Stringer` and
-  `iter.Seq2` are the only ones anything satisfies. Do not invent a `Container` interface to
-  unify Object and Collection — nothing would consume it.
-- **DIP.** `core` depends on nothing, which is what makes it the bottom. It must not learn
-  about `errs`: a value model that can report errors invites validation to migrate into it.
-  Containers report failure with Go's comma-ok or `error`, never `errs.Error`.
+`Object` is the *value*; `record` is the *row*. Both words are correct and mean different
+things, which is why `Section.Records()` returns objects.
 
 ---
 
-## 2. `Definitions` is a service, and that decides its API
+## 4. Types and their contracts
 
-`document.Definitions` holds a `*parser.Header` and memoizes compiled schemas in two mutable
-maps. It is **not a value**: it has identity, it caches, and it is *not safe for concurrent
-use*. This is why `framed.go` deliberately caches the compiled `*schema.Schema` across
-goroutines but gives every document a fresh `Definitions`.
+### 4.1 `Object` — delivered
 
-**Contract.** A `*Definitions` belongs to exactly one document, on one goroutine. Compiled
-`*schema.Schema` values are immutable once returned and may be shared freely — a standing
-obligation on `internal/schema`, and the `pattern` regexp that was once compiled during
-validation was a real data race for exactly this reason (ADR 0009).
+`core.Object`, aliased as `io.Object`. Invariants (tested): member order preserved end to end;
+positional members never answer keyed lookups; an absent slot is positional and a value assigned
+to it through `SetAt` clears `Absent`; lookup is O(n) *by decision* (a key index would be an
+allocation per record on the hottest path — the doc comment must say "by decision", not
+"measured", which rev 1's implementation wrongly claims); `Clone` copies structure and shares
+values. `Members` stays exported for the pipeline.
 
-**Public surface.** `Definitions` is exposed read-only, as a lookup, not as the reference's
-mutable namespace:
+### 4.2 `Document` — immutable once parsed; the ownership rule
+
+A `*Document` returned by `Parse`/`ParseWith` is **read-only and safe to share across
+goroutines**. `Value()` and `Records()` return *views* of the document's own objects (ADR 0009):
+mutating what they return is a programming error, and the doc comment says so in the first
+sentence. A caller who wants to change a document goes through `NewBuilderFrom(doc)` (§4.6),
+which clones. Read API, unchanged: `String`, `Value`, `Records`, `Errors`, `Sections`,
+`Section(name)`, `Schema`, `SchemaOf(name)`; added: `Var(name) (any, bool)`,
+`Definitions() *Definitions` (a read-only view, §4.5).
+
+### 4.3 `Section` — delivered
+
+`Name`, `SchemaName`, `Schema`, `IsCollection`, `Len`, `Records`, `Value`, `Errors`,
+`HasErrors`. Errors are attributed where the fault is raised (ADR 0005 D7), never re-derived by
+scanning rows — so there is no separate collection-level error list, by design.
+
+### 4.4 `Collection[T]` — the tolerant row container (ADR 0004 D4)
+
+Rev 1 specified an untyped `core.Collection` wrapper with no consumer; that is withdrawn. The
+collection type this port needs is the one ADR 0004 already decided:
 
 ```go
-func (d *Document) SchemaOf(name string) (*Schema, error)   // exists
-func (d *Document) Var(name string) (any, bool)             // to add
-func (d *Document) DefinitionNames() []string               // to add
+type Collection[T any] struct { /* unexported */ }
+func (c *Collection[T]) Items() []T                 // the rows that bound
+func (c *Collection[T]) Errors() []Error            // the rows that did not, with paths
+func (c *Collection[T]) Len() int                   // rows attempted, both kinds
+func (c *Collection[T]) All() iter.Seq2[int, T]     // index is the document row index
+func (c *Collection[T]) Add(v T) error              // validates against the bound schema
 ```
 
-Mutation (`set`, `delete`, `push`, `merge`) is **not ported**. A definition is only meaningful
-against the records that were validated with it, so changing one after the fact would leave a
-document whose records no longer match its own header. To build a document with different
-definitions, build the document.
+**Job:** `[]T` is strict — any row fault fails the whole `Unmarshal`. `Collection[T]` is the
+format's accumulate-and-continue at row level: a struct field of this type receives every row
+that bound *and* the faults of those that did not. It is also what `SectionAs[T]` returns in
+its tolerant form, `SectionCollectionAs[T]`. `Add` validates on insert, which is the one place
+mutation-time validation exists at Level 0.
+
+### 4.5 `Definitions` — a compiled header, shareable
+
+Two things share the name in the reference; Go separates them by mutability:
+
+- **Read-only view on a parsed document**: `doc.Definitions()` with `Schema(name)`,
+  `Default()`, `Var(name)`, `Names()`. Backed by the document's own resolver. No mutation —
+  a definition is only meaningful against the records validated with it.
+- **Preloaded, compiled once, shared**: `ParseDefinitions(src string) (*Definitions, error)`
+  compiles a header eagerly (every named schema, every variable) and returns an **immutable**
+  value safe for concurrent use. It is *used* through methods, which keeps the vocabulary law
+  intact without a fifth verb:
+
+  ```go
+  defs, _ := io.ParseDefinitions(headerText)
+  doc, err := defs.Parse(data)                     // like url.URL.Parse, template.Template.Parse
+  for item, err := range defs.Stream(r, opts) {…}  // preloaded definitions for a stream
+  ```
+
+  Precedence follows io-specs `streaming/schema-and-state.md`: in-stream definitions override
+  preloaded keys; an in-stream `$schema` overrides the fallback default; otherwise the fallback
+  stays active. `StreamOptions.Definitions string` stays for out-of-band header *text*;
+  `*Definitions` is its compiled form.
+
+### 4.6 `Builder` — the only mutable document
+
+Rev 1 put a `(string, error)` `String()` on `Document`, colliding with `fmt.Stringer`, and
+validated at the end. Both wrong. The builder is its own type and **validates at `Add`**, so a
+fault is reported at the call that caused it — which is also what the reference does.
+
+```go
+b := io.NewBuilder()
+b.Define("Employee", empSchema)         // *Schema; a header definition
+b.Var("region", "apac")                 // an @variable
+emp := b.Section("employees", "Employee")   // named, bound; "" name = the default section
+if err := emp.Add(map[string]any{"name": "Alice", "age": 30}); err != nil {…}  // struct, map or *Object
+doc, err := b.Document()                // immutable from here on
+text := doc.String()
+```
+
+`NewBuilderFrom(doc)` clones a parsed document so it can be edited. A section with no schema
+binding accepts any record and writes header-less. `Define` after a section has rows is refused
+(`error`): definitions may not change under records already validated against them — §4.5's
+rule, stated for the one place mutation exists.
+
+### 4.7 `StreamMarshaler` — the writer, shaped by io-specs
+
+Rev 1 named this `StreamWriter.Write`, which ADR 0004 bans. The verb for Go value → IO text is
+`Marshal`, and the precedent for an incremental marshaler is `json.NewEncoder(w).Encode(v)`:
+
+```go
+sm, err := io.NewStreamMarshaler(w, &io.StreamOptions{Schema: s})
+err = sm.Marshal(rec)                   // one record, validated, buffered
+err = sm.MarshalAs(rec, "$Alert")       // explicit schema switch for a heterogeneous stream
+err = sm.Flush()
+err = sm.Close()                        // flushes; the header is emitted even if nothing was
+```
+
+Contract, each line traceable to `io-specs/streaming/readers-and-writers.md` §Writer:
+
+- Serializes through the canonical writer — the same code `Document.String` uses; no
+  stream-only spellings.
+- The header is emitted **at most once**, before the first record, and the `---` terminator
+  is **always** emitted, even for an empty header. The legacy header-less form is never produced.
+- A schema switch is emitted only when the effective schema changes.
+- A record that fails validation is **not emitted** and the error is returned; the stream never
+  carries a record its reader would reject.
+- **Sequential, by protocol.** io-specs: "Writer calls MUST be issued sequentially". The type
+  is therefore *not* safe for concurrent use and says so, like `bufio.Writer`; a caller who
+  fans in from goroutines owns the lock. (Rev 1 promised a mutex — that would have hidden a
+  protocol rule behind an API guarantee.)
+- Buffered. `Flush` is explicit; `Close` flushes. No syscall per record.
+
+Conformance: no corpus pins a writer directly. The gate is **`Stream(NewStreamMarshaler(…))`
+round-trip** — every record marshaled is read back identical by this port's own reader, over
+the streaming corpus inputs and under a differential fuzzer — plus the serializer corpus, which
+already pins the canonical spelling.
+
+### 4.8 Projection — `Value`, `JSON`
+
+`Value()` is the live view (§4.2). Added:
+
+```go
+func (d *Document) JSON(opts *JSONOptions) ([]byte, error)
+type JSONOptions struct { SkipErrors bool; Indent string }
+```
+
+Decided mappings, so they are testable rather than discovered:
+
+| IO value | JSON |
+| --- | --- |
+| object | object, **member order preserved** (never through `map`) |
+| positional member | key is its index as a string, as `Value()` does |
+| number | number |
+| bigint | number if it fits `int64`, else string (exact) |
+| decimal | string (exact; scale preserved) |
+| datetime / date / time | RFC 3339 string; date `YYYY-MM-DD`; time `HH:MM:SS[.fff]` |
+| bytes | base64 string |
+| failed row | `null`; omitted when `SkipErrors` — indices are *not* renumbered |
+| multi-section document | object keyed by section name, as `Value()` does |
+
+A test probes the reference's `toJSON` on the playground samples and records every difference
+as a finding — the mapping above is a decision, and where it diverges from the reference that
+must be visible, not silent.
+
+### 4.9 Errors
+
+`type Code string` with the 46 designated codes as constants (`io.ExpectedInteger`, …).
+`Error.Code` changes from `string` to `Code`; pre-1.0, and `e.Code == "expected-integer"`
+still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `Error`,
+`ErrorList`, `ErrorItem`/`IsError` otherwise as ADR 0005.
+
+### 4.10 `Decimal`
+
+[SPEC 0002](decimal.md).
 
 ---
 
-## 3. `core.Object` — the record
+## 5. Delivery parity — `io-js2/src/index.ts` → Go
 
-Delivered. Restated because the rest of the spec depends on its invariants.
+| Reference export | Go spelling | Status |
+| --- | --- | --- |
+| `IOObject` | `Object` | ✅ |
+| `IOCollection` | `Collection[T]` (§4.4) | ❌ |
+| `IODocument` | `Document` (read) + `Builder` (build) | read ✅ · build ❌ |
+| `IOSection`, `IOSectionCollection` | `Section`, `Document.Sections()` | ✅ |
+| `IOHeader`, `IODefinitions` | `Definitions` (§4.5) | ❌ |
+| `IOErrorItem` | `ErrorItem`, `IsError` | ✅ |
+| `Decimal` | `Decimal` (SPEC 0002) | ❌ |
+| `IOError`, `IOSyntaxError`, `IOValidationError` | `Error` with `Category` (syntax/validation/stream) — one type, a field, not a hierarchy | ✅ |
+| `ErrorCodes` | `Code` constants (§4.9) | ❌ |
+| `IOSchema`, `parseSchema` | `Schema`, `ParseSchema`, `SchemaFor[T]` | ✅ |
+| `parse`, `parseDocument`, `safeParse*` | `Parse`, `ParseWith` — `(v, err)` **is** safeParse | ✅ |
+| `parseDefinitions` + `parse(data, defs)` | `ParseDefinitions`, `defs.Parse` | ❌ |
+| `load`, `loadObject`, `loadCollection` | `Unmarshal`, `UnmarshalWith`, `SectionAs[T]` | ✅ |
+| `loadInferred` | — | out of scope by decision |
+| `stringify`, `stringifyDocument` | `Marshal`, `Document.String` | ✅ |
+| `stringifyHeader` | `Schema.String` (exists), `Definitions.String` | ⚠️ defs form ❌ |
+| `toObject`, `toJSON` | `Value`, `JSON` (§4.8) | JSON ❌ |
+| `validate`, `validateObject`, `validateCollection` | `Validate`, `ValidateWith` (structs, slices; maps ❌) | ⚠️ |
+| `createStreamReader`, `IOStreamReader` | `Stream`, `StreamAs[T]` | ✅ |
+| `createStreamWriter` | `StreamMarshaler` (§4.7) | ❌ |
+| `createPushSource`, `BufferTransport` | an `io.Reader` — `io.Pipe` is the push source, `bufio` the transport | ✅ by the standard library |
+| `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
+| `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-**Invariants.**
-
-1. Member order is preserved end to end. Nothing reorders members; the writer emits them in
-   the order they are held.
-2. A **positional** member has no key and is never returned by a keyed lookup. `Find`, `Get`,
-   `Has`, `Delete` and `Keys` skip them.
-3. An **absent** member (an empty comma slot, `~ a, , c`) is always positional. Writing to one
-   via `Set`/`SetAt` clears `Absent` — a hole that receives a value is no longer a hole.
-4. Lookup is O(n). Justified: a key-to-index map would be one allocation per record on the
-   hottest path, to index the handful of members a record has.
-5. `Clone` separates structure and shares values. Both halves are contract.
-
-**`Members` stays exported.** The pipeline walks it directly and must not pay for accessors.
-Callers should use the methods; the type doc says so.
-
----
-
-## 4. `core.Collection` — the records of a section
-
-Not yet built. It is the one genuinely missing *value*: today a section's records are a bare
-`[]any` on `parser.Section`, so nothing carries the fact that they are a collection except a
-sibling `Collection bool`.
-
-**The design constraint that dominates everything else:** the parser produces `[]any` on the
-hot path and must keep doing so. `core.Collection` therefore **wraps a `[]any`, it does not
-replace it**, and conversion in either direction is free:
-
-```go
-type Collection struct{ Items []any }
-```
-
-**API.**
-
-```go
-func NewCollection(cap int) *Collection
-func (c *Collection) Len() int
-func (c *Collection) At(i int) (any, bool)          // reported, never panicked
-func (c *Collection) SetAt(i int, v any) bool
-func (c *Collection) Append(v ...any) *Collection
-func (c *Collection) DeleteAt(i int) bool
-func (c *Collection) All() iter.Seq2[int, any]
-func (c *Collection) Clone() *Collection            // structure copied, values shared
-```
-
-**Deliberately absent:** `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`,
-`join`, `includes`, `indexOf`, `lastIndexOf`. `slices` and range-over-func cover every one, and
-a container that reimplements the standard library is noise a reviewer has to read past.
-
-**Error reading.** The reference's `IOCollection.getErrors()` walks its items looking for error
-markers. This port does not: errors are attributed **where the fault is raised**
-(ADR 0005 D7), so `Section.Errors()` already answers this and re-deriving would double-count
-every validation fault. `Collection` gets no error API.
+Delivered: 14. Missing: 8. Partial: 2.
 
 ---
 
-## 5. What the public surface gains
-
-Ordered by value. Each lands separately, green.
-
-### 5.1 Building a document without a Go type — the headline gap
-
-Today a document can be built only from a Go struct. The dynamic case — a gateway assembling
-sections whose shape is known at runtime — has no answer. After §3/§4 it does:
-
-```go
-doc := io.NewDocument()
-doc.Define("Employee", empSchema)                       // header definition
-sec := doc.AddSection("employees", "Employee")          // named, schema-bound
-sec.Add(io.NewObject(2).Append("name", "Alice").Append("age", 30))
-text, err := doc.String()                               // validates on the way out
-```
-
-**Contract.** `String` validates every record against the section's bound schema and returns
-an `ErrorList` if any fails — a builder must not be able to emit a document its own parser
-rejects. A section with no schema is written header-less and validates nothing.
-
-### 5.2 `StreamWriter` — the missing half of streaming
-
-`Stream` reads. Nothing writes. The reference has `createStreamWriter`, and a port that can
-consume a stream but not produce one cannot be used on both ends of a link.
-
-```go
-func NewStreamWriter(w io.Writer, s *Schema) (*StreamWriter, error)
-func (w *StreamWriter) Write(v any) error   // one record, validated, then flushed
-func (w *StreamWriter) Close() error
-```
-
-**Contract.** The header is written once, before the first record. `Write` validates against
-the schema and emits nothing if validation fails, so a stream never carries a record its
-reader would reject. Safe for concurrent `Write` — a writer is exactly the thing several
-goroutines hand records to. *(This is the one place in the port that needs a mutex; §1's LSP
-note does not apply, there is no second path.)*
-
-### 5.3 Parsing against preloaded definitions
-
-The reference has `parseDefinitions` plus `parse(data, defs)`, so a fixed header can be
-compiled once and reused across many payloads — the streaming and RPC case.
-
-```go
-func ParseDefs(src string) (*Defs, error)
-func ParseWithDefs(src string, d *Defs) (*Document, error)
-```
-
-**Contract.** A `*Defs` is immutable once returned and safe to share across goroutines. This
-is the same guarantee `headerFor` already relies on internally, promoted to public API — which
-means it is already implemented and already fuzzed, it just has no name yet.
-
-### 5.4 Projection options
-
-```go
-func (d *Document) JSON() ([]byte, error)          // toJSON
-func (d *Document) ValueSkippingErrors() any       // toObject({skipErrors:true})
-```
-
-`skipErrors` **drops failed rows**; it does not renumber the survivors' record indices — an
-index in an error refers to the document, not to the filtered projection.
-
-### 5.5 Exported error codes
-
-46 designated codes live unexported in `internal/errs`. The reference exports `ErrorCodes`,
-and a caller comparing `err.Code` against a string literal today gets no compile-time check at
-all. Export them as typed constants.
-
----
-
-### 5.6 `Decimal` — comparison, arithmetic, precision
-
-`core.Decimal` is a coefficient and a scale with a `String()`. No constructor, no comparison,
-no arithmetic; the behaviour lives as unexported helpers inside `internal/schema`. Specified
-separately in **[SPEC 0002](decimal.md)**, which also records two divergences from the
-reference the analysis exposed (precision of `0.05m`; `choices` on decimals).
-
----
-
-## 6. What is not ported, and why
+## 6. Not ported, and why
 
 | Reference | Verdict |
 | --- | --- |
-| `Revision`, `subscribe`, `version`, `touch` | JS intercepts property access; Go's answer is a channel the caller owns. Inventing an observer protocol nobody asked for is the overengineering this project rejects. |
-| `proxyDocument`, `proxyValue`, `IO_NODE` | Needs `Proxy`. No Go equivalent, no demand. |
-| `ioDocument` / `ioObject` / tag functions | Template-literal tags. No Go equivalent. |
-| `safeParse` | Go's `(value, error)` **is** safeParse. A second spelling would be the ceremony this API exists to avoid. |
-| `loadInferred` | Out of scope by the project owner's decision. |
-| `IOCollection.map/filter/reduce/...` | `slices` plus range-over-func. §4. |
-| `Definitions` mutation | §2. |
+| `Revision`, `subscribe`, `version`, `touch` | Exist because JS can intercept property access. Go's answer to "watch a document" is a channel the caller owns; an observer protocol nobody asked for is the overengineering this project rejects. |
+| `proxyDocument`, `proxyValue`, `IO_NODE` | Need `Proxy`. No Go equivalent, no demand. |
+| `ioDocument`/`ioObject`/… tag functions | Template-literal tags. No Go equivalent. |
+| `safeParse` as a second spelling | `(v, error)` already is it. |
+| `IOCollection.map/filter/reduce/…` | `slices` + range-over-func. |
+| Definitions mutation after parse | §4.5; the `Builder` is where definitions are set. |
+| `loadInferred` | Project owner's decision. |
 
 ---
 
-## 7. Test obligations
+## 7. Performance budget
 
-Nothing in §5 lands without all of:
+The owner's bar is *better than `encoding/json`*. Current standing (1,000 records, 64 KB IO vs
+114 KB JSON, `docs/reports/benchmarks.md` pass 7):
 
-1. **The corpus stays green** — 1,572 conformance cases plus 262 generated-code cases. A
-   missing corpus case FAILS the run; it never skips.
-2. **`-race` clean**, including the new `StreamWriter`, which must have a test that writes
-   from several goroutines at once.
-3. **The five fuzzers stay clean**, and anything with two paths gains a differential fuzzer
-   asserting they agree.
-4. **Round-trip.** Anything that can be built must survive `String` → `Parse` → equal, and a
-   second `String` must be byte-identical. The builder joins `FuzzParse`'s property set.
-5. **Benchmarks.** ADR 0011 D4: none of this may enter the hot path. `Parse`, `Unmarshal`,
-   `Marshal` and the small-payload benchmarks run before and after each landing, and a
-   regression outside noise is a defect, not a trade.
+| Operation | io-go | `encoding/json` | standing |
+| --- | --- | --- | --- |
+| Unmarshal → struct | 1.33 ms · 4,024 allocs | 1.92 ms · 6,019 | ✅ faster |
+| Marshal ← struct | 0.33 ms · 22 | 0.39 ms · 2 | ✅ faster |
+| Small record decode | 2,144 B · 14 | 480 B · 11 | ⚠️ 1.3× allocs, doing validation JSON does not |
+| Parse → dynamic | 1,456 KB · 17,952 | 729 KB · 23,013 | ✅ fewer allocs; ⚠️ 1.65× time |
+
+Rules this spec adds:
+
+1. **Nothing in §4 enters the hot path.** `Builder`, `Collection[T]`, `Definitions`,
+   `StreamMarshaler`, `JSON` are layered over what the parser already produces.
+2. **Allocation counts are the gate**, per landing, recorded in the benchmarks report. They are
+   exact and load-independent; nanoseconds are noise unless the alloc count moved.
+3. **`StreamMarshaler.Marshal` of a struct must cost what `Marshal` of that struct costs** —
+   it reuses the fast path and the cached header, and must not re-render the header.
+4. Dynamic parse remains the one operation slower than JSON in time; ADR 0009's
+   copy-on-write projection is the standing plan and this spec does not regress it.
 
 ---
 
+## 8. Test obligations — every landing, no exceptions
+
+1. **Corpus**: 1,572 conformance + 262 generated-code cases green. A missing corpus **fails**.
+   The serializer suite pins three properties per case — output, re-parse, idempotence — and is
+   the gate for everything that writes, including the builder and the stream marshaler.
+2. **Playground**: every sample in `io-playground` parses, round-trips and is idempotent (the
+   21 pinned today, plus any added). The two intentional-error samples must still report errors.
+   Samples seed the fuzzers.
+3. **`-race`** clean, including a test that shares one parsed `Document` and one `*Definitions`
+   across goroutines while reading.
+4. **Fuzzers**: the five existing stay clean; added — builder round-trip
+   (`Builder → String → Parse ≡`), stream round-trip (`StreamMarshaler → Stream ≡`),
+   `Object` operation sequences (order preserved, positional/keyed separation),
+   `Collection[T]` partial binding (`len(Items)+len(Errors) == Len()`).
+5. **Coverage**: black-box behaviour plus white-box branches; the module's coverage number is
+   reported in the benchmarks report next to the alloc counts, and may not fall.
+6. **Benchmarks** run before and after each landing with the numbers recorded — the rule rev 1
+   stated and its author broke twice.
+7. **Oracle probes**: where this spec *decides* something the corpus does not pin (§4.8's JSON
+   mapping, SPEC 0002's divergences), a test probes io-js2 and records disagreement as a
+   finding rather than letting it pass silently.
+
 ---
 
-## Review 2026-09-07 — open items, not yet resolved
+## 9. Resolution of the rev-1 review
 
-A critical pass against the code found these. They are recorded here so the spec is not built
-against as written; each is resolved by revising the section named, not by implementing around it.
+| # | Rev-1 defect | Resolved by |
+| --- | --- | --- |
+| 1 | `StreamWriter.Write` — banned vocabulary | §4.7 `StreamMarshaler.Marshal` |
+| 2 | `core.Collection` contradicted ADR 0004 D4, had no consumer | §4.4 `Collection[T]` per ADR 0004 |
+| 3 | No ownership rule for mutable `Object` vs `Value()` views | §4.2 immutable document; §4.6 builder |
+| 4 | Builder `String() (string, error)` collided with `Stringer` | §4.6 `Builder.Document()`; validate at `Add` |
+| 5 | `Define` contradicted "no definitions mutation" | §4.5/§4.6: mutation only in the builder, refused once rows exist |
+| 6 | OCP claim false | §1.4 states the six sites and the obligation |
+| 7 | `Object` doc claims a measurement that was not made | §4.1: "by decision"; code comment to be corrected |
+| 8 | `ParseDefs` "already implemented" overclaimed | §4.5 eager compile of all definitions, immutable, specified as new work |
+| 9 | Benchmarks not run per landing | §8.6 |
+| 10 | `JSON` underspecified; typed codes breaking; per-record flush | §4.8 table; §4.9 compatibility note; §4.7 buffered |
 
-1. **§5.2 `StreamWriter.Write` is banned vocabulary** (ADR 0004 D0 lists `Write`). Reshape
-   as a function like the reader's `Stream`.
-2. **§4 `core.Collection` contradicts ADR 0004 D4**, which already specifies `io.Collection[T]`
-   with a job (tolerant row binding: `Items/Errors/Len/All/Add`). §4's type has no consumer.
-   Drop §4; build ADR 0004's.
-3. **Ownership is unstated.** `Value()`/`Records()` return views; `Object` is now mutable; so
-   editing a projected record rewrites the parsed document and races if shared. Needs a rule:
-   a parsed `Document` is immutable and shareable; mutation belongs to the builder.
-4. **§5.1 `String() (string, error)` collides with `Document.String() string`.** Make the
-   builder its own type and validate at `Add` (also what the reference does).
-5. **§5.1 `Define` is definitions mutation, which §2 forbids.** Resolve: allowed before any
-   record is validated (builder), never on a parsed document.
-6. **§1.1 OCP claim is false** — adding a type also touches `family.go`, `validate.go`,
-   `write-typedef.go`, `gen/types.go`, `enc-kind.go`. Fix the code or drop the claim.
-7. **`Object` doc says the scan was "measured"; it was not.** Reword or measure.
-8. **§5.3 overclaims** — `headerFor` caches the default schema only and declines variables
-   and `$Name` selectors; a shareable `Defs` is not "already implemented".
-9. **§7.5 benchmarks were not run for the last two landings.** Allocation counts unchanged
-   on the three hot benchmarks, but the rule was broken by its author.
-10. **§5.4 `JSON()` underspecified**: Decimal/bigint precision, temporal form, positional
-    keys, error rows, key order. **§5.5** typed codes change `Error.Code`'s type — breaking.
-    **§5.2** per-record flush is a syscall per record; buffer, flush on `Close`.
+---
 
 ## ▶ RESUME HERE
 
-- §3 `core.Object` — **done**.
-- Marshal record dispatch — **done** (three defects fixed; `isRecordType`).
-- **Next:** resolve the review items above (revise §4, §5.1, §5.2, add an ownership section),
-  then SPEC 0002 Decimal, then §5.1 the builder, then the stream writer, then §5.3–5.5.
+- Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split.
+- **Next, in order, each landing green under §8:** (1) `Decimal` — SPEC 0002, standalone;
+  (2) §4.9 `Code` constants — small, unblocks tests that name codes; (3) §4.5 `Definitions`;
+  (4) §4.6 `Builder`; (5) §4.4 `Collection[T]`; (6) §4.7 `StreamMarshaler`; (7) §4.8 `JSON`;
+  (8) §2 file renames, last, so history stays readable.
+- Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded
+  object base is still unchosen (ADR 0004 D4 note) but nothing in this spec depends on it.
