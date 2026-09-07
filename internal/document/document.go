@@ -116,14 +116,14 @@ func parse(src string, override *schema.Schema) *Doc {
 					if sec.Collection {
 						e.RecordIndex, e.Path = i, "$["+strconv.Itoa(i)+"]"
 					}
-					doc.Errors = append(doc.Errors, e)
+					doc.AddSectionError(sec, e)
 					sec.Records[i] = errorNodeFor(e)
 					if !sec.Collection {
 						return doc
 					}
 					continue
 				}
-				SurfaceDeferred(rec, &doc.Errors)
+				surfaceSectionDeferred(doc, sec, rec)
 			}
 			continue
 		}
@@ -142,7 +142,7 @@ func parse(src string, override *schema.Schema) *Doc {
 				for j := range verrs {
 					verrs[j].RecordIndex = recIndex
 				}
-				doc.Errors = append(doc.Errors, verrs...)
+				doc.AddSectionError(sec, verrs...)
 				sec.Records[i] = errorNodeFor(verrs[0])
 				if !sec.Collection {
 					return doc // a bare record fails fast
@@ -154,10 +154,19 @@ func parse(src string, override *schema.Schema) *Doc {
 			// (`any`) subtree survives validation unmasked; the reference
 			// throws its code (typed members mask with expected-* instead —
 			// ISSUE-23). Surface it like the schema-less route does.
-			SurfaceDeferred(validated, &doc.Errors)
+			surfaceSectionDeferred(doc, sec, validated)
 		}
 	}
 	return doc
+}
+
+// surfaceSectionDeferred reports a record's deferred literal faults as the
+// section's own, so every route into a section's error list runs through
+// AddSectionError.
+func surfaceSectionDeferred(doc *Doc, sec *parser.Section, rec any) {
+	var derrs []errs.Error
+	SurfaceDeferred(rec, &derrs)
+	doc.AddSectionError(sec, derrs...)
 }
 
 // errorNodeFor is THE conversion from an accumulated fault to the marker that

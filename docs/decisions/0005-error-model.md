@@ -71,6 +71,46 @@ regression in either direction (finding #16). Position, path, category and recor
 therefore ship with dedicated tests in this repo. Until the corpus gains a position column,
 these tests are the only gate that exists anywhere.
 
+## D7. A section owns its errors; a document owns all of them
+
+A document is an **error collector** as much as a value: it routinely holds valid records
+beside the ones that failed. `Document.Errors()` is the flat list, in document order — but a
+flat list cannot say *which* section a fault came from, because two sections both report
+`$[1]` for their second record and nothing in the error itself distinguishes them.
+
+`Section.Errors()` is therefore the attribution, with `Section.HasErrors()` as the predicate.
+This mirrors the reference, whose `IOSection.errors` exists for the same reason — and whose
+errors carry no path at all, only a position, so per-section reading is the *only* attribution
+it has. We keep both: richer paths **and** the section.
+
+Two consequences follow from *"one decision, one site"*:
+
+- **Attribution is recorded where the fault is raised**, by `parser.Document.AddSectionError`,
+  which appends to the flat list and the section's list together. It is never re-derived
+  afterwards by scanning records for `ErrorItem` markers — that would count every validation
+  fault twice, once as the error and once as its marker. All four routes into a section's
+  errors (parse recovery, variable resolution, schema validation, deferred literals) go
+  through that one call, and a test asserts the totals reconcile: the section lists account
+  for exactly the document's faults, no more and no less.
+- **Faults that belong to no section stay unattributed.** A header fault or a broken schema
+  binding is the *document's*, and it is also fatal — the sections it would have described do
+  not exist. `sum(section errors) == len(Document.Errors())` therefore holds for every
+  document that got as far as having sections at all.
+
+### On the reference's `IOCollection.errors`
+
+The reference splits this three ways — `IOCollection.errors`, `IOSection.errors` (which
+aggregates the collection's plus its child objects'), and `Document.getErrors()` — because
+there a collection is a standalone container that can be built and schema-attached on its own.
+
+In io-go a **section is the collection**: `Section.Records()` *is* the item list, and there is
+no separate `Collection` type to carry a second error list (ADR 0004 D4). So `Section.Errors()`
+covers exactly what the reference splits between `IOCollection.errors` and `IOSection.errors`,
+and the aggregation the reference performs at read time we perform at write time. Should a
+standalone `Collection` ever ship, it inherits this rule: it accumulates at the point of
+failure, and the section it is attached to sees those errors because they were recorded
+through the same call — not because a getter walked its items.
+
 ## Non-goals
 
 - **End positions / ranges.** The reference has `endPosition`; nothing consumes it here yet.

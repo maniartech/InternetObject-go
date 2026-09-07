@@ -153,3 +153,29 @@ func SectionAs[T any](d *Document, name string) ([]T, error) {
 	}
 	return out, nil
 }
+
+// Errors returns the faults this section collected, in document order.
+//
+// A Document is an error COLLECTOR as much as a value: a section holds the
+// records that survived alongside markers for the ones that did not, and this
+// says what went wrong with them. Ask the SECTION rather than reading the
+// document's flat list, because that list cannot tell two sections apart — both
+// report `$[1]` for their second record. io-js2 draws the same line
+// (src/core/section.ts exposes `errors` per section).
+//
+// A section with no faults returns nil, so `len(sec.Errors()) == 0` is the test
+// for "this section loaded cleanly".
+func (s *Section) Errors() []Error {
+	raw := s.docp.doc.SecErrors[s.sec]
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]Error, len(raw))
+	for i, e := range raw {
+		out[i] = toError(e)
+	}
+	return out
+}
+
+// HasErrors reports whether any record in this section failed.
+func (s *Section) HasErrors() bool { return len(s.docp.doc.SecErrors[s.sec]) > 0 }

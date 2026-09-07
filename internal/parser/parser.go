@@ -257,7 +257,7 @@ func (p *parser) parseSectionBody(sec *Section) {
 				return
 			}
 			p.next() // the ~
-			sec.Records = append(sec.Records, p.parseCollectionRecord())
+			sec.Records = append(sec.Records, p.parseCollectionRecord(sec))
 		}
 	}
 
@@ -270,11 +270,11 @@ func (p *parser) parseSectionBody(sec *Section) {
 // parseCollectionRecord parses one `~` record with recovery: a fault is
 // captured, the record becomes an ErrorNode, and the cursor skips to the next
 // record boundary.
-func (p *parser) parseCollectionRecord() (rec any) {
+func (p *parser) parseCollectionRecord(sec *Section) (rec any) {
 	defer func() {
 		if r := recover(); r != nil {
 			f := r.(fail)
-			p.doc.Errors = append(p.doc.Errors, f.err)
+			p.doc.AddSectionError(sec, f.err)
 			rec = core.ErrorNode{Code: f.err.Code}
 			for !p.atEnd() {
 				if k := p.s.Tokens[p.i].Kind; k == tokenizer.KindCollectionStart || k == tokenizer.KindSectionSep {

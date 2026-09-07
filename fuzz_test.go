@@ -66,6 +66,7 @@ func FuzzParse(f *testing.F) {
 		if doc == nil {
 			t.Fatal("Parse returned a nil document")
 		}
+		checkErrorAttribution(t, doc)
 		out := doc.String()
 		if err != nil {
 			return
@@ -137,4 +138,28 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 	n := copy(p, r.src[r.pos:min(r.pos+r.chunk, len(r.src))])
 	r.pos += n
 	return n, nil
+}
+
+// checkErrorAttribution asserts the section error lists reconcile with the
+// document's (ADR 0005 D7): a fault is attributed to at most one section and is
+// never counted twice, so the section totals can only ever fall SHORT of the
+// document's — by exactly the faults that belong to no section, which are the
+// header and schema-binding ones.
+//
+// Under-counting is the failure this cannot see directly, so it is pinned from
+// the other side by TestEveryFaultRouteAttributesToItsSection, which requires
+// equality for each route into a section's list.
+func checkErrorAttribution(t *testing.T, doc *io.Document) {
+	total := 0
+	for _, sec := range doc.Sections() {
+		n := len(sec.Errors())
+		total += n
+		if sec.HasErrors() != (n > 0) {
+			t.Fatalf("section %q: HasErrors() = %v but Errors() has %d",
+				sec.Name(), sec.HasErrors(), n)
+		}
+	}
+	if got := len(doc.Errors()); total > got {
+		t.Fatalf("sections report %d errors, document only %d", total, got)
+	}
 }

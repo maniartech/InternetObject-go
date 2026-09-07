@@ -187,3 +187,134 @@ func TestDocumentStructValidates(t *testing.T) {
 		t.Errorf("error = %v, want mismatched-min-len", err)
 	}
 }
+
+// A Document is an ERROR COLLECTOR as much as a value: it holds the records
+// that survived alongside markers for the ones that did not, and each section
+// reports its own faults.
+//
+// The flat document list cannot do that job alone - two sections both report
+// `$[1]` for their second record, so the section is the only thing that can say
+// which is which. io-js2 draws the same line (src/core/section.ts: `errors`),
+// and its own error objects carry no path at all, only a position.
+func TestSectionCollectsItsOwnErrors(t *testing.T) {
+	nlSec := string(rune(10))
+	doc := "~ $Emp: {name: string, age: int}" + nlSec +
+		"~ $Alert: {level: string}" + nlSec +
+		"--- employees: $Emp" + nlSec +
+		"~ Alice, 30" + nlSec +
+		"~ Bob, oops" + nlSec +
+		"--- alerts: $Alert" + nlSec +
+		"~ warn" + nlSec +
+		"~ 42"
+
+	d, err := io.Parse(doc)
+	if err == nil {
+		t.Fatal("expected faults")
+	}
+	if got := len(d.Errors()); got != 2 {
+		t.Fatalf("document should collect both faults, got %d", got)
+	}
+
+	for _, tc := range []struct {
+		section, code string
+	}{
+		{"employees", "expected-integer"},
+		{"alerts", "expected-string"},
+	} {
+		sec := d.Section(tc.section)
+		if sec == nil {
+			t.Fatalf("%s section missing", tc.section)
+		}
+		if !sec.HasErrors() {
+			t.Errorf("%s: HasErrors() = false", tc.section)
+		}
+		es := sec.Errors()
+		if len(es) != 1 {
+			t.Fatalf("%s: got %d errors, want 1 (%v)", tc.section, len(es), es)
+		}
+		if es[0].Code != tc.code {
+			t.Errorf("%s: code = %s, want %s", tc.section, es[0].Code, tc.code)
+		}
+		// The valid row is still there, next to the marker.
+		if sec.Len() != 2 {
+			t.Errorf("%s: lost a record, len = %d", tc.section, sec.Len())
+		}
+		if io.IsError(sec.Records()[0]) {
+			t.Errorf("%s: the GOOD row was marked as an error", tc.section)
+		}
+		if !io.IsError(sec.Records()[1]) {
+			t.Errorf("%s: the bad row carries no marker", tc.section)
+		}
+	}
+}
+
+// A clean section reports nothing, so len(Errors()) == 0 is the test for
+// "this section loaded cleanly".
+func TestCleanSectionHasNoErrors(t *testing.T) {
+	d, err := io.Parse(dashboardDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range d.Sections() {
+		if s.HasErrors() || len(s.Errors()) != 0 {
+			t.Errorf("clean section %q reports %v", s.Name(), s.Errors())
+		}
+	}
+}
+
+// Every route into a section's error list must attribute: parse recovery,
+// variable resolution, schema validation and deferred literal faults alike.
+// A fault counted twice is as wrong as one lost, so the totals are checked
+// against the document's own flat list.
+func TestEveryFaultRouteAttributesToItsSection(t *testing.T) {
+	nl := string(rune(10))
+	for _, tc := range []struct {
+		name, src, code string
+		section         string
+	}{
+		{
+			name:    "parse recovery",
+			src:     "--- a" + nl + "~ 1" + nl + "~ {q:" + nl + "--- b" + nl + "~ 2",
+			code:    "expected-value",
+			section: "a",
+		},
+		{
+			name:    "deferred literal",
+			src:     "--- a" + nl + "~ 1" + nl + "~ 0B" + nl + "--- b" + nl + "~ 2",
+			code:    "invalid-number",
+			section: "a",
+		},
+		{
+			name:    "schema validation",
+			src:     "~ $S: {n: int}" + nl + "--- a: $S" + nl + "~ 1" + nl + "~ x" + nl + "--- b: $S" + nl + "~ 2",
+			code:    "expected-integer",
+			section: "a",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := io.Parse(tc.src)
+			if err == nil {
+				t.Fatal("expected a fault")
+			}
+			total := 0
+			for _, s := range d.Sections() {
+				es := s.Errors()
+				total += len(es)
+				if s.Name() != tc.section {
+					if len(es) != 0 {
+						t.Errorf("section %q should be clean, got %v", s.Name(), es)
+					}
+					continue
+				}
+				if len(es) != 1 || es[0].Code != tc.code {
+					t.Fatalf("section %q: got %v, want one %s", s.Name(), es, tc.code)
+				}
+			}
+			// Not double counted, and not lost: the section lists account for
+			// exactly the document's faults.
+			if total != len(d.Errors()) {
+				t.Errorf("section totals = %d, document = %d", total, len(d.Errors()))
+			}
+		})
+	}
+}
