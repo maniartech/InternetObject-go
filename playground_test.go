@@ -12,7 +12,7 @@ import (
 
 	io "github.com/maniartech/InternetObject-go"
 	"github.com/maniartech/InternetObject-go/internal/conformance"
-	"github.com/maniartech/InternetObject-go/internal/value"
+	"github.com/maniartech/InternetObject-go/internal/core"
 )
 
 // The io-playground samples, as a second corpus.
@@ -153,7 +153,7 @@ func TestPlaygroundSamplesRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the writer produced text that does not re-parse: %v"+nl+"---8<---"+nl+"%s"+nl+"---8<---", err, text)
 			}
-			if !value.Equal(doc.Value(), back.Value()) {
+			if !core.Equal(doc.Value(), back.Value()) {
 				t.Errorf("round trip changed the value"+nl+"  first  %s"+nl+"  second %s",
 					conformance.Show(doc.Value()), conformance.Show(back.Value()))
 			}

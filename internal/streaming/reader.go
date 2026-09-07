@@ -1,52 +1,22 @@
-package document
+// Package streaming implements the record protocol over an incremental byte
+// stream: `~` introduces each logical record, the FIRST `---` terminates the
+// header, and later `---` frames switch the schema context.
+//
+// Chunk boundaries are never semantic - the same input split any way yields an
+// identical item sequence, because the framer keeps its scan state across feeds
+// and every frame goes through the same path a one-record document uses.
+package streaming
 
 import (
 	"strings"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
+	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
-// The streaming reader: a record protocol over an incremental byte stream.
-// `~` introduces each logical record; the FIRST `---` terminates the header
-// (buffered and resolved atomically); later `---` frames switch the schema
-// context. Chunk boundaries are never semantic: the same input split any way
-// yields an identical item sequence, because the framer keeps its scan state
-// across feeds and every frame is processed by the same core path a
-// one-record document uses.
-
-// Item is one emitted stream item.
-type Item struct {
-	Kind        string // "record" or "record-error"
-	RecordIndex int
-	SchemaName  string // with the $ sigil, only when an explicit selector applied
-	Value       any    // present on "record"
-	Err         *ItemError
-}
-
-// ItemError is a record error's wire form.
-type ItemError struct {
-	Category string // syntax | validation | general | stream
-	Code     string
-}
-
-// StreamOptions seed a reader before any stream bytes arrive.
-type StreamOptions struct {
-	// Definitions is preloaded header text (the part before a `---`);
-	// in-stream definitions override matching keys.
-	Definitions string
-	// DefaultSchema is the fallback default-schema name, with its $ sigil.
-	DefaultSchema string
-	// Schema is an already-compiled schema every record is validated
-	// against. It outranks both the in-stream header and DefaultSchema
-	// (ADR 0004 D5) and is never re-parsed.
-	Schema *schema.Schema
-}
-
-// Reader consumes a stream incrementally. Feed returns the items each chunk
-// completes; Close flushes the final frame and returns the terminal fatal
 // outcome, nil when iteration completed normally.
 type Reader struct {
 	opts StreamOptions
@@ -63,7 +33,7 @@ type Reader struct {
 	inComment bool
 
 	headerDone bool
-	defs       *docDefs
+	defs       *document.Definitions
 	current    *schema.Schema // active schema context
 	currentSel string         // explicit selector name (with $), "" when default
 
@@ -271,7 +241,7 @@ func (r *Reader) resolveHeader(text string) {
 		}
 		apply(h)
 	}
-	r.defs = newDefs(merged)
+	r.defs = document.NewDefinitions(merged)
 	r.headerDone = true
 	r.current, r.currentSel = r.defaultSchema(), ""
 }
@@ -295,7 +265,7 @@ func (r *Reader) defaultSchema() *schema.Schema {
 	if r.defs == nil {
 		return nil
 	}
-	if _, ok := r.defs.header.Schemas["schema"]; ok {
+	if _, ok := r.defs.Header.Schemas["schema"]; ok {
 		s, _ := r.defs.SchemaOf("schema")
 		return s
 	}
@@ -334,7 +304,7 @@ func (r *Reader) processRecord(text string) Item {
 		return Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(e.Code), Code: e.Code}}
 	}
 	if len(doc.Sections) == 0 || len(doc.Sections[0].Records) == 0 {
-		return Item{Kind: "record", Value: &value.Object{}}
+		return Item{Kind: "record", Value: &core.Object{}}
 	}
 	return r.recordItem(doc.Sections[0].Records[0])
 }
@@ -344,10 +314,10 @@ func (r *Reader) processRecord(text string) Item {
 // stream validates against preloaded definitions exactly as a framed one does
 // (the reference passes its definitions to parse() on both routes).
 func (r *Reader) recordItem(rec any) Item {
-	if e, ok := rec.(value.ErrorNode); ok {
+	if e, ok := rec.(core.ErrorNode); ok {
 		return Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(e.Code), Code: e.Code}}
 	}
-	obj, ok := rec.(*value.Object)
+	obj, ok := rec.(*core.Object)
 	if !ok {
 		return Item{Kind: "record", Value: parser.ProjectValue(rec)}
 	}
@@ -361,11 +331,11 @@ func (r *Reader) recordItem(rec any) Item {
 		return Item{Kind: "record", Value: parser.ProjectValue(validated)}
 	}
 
-	if verr := resolveVars(obj, r.defs); verr != nil {
+	if verr := document.ResolveVars(obj, r.defs); verr != nil {
 		return Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(verr.Code), Code: verr.Code}}
 	}
 	var deferred []errs.Error
-	surfaceDeferred(obj, &deferred)
+	document.SurfaceDeferred(obj, &deferred)
 	if len(deferred) > 0 {
 		e := deferred[0]
 		return Item{Kind: "record-error", Err: &ItemError{Category: categoryOf(e.Code), Code: e.Code}}

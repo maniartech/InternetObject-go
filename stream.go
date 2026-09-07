@@ -5,7 +5,7 @@ import (
 	"iter"
 	"strconv"
 
-	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/streaming"
 )
 
 // StreamItem is one record emitted by a streaming read.
@@ -47,15 +47,15 @@ func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
 		o = *opts
 	}
 	return func(yield func(StreamItem, error) bool) {
-		ropts := document.StreamOptions{
+		ropts := streaming.StreamOptions{
 			Definitions:   o.Definitions,
 			DefaultSchema: o.DefaultSchema,
 		}
 		if o.Schema != nil {
 			ropts.Schema = o.Schema.s
 		}
-		reader := document.NewReader(ropts)
-		emit := func(items []document.Item) bool {
+		reader := streaming.NewReader(ropts)
+		emit := func(items []streaming.Item) bool {
 			for _, it := range items {
 				si := StreamItem{Index: it.RecordIndex, SchemaName: it.SchemaName, Value: it.Value}
 				if it.Err != nil {

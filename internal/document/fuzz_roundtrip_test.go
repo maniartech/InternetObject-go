@@ -35,9 +35,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 type fuzzRng uint64
@@ -122,7 +122,7 @@ func genFuzzTemporal(r *fuzzRng) time.Time {
 		return time.Unix(int64(day)*86_400, 0).UTC()
 	case 1: // a time-of-day, anchored where the format anchors one
 		ms := r.below(86_400_000)
-		return value.TimeAnchor.Add(time.Duration(ms) * time.Millisecond)
+		return core.TimeAnchor.Add(time.Duration(ms) * time.Millisecond)
 	default: // a datetime, millisecond precision
 		day := 1 + r.below(3650)
 		ms := r.below(86_400_000)
@@ -147,7 +147,7 @@ func genFuzzScalar(r *fuzzRng) any {
 		if r.below(2) == 0 {
 			coef.Neg(coef)
 		}
-		return value.Decimal{Coef: coef, Scale: r.below(9)}
+		return core.Decimal{Coef: coef, Scale: r.below(9)}
 	case 6:
 		return genFuzzTemporal(r)
 	case 7:
@@ -182,10 +182,10 @@ func genFuzzValue(r *fuzzRng, depth int) any {
 // genFuzzObject builds a record: a positional prefix, then keyed members with
 // distinct keys. Positional members never follow keyed ones — that ordering is
 // unparseable by design.
-func genFuzzObject(r *fuzzRng, depth int) *value.Object {
-	obj := &value.Object{}
+func genFuzzObject(r *fuzzRng, depth int) *core.Object {
+	obj := &core.Object{}
 	for n := r.below(3); n > 0; n-- {
-		obj.Members = append(obj.Members, value.Member{Positional: true, Value: genFuzzValue(r, depth)})
+		obj.Members = append(obj.Members, core.Member{Positional: true, Value: genFuzzValue(r, depth)})
 	}
 	used := map[string]bool{}
 	for n := r.below(4); n > 0; n-- {
@@ -194,7 +194,7 @@ func genFuzzObject(r *fuzzRng, depth int) *value.Object {
 			continue
 		}
 		used[key] = true
-		obj.Members = append(obj.Members, value.Member{Key: key, Value: genFuzzValue(r, depth)})
+		obj.Members = append(obj.Members, core.Member{Key: key, Value: genFuzzValue(r, depth)})
 	}
 	return obj
 }
@@ -206,7 +206,7 @@ func genFuzzDoc(r *fuzzRng) *Doc {
 	sec := &parser.Section{Name: "data"}
 	switch r.below(4) {
 	case 0:
-		sec.Records = []any{&value.Object{Members: []value.Member{
+		sec.Records = []any{&core.Object{Members: []core.Member{
 			{Positional: true, Value: genFuzzScalar(r)},
 		}}}
 	case 1:
@@ -218,7 +218,7 @@ func genFuzzDoc(r *fuzzRng) *Doc {
 		}
 	}
 	pdoc := &parser.Document{Sections: []*parser.Section{sec}}
-	return &Doc{Document: pdoc, Defs: newDefs(nil), SecSchemas: map[*parser.Section]*schema.Schema{}}
+	return &Doc{Document: pdoc, Defs: NewDefinitions(nil), SecSchemas: map[*parser.Section]*schema.Schema{}}
 }
 
 // fuzzEq is the fuzzer's strict value equality over PROJECTED values: NaN
@@ -233,8 +233,8 @@ func fuzzEq(a, b any) bool {
 	case time.Time:
 		y, ok := b.(time.Time)
 		return ok && x.UTC().Equal(y.UTC())
-	case value.Decimal:
-		y, ok := b.(value.Decimal)
+	case core.Decimal:
+		y, ok := b.(core.Decimal)
 		return ok && x.Scale == y.Scale && x.Coef.Cmp(y.Coef) == 0
 	case *big.Int:
 		y, ok := b.(*big.Int)
@@ -253,8 +253,8 @@ func fuzzEq(a, b any) bool {
 			}
 		}
 		return true
-	case *value.Object:
-		y, ok := b.(*value.Object)
+	case *core.Object:
+		y, ok := b.(*core.Object)
 		if !ok || len(x.Members) != len(y.Members) {
 			return false
 		}
@@ -279,7 +279,7 @@ func dumpVal(v any) string {
 
 func writeDump(b *strings.Builder, v any) {
 	switch x := v.(type) {
-	case *value.Object:
+	case *core.Object:
 		b.WriteString("{")
 		for i, m := range x.Members {
 			if i > 0 {
@@ -300,7 +300,7 @@ func writeDump(b *strings.Builder, v any) {
 		b.WriteString("]")
 	case time.Time:
 		fmt.Fprintf(b, "T(%s)", x.UTC().Format(time.RFC3339Nano))
-	case value.Decimal:
+	case core.Decimal:
 		fmt.Fprintf(b, "%sm", x.String())
 	case *big.Int:
 		fmt.Fprintf(b, "%sn", x.String())
@@ -320,8 +320,8 @@ func diffPath(a, b any, path string) string {
 		return ""
 	}
 	switch x := a.(type) {
-	case *value.Object:
-		y, ok := b.(*value.Object)
+	case *core.Object:
+		y, ok := b.(*core.Object)
 		if !ok {
 			return path + fmt.Sprintf(": %T became %T", a, b)
 		}
@@ -397,7 +397,7 @@ func fuzzDocOf(collection bool, records []any) *Doc {
 	sec := &parser.Section{Name: "data", Collection: collection, Records: records}
 	return &Doc{
 		Document:   &parser.Document{Sections: []*parser.Section{sec}},
-		Defs:       newDefs(nil),
+		Defs:       NewDefinitions(nil),
 		SecSchemas: map[*parser.Section]*schema.Schema{},
 	}
 }
@@ -407,17 +407,17 @@ func fuzzDocOf(collection bool, records []any) *Doc {
 // cloned, which is safe because nothing on this path mutates a document.
 func shrinkFuzzValue(v any) []any {
 	switch x := v.(type) {
-	case *value.Object:
+	case *core.Object:
 		var out []any
 		for i := range x.Members {
-			ms := append(append([]value.Member{}, x.Members[:i]...), x.Members[i+1:]...)
-			out = append(out, &value.Object{Members: ms})
+			ms := append(append([]core.Member{}, x.Members[:i]...), x.Members[i+1:]...)
+			out = append(out, &core.Object{Members: ms})
 		}
 		for i := range x.Members {
 			for _, simpler := range shrinkFuzzValue(x.Members[i].Value) {
-				ms := append([]value.Member{}, x.Members...)
+				ms := append([]core.Member{}, x.Members...)
 				ms[i].Value = simpler
-				out = append(out, &value.Object{Members: ms})
+				out = append(out, &core.Object{Members: ms})
 			}
 		}
 		return out

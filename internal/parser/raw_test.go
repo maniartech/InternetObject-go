@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Framing must never DISAGREE with the parser: for any document it accepts,
@@ -38,7 +38,7 @@ func decodeRaw(s *tokenizer.Stream, m RawMember) (any, bool) {
 		return s.BigInt(t), true
 	case tokenizer.KindDecimal:
 		coef, scale := s.DecimalParts(t)
-		return value.Decimal{Coef: coef, Scale: scale}, true
+		return core.Decimal{Coef: coef, Scale: scale}, true
 	case tokenizer.KindBinary:
 		return s.Bytes(t), true
 	case tokenizer.KindDateTime:
@@ -57,8 +57,8 @@ func sameScalar(a, b any) bool {
 	case *big.Int:
 		y, ok := b.(*big.Int)
 		return ok && x.Cmp(y) == 0
-	case value.Decimal:
-		y, ok := b.(value.Decimal)
+	case core.Decimal:
+		y, ok := b.(core.Decimal)
 		return ok && x.Scale == y.Scale && x.Coef.Cmp(y.Coef) == 0
 	case []byte:
 		y, ok := b.([]byte)
@@ -101,7 +101,7 @@ func checkAgainstParser(t *testing.T, src string) {
 	}
 
 	for i, rr := range raw.Records {
-		obj, isObj := parsed[i].(*value.Object)
+		obj, isObj := parsed[i].(*core.Object)
 		if !isObj {
 			t.Fatalf("record %d is not an object: %q", i, src)
 		}

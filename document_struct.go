@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/parser"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Binding a whole document to a struct — the no-ceremony form of what
@@ -122,10 +122,10 @@ func bindSections(doc *document.Doc, elem reflect.Value, fields map[string]field
 	return nil
 }
 
-func sectionRecords(sec *parser.Section) []*value.Object {
-	out := make([]*value.Object, 0, len(sec.Records))
+func sectionRecords(sec *parser.Section) []*core.Object {
+	out := make([]*core.Object, 0, len(sec.Records))
 	for _, rec := range sec.Records {
-		if obj, ok := rec.(*value.Object); ok {
+		if obj, ok := rec.(*core.Object); ok {
 			out = append(out, obj)
 		}
 	}

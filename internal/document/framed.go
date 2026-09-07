@@ -64,7 +64,7 @@ func ParseFramed(src string) (*Framed, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &Framed{Stream: s, Raw: raw, Schema: he.sch, Defs: newDefs(he.header)}, true
+	return &Framed{Stream: s, Raw: raw, Schema: he.sch, Defs: NewDefinitions(he.header)}, true
 }
 
 // A header's compiled form, memoized on the header text.
@@ -83,7 +83,7 @@ func ParseFramed(src string) (*Framed, bool) {
 // used to be written during validation was a data race, fixed in
 // schema.compilePattern. Do not reintroduce a write-at-validation field.
 //
-// Deliberately NOT cached: the *docDefs, which is mutable (it memoizes
+// Deliberately NOT cached: the *Definitions, which is mutable (it memoizes
 // per-name compilation), so each document gets a fresh one.
 type headerEntry struct {
 	header *parser.Header
@@ -133,7 +133,7 @@ func compileHeader(headerSrc string) headerEntry {
 	if len(hdoc.Errors) > 0 {
 		return headerEntry{} // the normal path reports the header's fault
 	}
-	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, newDefs(hdoc.Header))
+	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, NewDefinitions(hdoc.Header))
 	if cerr != nil {
 		return headerEntry{}
 	}

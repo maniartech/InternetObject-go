@@ -3,8 +3,8 @@ package conformance
 import (
 	"fmt"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The roundtrip comparator: three properties per case, each catching what the
@@ -31,7 +31,7 @@ func RunRoundtripCase(row SuiteRow) []string {
 		problems = append(problems, fmt.Sprintf("output does not re-parse: %v", back.Errors))
 		return problems
 	}
-	if !value.Equal(doc.Project(), back.Project()) {
+	if !core.Equal(doc.Project(), back.Project()) {
 		problems = append(problems, fmt.Sprintf("value changed\n     in =%s\n     out=%s",
 			Show(doc.Project()), Show(back.Project())))
 	} else if again := back.String(); again != produced {

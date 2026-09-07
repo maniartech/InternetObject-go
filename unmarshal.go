@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Unmarshal parses src and stores the result in the value pointed to by v:
@@ -111,11 +111,11 @@ func sectionNames(doc *document.Doc) string {
 }
 
 // allRecords collects every record in document order.
-func allRecords(doc *document.Doc) []*value.Object {
-	var out []*value.Object
+func allRecords(doc *document.Doc) []*core.Object {
+	var out []*core.Object
 	for _, sec := range doc.Sections {
 		for _, rec := range sec.Records {
-			if obj, ok := rec.(*value.Object); ok {
+			if obj, ok := rec.(*core.Object); ok {
 				out = append(out, obj)
 			}
 		}
@@ -124,7 +124,7 @@ func allRecords(doc *document.Doc) []*value.Object {
 }
 
 // bindInto binds one record to a struct value (through pointers).
-func bindInto(rv reflect.Value, rec *value.Object, at pathAt) error {
+func bindInto(rv reflect.Value, rec *core.Object, at pathAt) error {
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			rv.Set(reflect.New(rv.Type().Elem()))
@@ -141,7 +141,7 @@ func bindInto(rv reflect.Value, rec *value.Object, at pathAt) error {
 // bindStruct maps a record's members onto struct fields: keyed members by
 // member name, positional members by position (the schema-less form). Members
 // with no matching field are ignored, like encoding/json.
-func bindStruct(rv reflect.Value, rec *value.Object, plan *structPlan, at pathAt) error {
+func bindStruct(rv reflect.Value, rec *core.Object, plan *structPlan, at pathAt) error {
 	// One pass over the record, no per-record maps: a keyed member finds its
 	// field through the plan's name index (built once per type), a positional
 	// one through its own position. Binding runs per record, so the two maps
@@ -176,7 +176,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 		rv.SetZero() // null: pointers become nil, everything else its zero
 		return nil
 	}
-	if ev, ok := v.(value.ErrorValue); ok {
+	if ev, ok := v.(core.ErrorValue); ok {
 		return &UnmarshalError{Path: at.String(), Msg: "value carries the deferred error " + ev.Code}
 	}
 	for rv.Kind() == reflect.Pointer {
@@ -262,7 +262,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 			return nil
 		}
 	case reflect.Map:
-		if obj, ok := v.(*value.Object); ok && t.Key().Kind() == reflect.String {
+		if obj, ok := v.(*core.Object); ok && t.Key().Kind() == reflect.String {
 			out := reflect.MakeMapWithSize(t, len(obj.Members))
 			for i, m := range obj.Members {
 				if m.Absent {
@@ -282,7 +282,7 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 			return nil
 		}
 	case reflect.Struct:
-		if obj, ok := v.(*value.Object); ok {
+		if obj, ok := v.(*core.Object); ok {
 			return bindInto(rv, obj, at.deeper())
 		}
 	}

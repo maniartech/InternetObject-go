@@ -107,10 +107,16 @@ off the wire (json muscle-memory). Implemented with ADR 0003.
 - `io.Definitions` binds the header: `io:"@name"` fields are typed @variables, plain-named
   fields are plain definitions. Reusable across documents and as `StreamOptions.Definitions`.
 - Dynamic navigation on the parsed document: `doc.Section(name)`, `doc.Sections()`,
-  `sec.Records()` (iter.Seq2 of `*io.Record` + row error), `doc.Var`, `doc.SchemaOf`;
+  `sec.Objects()` (iter.Seq2 of `*io.Object` + row error — a section holds a COLLECTION,
+  so its items are objects), `doc.Var`, `doc.SchemaOf`;
   bridges `io.SectionAs[T](sec)` and `io.StreamAs[T](r, opts)`.
-- **Rename**: the dynamic value-model object (today's public `io.Object` alias) becomes
-  `io.Record`, freeing `io.Object` for the base. Pre-v1, the rename is free.
+- **~~Rename `io.Object` to `io.Record`~~ — WITHDRAWN 2026-09-07.** It had the two words the
+  wrong way round. The format's own vocabulary is:
+  **an OBJECT is the item in a collection; a RECORD is the item in a stream.**
+  So `io.Object` already carries the right name for the value model and keeps it, and `Record`
+  belongs to the streaming surface — where io-go currently says `StreamItem`.
+  The base therefore needs a name that is not `Object`; that choice is still open, and the
+  freeing-up this bullet was written to justify is not needed.
 
 ## D5. Runtime schemas — tags are one source, not the source
 
@@ -151,7 +157,7 @@ verdicts ≡ `io.Validate`).
 ## Phases
 
 1. `io.Object` base + `Attach`/`New[T]` + package twins `io.Set`/`io.Get` + the
-   `Object`→`Record` rename.
+   (the withdrawn `Object`→`Record` rename is no longer part of it).
 2. Multi-section binding, `io.Document`/`io.Collection[T]`/`io.Definitions`, dynamic
    navigation, `SectionAs`/`StreamAs`, the `With` functions and `AttachSchema`.
 3. `iogen`.

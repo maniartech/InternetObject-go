@@ -3,10 +3,10 @@ package internetobject
 import (
 	"reflect"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Validate checks a struct (or slice of structs) against the schema derived
@@ -96,7 +96,7 @@ func checkRecords(s *schema.Schema, records []any) error {
 	for _, rec := range records {
 		// CheckRecord, not ValidateRecord: this caller wants the faults, and
 		// the assembled record it used to build was discarded on every call.
-		all = append(all, schema.CheckRecord(rec.(*value.Object), s, noDefs{}, true)...)
+		all = append(all, schema.CheckRecord(rec.(*core.Object), s, noDefs{}, true)...)
 	}
 	return toErrorList(all)
 }

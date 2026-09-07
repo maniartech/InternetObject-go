@@ -3,9 +3,9 @@ package conformance
 import (
 	"fmt"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The schemaDef comparator: compile a schema definition string and compare
@@ -37,7 +37,7 @@ func RunSchemaDefCase(row SuiteRow) []string {
 }
 
 // neutralSchema projects a compiled schema onto the corpus's neutral shape.
-func neutralSchema(s *schema.Schema) *value.Object {
+func neutralSchema(s *schema.Schema) *core.Object {
 	var open any
 	switch o := s.Open.(type) {
 	case nil:
@@ -51,16 +51,16 @@ func neutralSchema(s *schema.Schema) *value.Object {
 	for i, n := range s.Names {
 		members[i] = neutralMemberDef(s.Defs[n])
 	}
-	return &value.Object{Members: []value.Member{
+	return &core.Object{Members: []core.Member{
 		{Key: "open", Value: open},
 		{Key: "members", Value: members},
 	}}
 }
 
-func neutralMemberDef(md *schema.MemberDef) *value.Object {
-	o := &value.Object{}
+func neutralMemberDef(md *schema.MemberDef) *core.Object {
+	o := &core.Object{}
 	put := func(k string, v any) {
-		o.Members = append(o.Members, value.Member{Key: k, Value: v})
+		o.Members = append(o.Members, core.Member{Key: k, Value: v})
 	}
 	put("name", md.Name)
 	put("type", md.Type)
@@ -88,8 +88,8 @@ func neutralMemberDef(md *schema.MemberDef) *value.Object {
 // subsetMismatches collects every place actual fails to CONTAIN expected.
 func subsetMismatches(expected, actual any, at string, out *[]string) {
 	switch e := expected.(type) {
-	case *value.Object:
-		a, ok := actual.(*value.Object)
+	case *core.Object:
+		a, ok := actual.(*core.Object)
 		if !ok {
 			*out = append(*out, fmt.Sprintf("%s: expected an object, actual=%s", at, Show(actual)))
 			return
@@ -121,7 +121,7 @@ func subsetMismatches(expected, actual any, at string, out *[]string) {
 			}
 		}
 	default:
-		if !value.Equal(expected, actual) {
+		if !core.Equal(expected, actual) {
 			*out = append(*out, fmt.Sprintf("%s: expected=%s actual=%s", at, Show(expected), Show(actual)))
 		}
 	}

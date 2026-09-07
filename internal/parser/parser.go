@@ -14,9 +14,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Document is one parsed Internet Object document.
@@ -28,7 +28,7 @@ type Document struct {
 
 // Header holds the definitions written before the first `---`.
 type Header struct {
-	Plain   *value.Object  // plain key: value definitions, in order, last wins
+	Plain   *core.Object   // plain key: value definitions, in order, last wins
 	Schemas map[string]any // $name → schema shape (sigil stripped), last wins
 	Vars    map[string]any // @name → value (sigil stripped), last wins
 	Inline  any            // the schema shape when the header is a bare schema expression
@@ -205,13 +205,13 @@ func (p *parser) parseDefinition(h *Header) {
 		h.upsertDef(DefVar, key[1:], val)
 	default:
 		if h.Plain == nil {
-			h.Plain = &value.Object{}
+			h.Plain = &core.Object{}
 		}
 		if i := h.Plain.Find(key); i >= 0 {
 			h.Plain.Members[i].Value = val // a duplicate definition: last wins
 		} else {
 			h.Plain.Members = append(h.Plain.Members,
-				value.Member{Key: key, Quoted: kt.Sub != tokenizer.SubOpenString, Value: val})
+				core.Member{Key: key, Quoted: kt.Sub != tokenizer.SubOpenString, Value: val})
 		}
 		h.upsertDef(DefPlain, key, val)
 	}
@@ -296,7 +296,7 @@ func (p *parser) parseCollectionRecord() (rec any) {
 		if r := recover(); r != nil {
 			f := r.(fail)
 			p.doc.Errors = append(p.doc.Errors, f.err)
-			rec = value.ErrorNode{Code: f.err.Code}
+			rec = core.ErrorNode{Code: f.err.Code}
 			for !p.atEnd() {
 				if k := p.s.Tokens[p.i].Kind; k == tokenizer.KindCollectionStart || k == tokenizer.KindSectionSep {
 					break
@@ -311,7 +311,7 @@ func (p *parser) parseCollectionRecord() (rec any) {
 		p.die(errs.UnexpectedToken, t)
 	}
 	if rec == nil {
-		rec = &value.Object{} // an empty `~` record is an empty object
+		rec = &core.Object{} // an empty `~` record is an empty object
 	}
 	return rec
 }
@@ -329,7 +329,7 @@ func recordEnd(t tokenizer.Token) bool {
 // record's own enclosure); any other single positional value is the member
 // named "0" (the non-record-root promotion).
 func (p *parser) parseRecord() any {
-	obj := &value.Object{}
+	obj := &core.Object{}
 	if t, ok := p.peek(); ok {
 		obj.Line, obj.Col = t.Line, t.Col // where an absence fault is reported
 	}
@@ -340,13 +340,13 @@ func (p *parser) parseRecord() any {
 		t, ok := p.peek()
 		if !ok || recordEnd(t) {
 			if pendingComma {
-				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
+				obj.Members = append(obj.Members, core.Member{Positional: true, Absent: true})
 			}
 			break
 		}
 		if t.Kind == tokenizer.KindComma {
 			if expectMember {
-				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
+				obj.Members = append(obj.Members, core.Member{Positional: true, Absent: true})
 			}
 			sawComma = true
 			expectMember, pendingComma = true, true
@@ -374,7 +374,7 @@ func (p *parser) parseRecord() any {
 	}
 
 	if len(obj.Members) == 1 && obj.Members[0].Positional {
-		if inner, ok := obj.Members[0].Value.(*value.Object); ok {
+		if inner, ok := obj.Members[0].Value.(*core.Object); ok {
 			return inner // the braces were the record's enclosure
 		}
 	}
@@ -385,7 +385,7 @@ func (p *parser) parseRecord() any {
 }
 
 // parseMember parses one member into obj: `key: value` or a positional value.
-func (p *parser) parseMember(obj *value.Object) {
+func (p *parser) parseMember(obj *core.Object) {
 	t, _ := p.peek()
 	if t.Kind == tokenizer.KindColon {
 		p.die(errs.UnexpectedToken, t)
@@ -408,7 +408,7 @@ func (p *parser) parseMember(obj *value.Object) {
 				vt = nt
 			}
 			v := p.parseMemberValue(ct)
-			p.addMember(obj, value.Member{
+			p.addMember(obj, core.Member{
 				Key: key, Quoted: quoted, Value: v, Line: vt.Line, Col: vt.Col,
 			}, t)
 			return
@@ -424,21 +424,21 @@ func (p *parser) parseMember(obj *value.Object) {
 		// A structured value (array/object) cannot name a member.
 		p.die(errs.UnexpectedToken, nt)
 	}
-	p.addMember(obj, value.Member{
+	p.addMember(obj, core.Member{
 		Positional: true, Quoted: quotedVal, Value: v, Line: t.Line, Col: t.Col,
 	}, t)
 }
 
 // addMember appends m, rejecting a duplicate member name (quoting does not
 // make a different key).
-func (p *parser) addMember(obj *value.Object, m value.Member, at tokenizer.Token) {
+func (p *parser) addMember(obj *core.Object, m core.Member, at tokenizer.Token) {
 	if !m.Positional && obj.Find(m.Key) >= 0 {
 		p.die(errs.DuplicateMember, at)
 	}
 	if obj.Members == nil {
 		// Records are small and uniform; one sized allocation beats the
 		// 1→2→4→8 doubling an unsized append performs on every record.
-		obj.Members = make([]value.Member, 0, 8)
+		obj.Members = make([]core.Member, 0, 8)
 	}
 	obj.Members = append(obj.Members, m)
 }
@@ -472,13 +472,13 @@ func (p *parser) parseValue() any {
 		return p.s.BigInt(t)
 	case tokenizer.KindDecimal:
 		coef, scale := p.s.DecimalParts(t)
-		return value.Decimal{Coef: coef, Scale: scale}
+		return core.Decimal{Coef: coef, Scale: scale}
 	case tokenizer.KindBinary:
 		return p.s.Bytes(t)
 	case tokenizer.KindDateTime:
 		// A temporal decodes to a plain time.Time: the three literals are
 		// spellings of one value, and the writer re-picks a spelling on
-		// output (value.TimeAnchor documents the decision).
+		// output (core.TimeAnchor documents the decision).
 		return p.s.Temporal(t)
 	case tokenizer.KindString:
 		// An @-string stays a string here; variable references resolve
@@ -491,7 +491,7 @@ func (p *parser) parseValue() any {
 		return p.parseArray(t)
 	case tokenizer.KindError:
 		if deferrable(t.Err) {
-			return value.ErrorValue{Code: t.Err.String(), Line: t.Line, Col: t.Col}
+			return core.ErrorValue{Code: t.Err.String(), Line: t.Line, Col: t.Col}
 		}
 		p.dieToken(t)
 	}
@@ -515,7 +515,7 @@ func deferrable(c tokenizer.Code) bool {
 // braces — a leading, doubled or trailing comma separates nothing and is
 // skipped.
 func (p *parser) parseObject(open tokenizer.Token) any {
-	obj := &value.Object{Line: open.Line, Col: open.Col}
+	obj := &core.Object{Line: open.Line, Col: open.Col}
 	expectMember := true
 	pendingComma := false
 	for {
@@ -526,14 +526,14 @@ func (p *parser) parseObject(open tokenizer.Token) any {
 		switch t.Kind {
 		case tokenizer.KindComma:
 			if expectMember {
-				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
+				obj.Members = append(obj.Members, core.Member{Positional: true, Absent: true})
 			}
 			expectMember, pendingComma = true, true
 			p.i++
 			continue
 		case tokenizer.KindCurlyClose:
 			if pendingComma {
-				obj.Members = append(obj.Members, value.Member{Positional: true, Absent: true})
+				obj.Members = append(obj.Members, core.Member{Positional: true, Absent: true})
 			}
 			p.i++
 			return obj

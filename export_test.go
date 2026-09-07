@@ -1,8 +1,8 @@
 package internetobject
 
 import (
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Test-only accessors. See export_test.go conventions: these let the black-box
@@ -28,7 +28,7 @@ func SchemaRejectsItsOwnDefault(d *Document) bool {
 			if md == nil || !md.HasDefault {
 				continue
 			}
-			rec := &value.Object{Members: []value.Member{{Key: name, Value: md.Default}}}
+			rec := &core.Object{Members: []core.Member{{Key: name, Value: md.Default}}}
 			if _, errs := schema.ValidateRecord(rec, s, d.doc.Defs, true); len(errs) > 0 {
 				for _, e := range errs {
 					// Only the member we filled matters; a sibling reported as

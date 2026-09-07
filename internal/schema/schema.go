@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Schema is one compiled schema: ordered member names, their definitions, and
@@ -248,7 +248,7 @@ func fail(code string) {
 }
 
 func compileSchema(shape any, path string) *Schema {
-	obj, ok := shape.(*value.Object)
+	obj, ok := shape.(*core.Object)
 	if !ok {
 		fail(errs.InvalidSchema)
 	}
@@ -311,7 +311,7 @@ func compileSchema(shape any, path string) *Schema {
 
 // hasAbsentMember reports an empty comma slot — a schema declares nothing
 // there, so it is empty-memberdef.
-func hasAbsentMember(obj *value.Object) bool {
+func hasAbsentMember(obj *core.Object) bool {
 	for i := range obj.Members {
 		if obj.Members[i].Absent {
 			return true
@@ -374,7 +374,7 @@ func compileMemberDef(name string, v any, parentPath string, opt, nul bool) *Mem
 		md.Type = tv
 		return md
 
-	case *value.Object:
+	case *core.Object:
 		if tn, ok := typedefTypeName(tv); ok {
 			compileTypedef(md, tn, tv, path)
 			return md
@@ -405,7 +405,7 @@ func compileMemberDef(name string, v any, parentPath string, opt, nul bool) *Mem
 // typedef — `{string, minLen: 2}` or `{type: string, …}` — as opposed to a
 // nested object body. The first positional member being a registered (or
 // reserved) type name claims the typedef reading; so does a keyed `type`.
-func typedefTypeName(obj *value.Object) (string, bool) {
+func typedefTypeName(obj *core.Object) (string, bool) {
 	if len(obj.Members) > 0 && obj.Members[0].Positional {
 		if s, ok := obj.Members[0].Value.(string); ok && (registeredTypes[s] || reservedTypes[s]) {
 			return s, true
@@ -420,7 +420,7 @@ func typedefTypeName(obj *value.Object) (string, bool) {
 }
 
 // compileTypedef fills md from an object-form typedef.
-func compileTypedef(md *MemberDef, typeName string, obj *value.Object, path string) {
+func compileTypedef(md *MemberDef, typeName string, obj *core.Object, path string) {
 	if !registeredTypes[typeName] {
 		fail(unusableTypeCode(typeName))
 	}
@@ -576,7 +576,7 @@ func compileArrayElem(v any, path string) *MemberDef {
 			fail(unusableTypeCode(tv))
 		}
 		return &MemberDef{Type: tv, Path: path}
-	case *value.Object:
+	case *core.Object:
 		if tn, ok := typedefTypeName(tv); ok {
 			md := &MemberDef{Path: path}
 			compileTypedef(md, tn, tv, path)
@@ -667,7 +667,7 @@ func expectFamily(typeName string, v any, expect func(string, bool)) {
 			_, ok := v.(*big.Int)
 			expect(errs.ExpectedBigInt, ok)
 		case famDecimal:
-			_, ok := v.(value.Decimal)
+			_, ok := v.(core.Decimal)
 			expect(errs.ExpectedDecimal, ok)
 		case famTemporal:
 			_, ok := v.(time.Time)
@@ -679,7 +679,7 @@ func expectFamily(typeName string, v any, expect func(string, bool)) {
 			_, ok := v.([]any)
 			expect(errs.ExpectedArray, ok)
 		case famObject:
-			_, ok := v.(*value.Object)
+			_, ok := v.(*core.Object)
 			expect(errs.InvalidObject, ok)
 		case famNumber:
 			_, ok := v.(float64)

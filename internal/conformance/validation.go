@@ -3,8 +3,8 @@ package conformance
 import (
 	"fmt"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The validation comparator: a case carries a schema fragment and a data
@@ -27,7 +27,7 @@ func RunValidationCase(row SuiteRow) []string {
 		if len(codes) == 0 {
 			actual = doc.Project()
 		}
-		if !value.Equal(actual, row.Expected) {
+		if !core.Equal(actual, row.Expected) {
 			problems = append(problems, fmt.Sprintf("value  expected=%s  actual=%s", Show(row.Expected), Show(actual)))
 		}
 	}

@@ -3,7 +3,7 @@ package parser
 import (
 	"strconv"
 
-	"github.com/maniartech/InternetObject-go/internal/value"
+	"github.com/maniartech/InternetObject-go/internal/core"
 )
 
 // Project reduces a parsed document to its plain value model — the
@@ -23,7 +23,7 @@ import (
 func (d *Document) Project() any {
 	data := d.projectSections()
 	if d.Header != nil && d.Header.Plain != nil && len(d.Header.Plain.Members) > 0 {
-		return &value.Object{Members: []value.Member{
+		return &core.Object{Members: []core.Member{
 			{Key: "header", Value: projectValue(d.Header.Plain)},
 			{Key: "data", Value: data},
 		}}
@@ -38,9 +38,9 @@ func (d *Document) projectSections() any {
 	case 1:
 		return sectionValue(d.Sections[0])
 	}
-	out := &value.Object{}
+	out := &core.Object{}
 	for _, sec := range d.Sections {
-		out.Members = append(out.Members, value.Member{Key: sec.Name, Value: sectionValue(sec)})
+		out.Members = append(out.Members, core.Member{Key: sec.Name, Value: sectionValue(sec)})
 	}
 	return out
 }
@@ -98,7 +98,7 @@ func projectValue(v any) any {
 // methods.
 func project(v any) (any, bool) {
 	switch x := v.(type) {
-	case *value.Object:
+	case *core.Object:
 		for i, m := range x.Members {
 			pv, changed := project(m.Value)
 			if m.Absent || m.Positional || m.Key == "" || changed {
@@ -126,10 +126,10 @@ func project(v any) (any, bool) {
 
 // projectObjectFrom builds the projection of x, given that every member before
 // `at` projects to itself and that member `at` projects to pv.
-func projectObjectFrom(x *value.Object, at int, pv any) *value.Object {
-	out := &value.Object{
+func projectObjectFrom(x *core.Object, at int, pv any) *core.Object {
+	out := &core.Object{
 		Line: x.Line, Col: x.Col,
-		Members: make([]value.Member, 0, len(x.Members)),
+		Members: make([]core.Member, 0, len(x.Members)),
 	}
 	out.Members = append(out.Members, x.Members[:at]...)
 	for i := at; i < len(x.Members); i++ {
@@ -146,7 +146,7 @@ func projectObjectFrom(x *value.Object, at int, pv any) *value.Object {
 			key = strconv.Itoa(i)
 		}
 		out.Members = append(out.Members,
-			value.Member{Key: key, Value: val, Line: m.Line, Col: m.Col})
+			core.Member{Key: key, Value: val, Line: m.Line, Col: m.Col})
 	}
 	return out
 }

@@ -9,16 +9,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Doc is a loaded (parsed, bound, validated) document.
 type Doc struct {
 	*parser.Document
-	Defs       *docDefs
+	Defs       *Definitions
 	SecSchemas map[*parser.Section]*schema.Schema
 	// cachedHeader, when non-empty, is the already-rendered header text. Set
 	// only by NewWithSchemaHeader, whose caller has rendered it once for a
@@ -51,7 +51,7 @@ func ParseWith(src string, override *schema.Schema) *Doc { return parse(src, ove
 
 func parse(src string, override *schema.Schema) *Doc {
 	pdoc := parser.Parse(src)
-	defs := newDefs(pdoc.Header)
+	defs := NewDefinitions(pdoc.Header)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 
 	// A fatal parse error abandons everything, as the reference does; the
@@ -67,7 +67,7 @@ func parse(src string, override *schema.Schema) *Doc {
 	if pdoc.Header != nil {
 		var herrs []errs.Error
 		for _, def := range pdoc.Header.Defs {
-			surfaceDeferred(def.Value, &herrs)
+			SurfaceDeferred(def.Value, &herrs)
 		}
 		if len(herrs) > 0 {
 			doc.Errors = append(doc.Errors, herrs[0])
@@ -109,7 +109,7 @@ func parse(src string, override *schema.Schema) *Doc {
 			// No schema: variable references resolve in place, and deferred
 			// literal errors surface as themselves.
 			for i, rec := range sec.Records {
-				if verr := resolveVars(rec, defs); verr != nil {
+				if verr := ResolveVars(rec, defs); verr != nil {
 					e := *verr
 					if e.Category == "" {
 						e.Category = errs.CategoryOf(e.Code)
@@ -124,12 +124,12 @@ func parse(src string, override *schema.Schema) *Doc {
 					}
 					continue
 				}
-				surfaceDeferred(rec, &doc.Errors)
+				SurfaceDeferred(rec, &doc.Errors)
 			}
 			continue
 		}
 		for i, rec := range sec.Records {
-			obj, ok := rec.(*value.Object)
+			obj, ok := rec.(*core.Object)
 			if !ok {
 				continue // an ErrorNode from parse recovery stays as it is
 			}
@@ -155,7 +155,7 @@ func parse(src string, override *schema.Schema) *Doc {
 			// (`any`) subtree survives validation unmasked; the reference
 			// throws its code (typed members mask with expected-* instead —
 			// ISSUE-23). Surface it like the schema-less route does.
-			surfaceDeferred(validated, &doc.Errors)
+			SurfaceDeferred(validated, &doc.Errors)
 		}
 	}
 	return doc
@@ -164,8 +164,8 @@ func parse(src string, override *schema.Schema) *Doc {
 // errorNodeFor is THE conversion from an accumulated fault to the marker that
 // stands in for the failed record inside projected data (ADR 0005 D4), so the
 // marker and the error list can never disagree about what went wrong.
-func errorNodeFor(e errs.Error) value.ErrorNode {
-	return value.ErrorNode{
+func errorNodeFor(e errs.Error) core.ErrorNode {
+	return core.ErrorNode{
 		Code: e.Code, Category: e.Category, Path: e.Path,
 		RecordIndex: e.RecordIndex, Line: e.Line, Col: e.Col,
 	}
@@ -176,7 +176,7 @@ func errorNodeFor(e errs.Error) value.ErrorNode {
 // records are not validated — the builder is trusted to have produced
 // conforming values. Used by the struct marshaler.
 func NewUnvalidated(pdoc *parser.Document) (*Doc, *errs.Error) {
-	defs := newDefs(pdoc.Header)
+	defs := NewDefinitions(pdoc.Header)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 	for _, sec := range pdoc.Sections {
 		sch, cerr := sectionSchema(sec, defs)
@@ -205,7 +205,7 @@ func SchemaHeaderText(s *schema.Schema) string {
 // records, and allocates nothing else.
 //
 // The parsed-document scaffolding — a parser.Header carrying a map and a defs
-// slice, a docDefs carrying two more maps, and a per-section schema map —
+// slice, a Definitions carrying two more maps, and a per-section schema map —
 // exists so a header can be RENDERED and names RESOLVED. A marshal has already
 // rendered its header (cached on the schema) and has no names to resolve, so it
 // was paying for four maps it never read: ~38% of the allocations of a
@@ -225,7 +225,7 @@ func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
 		Defs:    []parser.HeaderDef{{Kind: parser.DefSchema, Key: "schema", Value: s}},
 	}
 	pdoc.Header = header
-	defs := newDefs(header)
+	defs := NewDefinitions(header)
 	// The name is already compiled; seeding the cache IS the statement that
 	// this schema needs no shape to resolve.
 	defs.compiled["schema"] = s
@@ -263,7 +263,7 @@ func hasFatalParse(doc *parser.Document) bool {
 	n := 0
 	for _, sec := range doc.Sections {
 		for _, rec := range sec.Records {
-			if _, ok := rec.(value.ErrorNode); ok {
+			if _, ok := rec.(core.ErrorNode); ok {
 				n++
 			}
 		}
@@ -271,24 +271,25 @@ func hasFatalParse(doc *parser.Document) bool {
 	return n < len(doc.Errors)
 }
 
-// docDefs resolves names for validation, compiling named schemas lazily and
+// Definitions resolves names for validation, compiling named schemas lazily and
 // exactly once.
-type docDefs struct {
-	header   *parser.Header
+type Definitions struct {
+	// Header is the parsed header these definitions came from.
+	Header   *parser.Header
 	compiled map[string]*schema.Schema
 	failed   map[string]*errs.Error
 	inline   *schema.Schema // the compiled bare-expression header schema
 }
 
-func newDefs(h *parser.Header) *docDefs {
-	return &docDefs{header: h, compiled: map[string]*schema.Schema{}, failed: map[string]*errs.Error{}}
+func NewDefinitions(h *parser.Header) *Definitions {
+	return &Definitions{Header: h, compiled: map[string]*schema.Schema{}, failed: map[string]*errs.Error{}}
 }
 
 // SchemaOf resolves and compiles the named schema, chasing `$ref` aliases. A
 // self- or mutually-referential alias chain is invalid-definition — the
 // reference crashes with a bare stack overflow here (upstream finding), and a
 // designated code is the non-crashing spelling of that behavior.
-func (d *docDefs) SchemaOf(name string) (*schema.Schema, *errs.Error) {
+func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 	name = strings.TrimPrefix(name, "$")
 	seen := map[string]bool{}
 	for {
@@ -305,8 +306,8 @@ func (d *docDefs) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 		}
 		seen[name] = true
 		var shape any
-		if d.header != nil {
-			if v, ok := d.header.Schemas[name]; ok {
+		if d.Header != nil {
+			if v, ok := d.Header.Schemas[name]; ok {
 				shape = v
 			}
 		}
@@ -333,17 +334,17 @@ func (d *docDefs) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 // Var resolves a variable by (sigil-less) name, chasing @-references so a
 // definition may name one parsed later. A missing name is undefined-variable;
 // a self- or mutually-referential chain is invalid-definition.
-func (d *docDefs) Var(name string) (any, *errs.Error) {
+func (d *Definitions) Var(name string) (any, *errs.Error) {
 	seen := map[string]bool{}
 	for {
-		if d.header == nil {
+		if d.Header == nil {
 			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
 		}
 		if seen[name] {
 			return nil, &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
 		}
 		seen[name] = true
-		v, ok := d.header.Vars[name]
+		v, ok := d.Header.Vars[name]
 		if !ok {
 			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
 		}
@@ -357,21 +358,21 @@ func (d *docDefs) Var(name string) (any, *errs.Error) {
 
 // sectionSchema resolves the schema a section is bound to, or nil when it has
 // none.
-func sectionSchema(sec *parser.Section, defs *docDefs) (*schema.Schema, *errs.Error) {
+func sectionSchema(sec *parser.Section, defs *Definitions) (*schema.Schema, *errs.Error) {
 	if sec.SchemaName != "" {
 		return defs.SchemaOf(sec.SchemaName)
 	}
-	if defs.header == nil {
+	if defs.Header == nil {
 		return nil, nil
 	}
-	if _, ok := defs.header.Schemas["schema"]; ok {
+	if _, ok := defs.Header.Schemas["schema"]; ok {
 		return defs.SchemaOf("schema")
 	}
-	if defs.header.Inline != nil {
+	if defs.Header.Inline != nil {
 		// The inline schema is cached on its own field — the compiled map is
 		// keyed by declared names, and "" is a legal declared name (`~ $: x`).
 		if defs.inline == nil {
-			s, cerr := schema.Compile(defs.header.Inline, "")
+			s, cerr := schema.Compile(defs.Header.Inline, "")
 			if cerr != nil {
 				return nil, cerr
 			}
@@ -382,10 +383,10 @@ func sectionSchema(sec *parser.Section, defs *docDefs) (*schema.Schema, *errs.Er
 	return nil, nil
 }
 
-// resolveVars resolves every @-string VALUE in a record in place — quoted or
+// ResolveVars resolves every @-string VALUE in a record in place — quoted or
 // open, by design references in any string form (io-test-cases FINDINGS #3).
 // Keys stay literal. Returns the first resolution error.
-func resolveVars(v any, defs *docDefs) *errs.Error {
+func ResolveVars(v any, defs *Definitions) *errs.Error {
 	return resolveVarsAt(v, defs, nil)
 }
 
@@ -402,7 +403,7 @@ func resolveVars(v any, defs *docDefs) *errs.Error {
 // pointing at itself, and the header writer would then never terminate. The
 // first version of this did exactly that and died on the stack; rule 10 says a
 // designated code, never a crash.
-func resolveVarsAt(v any, defs *docDefs, seen map[string]bool) *errs.Error {
+func resolveVarsAt(v any, defs *Definitions, seen map[string]bool) *errs.Error {
 	sub := func(s string, set func(any)) (bool, *errs.Error) {
 		if !strings.HasPrefix(s, "@") || len(s) <= 1 {
 			return false, nil
@@ -426,7 +427,7 @@ func resolveVarsAt(v any, defs *docDefs, seen map[string]bool) *errs.Error {
 	}
 
 	switch x := v.(type) {
-	case *value.Object:
+	case *core.Object:
 		for i := range x.Members {
 			mv := x.Members[i].Value
 			if s, ok := mv.(string); ok {
@@ -459,19 +460,19 @@ func resolveVarsAt(v any, defs *docDefs, seen map[string]bool) *errs.Error {
 	return nil
 }
 
-// surfaceDeferred walks a record collecting the deferred malformed-literal
+// SurfaceDeferred walks a record collecting the deferred malformed-literal
 // errors parsing left behind (no schema masked or reported them).
-func surfaceDeferred(v any, out *[]errs.Error) {
+func SurfaceDeferred(v any, out *[]errs.Error) {
 	switch x := v.(type) {
-	case value.ErrorValue:
+	case core.ErrorValue:
 		*out = append(*out, errs.Error{Code: x.Code, Line: x.Line, Col: x.Col})
-	case *value.Object:
+	case *core.Object:
 		for _, m := range x.Members {
-			surfaceDeferred(m.Value, out)
+			SurfaceDeferred(m.Value, out)
 		}
 	case []any:
 		for _, e := range x {
-			surfaceDeferred(e, out)
+			SurfaceDeferred(e, out)
 		}
 	}
 }

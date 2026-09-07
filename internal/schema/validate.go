@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The validation stage: (compiled schema + parsed record) → validated value
@@ -65,7 +65,7 @@ func vfail(code string) {
 // discipline (all member faults, in order) over the bare-record one (only the
 // prevailing fault). The validated record is returned when there are no
 // errors.
-func ValidateRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) (*value.Object, []errs.Error) {
+func ValidateRecord(rec *core.Object, s *Schema, defs Defs, accumulate bool) (*core.Object, []errs.Error) {
 	return ValidateRecordAt(rec, s, defs, accumulate, "$")
 }
 
@@ -76,7 +76,7 @@ func ValidateRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) (*
 // discarded anyway, after paying for a whole second object and member slice per
 // record. Nested objects are still assembled: a child's validated value is
 // placed into its parent's slot, so only the TOP-level result is optional.
-func CheckRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) []errs.Error {
+func CheckRecord(rec *core.Object, s *Schema, defs Defs, accumulate bool) []errs.Error {
 	_, acc := validateAt(rec, s, defs, accumulate, "$", false)
 	return acc
 }
@@ -84,11 +84,11 @@ func CheckRecord(rec *value.Object, s *Schema, defs Defs, accumulate bool) []err
 // ValidateRecordAt is ValidateRecord with the structural path this record
 // occupies, so faults report where they are (ADR 0005 D3): "$" for a bare
 // record, "$[2]" for the third record of a collection.
-func ValidateRecordAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path string) (*value.Object, []errs.Error) {
+func ValidateRecordAt(rec *core.Object, s *Schema, defs Defs, accumulate bool, path string) (*core.Object, []errs.Error) {
 	return validateAt(rec, s, defs, accumulate, path, true)
 }
 
-func validateAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path string, wantOut bool) (*value.Object, []errs.Error) {
+func validateAt(rec *core.Object, s *Schema, defs Defs, accumulate bool, path string, wantOut bool) (*core.Object, []errs.Error) {
 	out, acc, fatal := validateObject(rec, s, defs, path, wantOut)
 	switch {
 	case fatal != nil && accumulate:
@@ -106,14 +106,14 @@ func validateAt(rec *value.Object, s *Schema, defs Defs, accumulate bool, path s
 // validateObject implements the record/object algorithm. It returns the
 // validated object, the accumulated member errors, and the fatal membership
 // error (which aborted processing) if any.
-func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOut bool) (out *value.Object, acc []errs.Error, fatal *errs.Error) {
+func validateObject(rec *core.Object, s *Schema, defs Defs, path string, wantOut bool) (out *core.Object, acc []errs.Error, fatal *errs.Error) {
 	// Validated members: schema-order slots first, then extras by arrival.
 	// Slots are addressed by POSITION, not by name — the schema is compiled
 	// and its member positions are fixed, so two maps per record became two
 	// slices (ADR 0006 P2). Small enough to stay on the stack for typical
 	// records.
 	slots := make([]memberSlot, len(s.Names))
-	var extras []value.Member
+	var extras []core.Member
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -130,7 +130,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOu
 	// try validates one member, converting a member-level failure into an
 	// accumulated error. idx is the member's schema position, or -1 for an
 	// undeclared member, whose value the caller places in extras itself.
-	try := func(idx int, name string, m *value.Member, f func() any) (out any, ok bool) {
+	try := func(idx int, name string, m *core.Member, f func() any) (out any, ok bool) {
 		defer func() {
 			if r := recover(); r != nil {
 				fail, isFail := r.(valFail)
@@ -165,7 +165,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOu
 			}
 			md := s.Defs[name]
 			val, present := any(nil), false
-			var mp *value.Member
+			var mp *core.Member
 			if lookup {
 				if i := rec.Find(name); i >= 0 {
 					val, present = rec.Members[i].Value, true
@@ -263,7 +263,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOu
 						acc = append(acc, f.err)
 					}
 				}()
-				extras = append(extras, value.Member{Positional: true, Value: validateMember(mv, true, md, defs)})
+				extras = append(extras, core.Member{Positional: true, Value: validateMember(mv, true, md, defs)})
 			}()
 		}
 	}
@@ -302,7 +302,7 @@ func validateObject(rec *value.Object, s *Schema, defs Defs, path string, wantOu
 			if v, ok := try(-1, name, &rec.Members[i], func() any {
 				return validateMember(mv, true, md, defs)
 			}); ok {
-				extras = append(extras, value.Member{Key: name, Value: v})
+				extras = append(extras, core.Member{Key: name, Value: v})
 			}
 			continue
 		}
@@ -372,7 +372,7 @@ func absorptionLoops(key string, s *Schema, defs Defs) bool {
 // a member that is missing entirely — is reported at the record, exactly as
 // the reference does (ADR 0005 D2). A position already set by the tokenizer
 // (a deferred literal error) is never overwritten.
-func locate(e errs.Error, path, name string, rec *value.Object, m *value.Member) errs.Error {
+func locate(e errs.Error, path, name string, rec *core.Object, m *core.Member) errs.Error {
 	if e.Path == "" {
 		e.Path = path
 		if name != "" && name != "*" {
@@ -401,7 +401,7 @@ func isWildcardDef(s *Schema) bool {
 
 // assemble builds the validated object: declared members in schema order,
 // then extras in arrival order.
-func assemble(rec *value.Object, s *Schema, slots []memberSlot, extras []value.Member) *value.Object {
+func assemble(rec *core.Object, s *Schema, slots []memberSlot, extras []core.Member) *core.Object {
 	// A validated record is ALWAYS a fresh object, never the parsed one with
 	// its members renamed. Reusing it saves two allocations per record and
 	// was tried: the absorption rule can make a record a member of itself, or
@@ -417,10 +417,10 @@ func assemble(rec *value.Object, s *Schema, slots []memberSlot, extras []value.M
 			n++
 		}
 	}
-	out := &value.Object{Members: make([]value.Member, 0, n)}
+	out := &core.Object{Members: make([]core.Member, 0, n)}
 	for i, name := range s.Names {
 		if slots[i].filled {
-			out.Members = append(out.Members, value.Member{Key: name, Value: slots[i].val})
+			out.Members = append(out.Members, core.Member{Key: name, Value: slots[i].val})
 		}
 	}
 	out.Members = append(out.Members, extras...)
@@ -431,7 +431,7 @@ func assemble(rec *value.Object, s *Schema, slots []memberSlot, extras []value.M
 // accepted. Extras are few, so a scan beats a map — and the parser already
 // rejects duplicate keys within a parsed record, leaving only hand-built
 // objects to reach this.
-func hasExtra(extras []value.Member, name string) bool {
+func hasExtra(extras []core.Member, name string) bool {
 	for i := range extras {
 		if !extras[i].Positional && extras[i].Key == name {
 			return true
@@ -493,7 +493,7 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 	if md.Choices != nil {
 		found := false
 		for _, c := range md.Choices {
-			if value.Equal(val, resolveRef(c, defs)) {
+			if core.Equal(val, resolveRef(c, defs)) {
 				found = true
 				break
 			}
@@ -530,7 +530,7 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 	case famObject:
 		return validateObjectMember(val, md, defs)
 	default: // any
-		if ev, ok := val.(value.ErrorValue); ok {
+		if ev, ok := val.(core.ErrorValue); ok {
 			panic(valFail{errs.Error{Code: ev.Code, Line: ev.Line, Col: ev.Col}}) // a deferred malformed literal surfaces as itself
 		}
 		if md.AnyOf != nil {
@@ -728,7 +728,7 @@ func validateBigInt(val any, md *MemberDef, defs Defs) any {
 }
 
 func validateDecimal(val any, md *MemberDef, defs Defs) any {
-	d, ok := val.(value.Decimal)
+	d, ok := val.(core.Decimal)
 	if !ok {
 		vfail(errs.ExpectedDecimal)
 	}
@@ -738,12 +738,12 @@ func validateDecimal(val any, md *MemberDef, defs Defs) any {
 	if pr, ok := md.Constraints["precision"].(float64); ok && float64(decimalDigits(d)) > pr {
 		vfail(errs.MismatchedPrecision)
 	}
-	bound := func(key string) (value.Decimal, bool) {
+	bound := func(key string) (core.Decimal, bool) {
 		v, ok := md.Constraints[key]
 		if !ok {
-			return value.Decimal{}, false
+			return core.Decimal{}, false
 		}
-		dd, ok := resolveRef(v, defs).(value.Decimal)
+		dd, ok := resolveRef(v, defs).(core.Decimal)
 		if !ok {
 			vfail(errs.ExpectedDecimal)
 		}
@@ -762,7 +762,7 @@ func validateDecimal(val any, md *MemberDef, defs Defs) any {
 }
 
 // decimalDigits counts a decimal's significant digits (its precision).
-func decimalDigits(d value.Decimal) int {
+func decimalDigits(d core.Decimal) int {
 	s := new(big.Int).Abs(d.Coef).String()
 	if s == "0" {
 		return 1
@@ -771,7 +771,7 @@ func decimalDigits(d value.Decimal) int {
 }
 
 // cmpDecimal compares two decimals numerically, aligning scales.
-func cmpDecimal(a, b value.Decimal) int {
+func cmpDecimal(a, b core.Decimal) int {
 	av, bv := a.Coef, b.Coef
 	if a.Scale < b.Scale {
 		av = new(big.Int).Mul(av, pow10(b.Scale-a.Scale))
@@ -781,7 +781,7 @@ func cmpDecimal(a, b value.Decimal) int {
 	return av.Cmp(bv)
 }
 
-func decimalMultiple(d, m value.Decimal) bool {
+func decimalMultiple(d, m core.Decimal) bool {
 	dv, mv := d.Coef, m.Coef
 	if d.Scale < m.Scale {
 		dv = new(big.Int).Mul(dv, pow10(m.Scale-d.Scale))
@@ -936,7 +936,7 @@ func validateObjectMember(val any, md *MemberDef, defs Defs) any {
 		}
 		sch = s
 	}
-	obj, ok := val.(*value.Object)
+	obj, ok := val.(*core.Object)
 	if !ok {
 		vfail(errs.InvalidObject)
 	}

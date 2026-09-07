@@ -41,30 +41,30 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The live value model, shared with the pipeline by construction.
 type (
 	// Object is an ordered key/value record.
-	Object = value.Object
+	Object = core.Object
 	// Member is one member of an Object.
-	Member = value.Member
+	Member = core.Member
 	// Decimal is an exact fixed-point value; its scale is part of the value.
-	Decimal = value.Decimal
+	Decimal = core.Decimal
 	// ErrorItem stands in for a record that failed, INSIDE projected data:
 	// the row keeps its position and carries this marker instead of a value,
 	// so the good records around it are untouched. Test for it with IsError.
-	ErrorItem = value.ErrorNode
+	ErrorItem = core.ErrorNode
 )
 
 // TimeAnchor is the date a time-of-day carries. The format has no bare clock
 // type, so `t"14:30"` is this date at that clock — the reference's convention,
 // and what makes two implementations agree on the instant.
-var TimeAnchor = value.TimeAnchor
+var TimeAnchor = core.TimeAnchor
 
 // IsError reports whether a projected value is a failed record.
 //

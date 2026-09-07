@@ -9,11 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The canonical writer. One rule governs everything here: a writer must never
@@ -99,7 +99,7 @@ func (d *Doc) String() string {
 // syntax — the text between the braces of `{…}`, also valid as a schema-only
 // document header.
 func SchemaText(s *schema.Schema) string {
-	d := &Doc{Defs: newDefs(nil)}
+	d := &Doc{Defs: NewDefinitions(nil)}
 	return d.writeSchemaBody(s)
 }
 
@@ -388,7 +388,7 @@ func (d *Doc) constraintValue(typeName string, v any) string {
 		return ioNumber(x)
 	case *big.Int:
 		return x.String() + "n"
-	case value.Decimal:
+	case core.Decimal:
 		return x.String() + "m"
 	case time.Time:
 		return temporalLiteral(x, "")
@@ -448,7 +448,7 @@ func (d *Doc) appendSection(dst []byte, sec *parser.Section) []byte {
 	if sec.Collection {
 		first := true
 		for _, rec := range sec.Records {
-			obj, ok := rec.(*value.Object)
+			obj, ok := rec.(*core.Object)
 			if !ok {
 				continue
 			}
@@ -464,7 +464,7 @@ func (d *Doc) appendSection(dst []byte, sec *parser.Section) []byte {
 	if len(sec.Records) == 0 {
 		return dst
 	}
-	obj, ok := sec.Records[0].(*value.Object)
+	obj, ok := sec.Records[0].(*core.Object)
 	if !ok {
 		return dst
 	}
@@ -477,7 +477,7 @@ func (d *Doc) appendSection(dst []byte, sec *parser.Section) []byte {
 }
 
 // appendRecord renders one record's members, schema order first.
-func (d *Doc) appendRecord(dst []byte, obj *value.Object, sch *schema.Schema) []byte {
+func (d *Doc) appendRecord(dst []byte, obj *core.Object, sch *schema.Schema) []byte {
 	var w partWriter
 
 	if sch != nil {
@@ -540,7 +540,7 @@ func (d *Doc) appendRecord(dst []byte, obj *value.Object, sch *schema.Schema) []
 // record's own (ISSUE-15), schema or no schema, dropping a nesting level.
 // Enclosing applies here only; a nested object's braces come from appendValue,
 // where absorption never happens.
-func (d *Doc) appendBareRecord(dst []byte, obj *value.Object, sch *schema.Schema) []byte {
+func (d *Doc) appendBareRecord(dst []byte, obj *core.Object, sch *schema.Schema) []byte {
 	mark := len(dst)
 	dst = d.appendRecord(dst, obj, sch)
 
@@ -550,7 +550,7 @@ func (d *Doc) appendBareRecord(dst []byte, obj *value.Object, sch *schema.Schema
 			continue
 		}
 		present++
-		_, lastIsObject = m.Value.(*value.Object)
+		_, lastIsObject = m.Value.(*core.Object)
 	}
 	if present == 1 && lastIsObject && len(dst) > mark && dst[mark] == '{' {
 		// Wrap in place: one shift, and only for this rare shape.
@@ -577,7 +577,7 @@ func (d *Doc) appendValueWithDef(dst []byte, v any, md *schema.MemberDef) []byte
 			return appendTemporal(dst, t, md.Type)
 		}
 	}
-	if obj, ok := v.(*value.Object); ok {
+	if obj, ok := v.(*core.Object); ok {
 		sch := md.Schema
 		if sch == nil && md.SchemaRef != "" {
 			sch, _ = d.Defs.SchemaOf(strings.TrimPrefix(md.SchemaRef, "$"))
@@ -614,7 +614,7 @@ func (d *Doc) appendValue(dst []byte, v any, md *schema.MemberDef) []byte {
 	case *big.Int:
 		dst = x.Append(dst, 10)
 		return append(dst, 'n')
-	case value.Decimal:
+	case core.Decimal:
 		dst = append(dst, x.String()...)
 		return append(dst, 'm')
 	case []byte:
@@ -625,7 +625,7 @@ func (d *Doc) appendValue(dst []byte, v any, md *schema.MemberDef) []byte {
 		return appendTemporal(dst, x, "")
 	case string:
 		return appendAutoString(dst, x)
-	case *value.Object:
+	case *core.Object:
 		dst = append(dst, '{')
 		dst = d.appendRecord(dst, x, nil)
 		return append(dst, '}')

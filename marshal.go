@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // Struct marshaling (ADR 0003): Marshal derives an Internet Object schema
@@ -98,9 +98,9 @@ func Marshal(v any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		rec, ok := ev.(*value.Object)
+		rec, ok := ev.(*core.Object)
 		if !ok {
-			rec = &value.Object{Members: []value.Member{{Positional: true, Value: ev}}}
+			rec = &core.Object{Members: []core.Member{{Positional: true, Value: ev}}}
 		}
 		pdoc = &parser.Document{Sections: []*parser.Section{
 			{Name: "data", Records: []any{rec}},
@@ -129,7 +129,7 @@ func (e *MarshalError) Error() string { return e.Path + ": " + e.Msg }
 type structPlan struct {
 	fields   []fieldPlan
 	byName   map[string]int // member name → index in fields, built once
-	shape    *value.Object  // the derived schema shape, as parsed text would be
+	shape    *core.Object   // the derived schema shape, as parsed text would be
 	compiled *schema.Schema // the shape, compiled once
 	validate bool           // any field (own or nested) carries a `schema` tag
 	fastOK   bool           // every member can be WRITTEN without the tree
@@ -221,7 +221,7 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 	visiting[t] = true
 	defer delete(visiting, t)
 
-	p := &structPlan{shape: &value.Object{}}
+	p := &structPlan{shape: &core.Object{}}
 	for _, f := range reflect.VisibleFields(t) {
 		if !f.IsExported() || f.Anonymous {
 			continue // embedded structs contribute through their visible fields
@@ -268,14 +268,14 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 			if fp.nullable {
 				key += "*"
 			}
-			p.shape.Members = append(p.shape.Members, value.Member{Key: key, Value: ann})
+			p.shape.Members = append(p.shape.Members, core.Member{Key: key, Value: ann})
 		} else {
 			// A name needing quotes cannot carry the short markers; the flags
 			// move into the object-form typedef.
 			if fp.optional || fp.nullable {
 				ann = objectFormWithFlags(ann, fp.optional, fp.nullable)
 			}
-			p.shape.Members = append(p.shape.Members, value.Member{Key: fp.name, Quoted: true, Value: ann})
+			p.shape.Members = append(p.shape.Members, core.Member{Key: fp.name, Quoted: true, Value: ann})
 		}
 		if len(f.Index) == 1 {
 			fp.at = f.Index[0] // the common case: one cheap field lookup
@@ -322,15 +322,15 @@ func annotationShape(tag, fieldPath string) (any, error) {
 	if len(pdoc.Errors) > 0 {
 		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + pdoc.Errors[0].Code}
 	}
-	var rec *value.Object
+	var rec *core.Object
 	if len(pdoc.Sections) == 1 && len(pdoc.Sections[0].Records) == 1 {
-		rec, _ = pdoc.Sections[0].Records[0].(*value.Object)
+		rec, _ = pdoc.Sections[0].Records[0].(*core.Object)
 	}
 	if rec == nil || len(rec.Members) != 1 || rec.Members[0].Key != "x" {
 		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: not a single type annotation"}
 	}
 	shape := rec.Members[0].Value
-	if _, cerr := schema.Compile(&value.Object{Members: []value.Member{{Key: "x", Value: shape}}}, ""); cerr != nil {
+	if _, cerr := schema.Compile(&core.Object{Members: []core.Member{{Key: "x", Value: shape}}}, ""); cerr != nil {
 		return nil, &MarshalError{Path: fieldPath, Msg: "invalid schema tag: " + cerr.Code}
 	}
 	return shape, nil
@@ -356,29 +356,29 @@ func parseTag(f reflect.StructField) (name string, opts map[string]bool, skip bo
 // objectFormWithFlags rewrites a type annotation as the object-form typedef
 // carrying explicit optional/"null" flags — the only spelling a QUOTED member
 // name can use (quoted names never strip `?`/`*` markers).
-func objectFormWithFlags(ann any, optional, nullable bool) *value.Object {
-	out := &value.Object{}
+func objectFormWithFlags(ann any, optional, nullable bool) *core.Object {
+	out := &core.Object{}
 	switch tv := ann.(type) {
 	case string:
-		out.Members = append(out.Members, value.Member{Positional: true, Value: tv})
+		out.Members = append(out.Members, core.Member{Positional: true, Value: tv})
 	case []any:
 		out.Members = append(out.Members,
-			value.Member{Positional: true, Value: "array"})
+			core.Member{Positional: true, Value: "array"})
 		var elem any = "any"
 		if len(tv) == 1 {
 			elem = tv[0]
 		}
-		out.Members = append(out.Members, value.Member{Key: "of", Value: elem})
-	case *value.Object:
+		out.Members = append(out.Members, core.Member{Key: "of", Value: elem})
+	case *core.Object:
 		out.Members = append(out.Members,
-			value.Member{Positional: true, Value: "object"},
-			value.Member{Key: "schema", Value: tv})
+			core.Member{Positional: true, Value: "object"},
+			core.Member{Key: "schema", Value: tv})
 	}
 	if optional {
-		out.Members = append(out.Members, value.Member{Key: "optional", Value: true})
+		out.Members = append(out.Members, core.Member{Key: "optional", Value: true})
 	}
 	if nullable {
-		out.Members = append(out.Members, value.Member{Key: "null", Quoted: true, Value: true})
+		out.Members = append(out.Members, core.Member{Key: "null", Quoted: true, Value: true})
 	}
 	return out
 }
@@ -459,7 +459,7 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool, 
 		if err != nil {
 			return nil, err
 		}
-		return &value.Object{Members: []value.Member{{Key: "*", Value: elem}}}, nil
+		return &core.Object{Members: []core.Member{{Key: "*", Value: elem}}}, nil
 	case reflect.Struct:
 		sub, err := buildPlan(t, visiting)
 		if err != nil {
@@ -476,7 +476,7 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool, 
 }
 
 // schemaDoc assembles a document with the derived schema as its header.
-func schemaDoc(shape *value.Object, sec *parser.Section) *parser.Document {
+func schemaDoc(shape *core.Object, sec *parser.Section) *parser.Document {
 	header := &parser.Header{
 		Schemas: map[string]any{"schema": shape},
 		Defs:    []parser.HeaderDef{{Kind: parser.DefSchema, Key: "schema", Value: shape}},
@@ -557,8 +557,8 @@ func uintOverflowMsg(n uint64) string {
 // maxSafeInt is the largest integer the number wire type holds exactly.
 const maxSafeInt = 1 << 53
 
-func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*value.Object, error) {
-	out := &value.Object{Members: make([]value.Member, 0, len(plan.fields))}
+func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*core.Object, error) {
+	out := &core.Object{Members: make([]core.Member, 0, len(plan.fields))}
 	for _, f := range plan.fields {
 		fv := rv.FieldByIndex(f.index)
 		if f.omitZero && fv.IsZero() {
@@ -568,7 +568,7 @@ func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*value.Object,
 		if err != nil {
 			return nil, err
 		}
-		out.Members = append(out.Members, value.Member{Key: f.name, Value: ev})
+		out.Members = append(out.Members, core.Member{Key: f.name, Value: ev})
 	}
 	return out, nil
 }
@@ -639,13 +639,13 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 			keys = append(keys, k.String())
 		}
 		sort.Strings(keys) // deterministic output
-		out := &value.Object{}
+		out := &core.Object{}
 		for _, k := range keys {
 			ev, err := encodeValue(rv.MapIndex(reflect.ValueOf(k)), "", at.deeper().member(k))
 			if err != nil {
 				return nil, err
 			}
-			out.Members = append(out.Members, value.Member{Key: k, Value: ev})
+			out.Members = append(out.Members, core.Member{Key: k, Value: ev})
 		}
 		return out, nil
 	case reflect.Struct:

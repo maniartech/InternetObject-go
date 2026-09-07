@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/numfmt"
-	"github.com/maniartech/InternetObject-go/internal/value"
 )
 
 // The `.io` corpus loader and the `parse`-kind comparator. The corpus is
@@ -59,7 +59,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 	switch v := projected.(type) {
 	case []any:
 		raw = v
-	case *value.Object:
+	case *core.Object:
 		if i := v.Find("data"); i >= 0 {
 			raw, _ = v.Members[i].Value.([]any)
 		}
@@ -67,7 +67,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 
 	rows := make([]SuiteRow, 0, len(raw))
 	for _, r := range raw {
-		obj, ok := r.(*value.Object)
+		obj, ok := r.(*core.Object)
 		if !ok {
 			continue
 		}
@@ -110,7 +110,7 @@ func LoadIOSuite(file string) ([]SuiteRow, error) {
 	return rows, nil
 }
 
-func field(o *value.Object, key string) (any, bool) {
+func field(o *core.Object, key string) (any, bool) {
 	if i := o.Find(key); i >= 0 {
 		return o.Members[i].Value, true
 	}
@@ -137,11 +137,11 @@ func RunParseCase(row SuiteRow) []string {
 		if len(codes) == 0 {
 			actual = doc.Project()
 		}
-		if !value.Equal(actual, row.Expected) {
+		if !core.Equal(actual, row.Expected) {
 			problems = append(problems, fmt.Sprintf("value  expected=%s  actual=%s", Show(row.Expected), Show(actual)))
 		}
 	}
-	if row.HasRecovered && !value.Equal(doc.Project(), row.Recovered) {
+	if row.HasRecovered && !core.Equal(doc.Project(), row.Recovered) {
 		problems = append(problems, fmt.Sprintf("recovered  expected=%s  actual=%s", Show(row.Recovered), Show(doc.Project())))
 	}
 	return problems
@@ -179,13 +179,13 @@ func show(b *strings.Builder, v any) {
 		fmt.Fprintf(b, "%q", x)
 	case *big.Int:
 		fmt.Fprintf(b, "%sn", x.String())
-	case value.Decimal:
+	case core.Decimal:
 		fmt.Fprintf(b, "dec(%s,%d)", x.Coef.String(), x.Scale)
 	case []byte:
 		fmt.Fprintf(b, "bytes(%x)", x)
 	case time.Time:
 		b.WriteString(x.UTC().Format("2006-01-02T15:04:05.000Z"))
-	case value.ErrorNode:
+	case core.ErrorNode:
 		fmt.Fprintf(b, "errorNode(%s)", x.Code)
 	case []any:
 		b.WriteByte('[')
@@ -196,7 +196,7 @@ func show(b *strings.Builder, v any) {
 			show(b, e)
 		}
 		b.WriteByte(']')
-	case *value.Object:
+	case *core.Object:
 		keys := make([]string, len(x.Members))
 		for i := range x.Members {
 			keys[i] = x.Members[i].Key
