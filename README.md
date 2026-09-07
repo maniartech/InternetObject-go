@@ -19,7 +19,7 @@ That document is self-describing: the header declares the shape once, every row 
 positional, and a reader validates as it goes. The equivalent JSON repeats `"name"` and
 `"age"` on every record and checks nothing.
 
-**Status:** feature-complete and conformant. 1,572 corpus cases plus 262 tokenizer cases pass,
+**Status:** feature-complete and conformant. Apache 2.0. 1,572 corpus cases plus 262 tokenizer cases pass,
 along with 12 fuzzers and a `-race` build. Faster than `encoding/json` in both directions on
 the typed path. See [Conformance](#conformance) and [Performance](#performance).
 
@@ -485,6 +485,6 @@ Known limits, stated plainly:
 
 ## License
 
-**Not yet declared.** This repository carries no `LICENSE` file, which for a public repository
-means default copyright — nobody may use, copy or distribute it. That needs deciding before
-any release.
+[Apache License 2.0](LICENSE) — the same licence as the reference implementation.
+
+Copyright 2018–2026 ManiarTech® (Maniar Technologies).
