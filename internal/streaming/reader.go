@@ -15,6 +15,7 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
 
 // outcome, nil when iteration completed normally.
@@ -232,7 +233,7 @@ func (r *Reader) resolveHeader(text string) {
 			apply(h)
 		}
 	}
-	if strings.TrimSpace(text) != "" {
+	if trimIOSpace(text) != "" {
 		h, ok := parseHeaderText(text)
 		if !ok {
 			r.fatal = &ItemError{Category: "syntax", Code: errs.InvalidDefinition}
@@ -283,7 +284,7 @@ func (r *Reader) endFrame(pos int) []Item {
 	if !r.headerDone {
 		return nil // still buffering the header
 	}
-	text := strings.TrimSpace(string(r.buf[r.frameStart:pos]))
+	text := trimIOSpace(string(r.buf[r.frameStart:pos]))
 	r.frameStart = pos
 	if text == "" || !strings.HasPrefix(text, "~") {
 		return nil // nothing, or stray content between frames
@@ -353,7 +354,7 @@ func (r *Reader) legacyFlush() []Item {
 		return nil
 	}
 	text := string(r.buf)
-	if strings.TrimSpace(text) == "" {
+	if trimIOSpace(text) == "" {
 		return nil
 	}
 	doc := parser.Parse(text)
@@ -391,4 +392,17 @@ func categoryOf(code errs.Code) string {
 		return "stream"
 	}
 	return "validation"
+}
+
+// trimIOSpace trims the whitespace the READER recognises, which is not the
+// whitespace Go recognises: unicode.IsSpace counts U+00A0 and U+FEFF, the
+// tokenizer counts U+2000..U+200A and everything below U+21, and neither set
+// contains the other (tokenizer.IsSpaceRune says why).
+//
+// Using strings.TrimSpace here ate a record whose only value was a
+// non-breaking space: Parse read it as the string it is, the stream reported
+// missing-value. Found by the stream round-trip fuzzer, 2026-09-07. One
+// decision, one site.
+func trimIOSpace(s string) string {
+	return strings.TrimFunc(s, tokenizer.IsSpaceRune)
 }

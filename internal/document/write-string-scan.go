@@ -2,6 +2,7 @@ package document
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
@@ -221,17 +222,37 @@ func wouldNotReadBack(s string, flags byte, numStart bool) bool {
 	// A claimed-and-broken word (`2.5e1n`) errors even mid-run, where an
 	// ordinary numeric word would just join the open string. Only text with a
 	// digit AND a word boundary can hide one.
-	if flags&clDigit != 0 && flags&clSpace != 0 {
+	if flags&clDigit != 0 {
+		// Split on the READER's notion of a word boundary, not a byte table.
+		// The two are not the same: U+2000..U+200A are spaces to the
+		// tokenizer and ordinary bytes to strClass, so `0.m<U+2000>0` looked
+		// like one unclaimable word here and tokenized as the broken decimal
+		// `0.m` there — the writer emitted it bare and its own reader rejected
+		// it. Found by the builder round-trip fuzzer, 2026-09-07.
 		for i := 0; i < len(s); {
-			for i < len(s) && strClass[s[i]]&clSpace != 0 {
-				i++
+			for i < len(s) {
+				r, size := utf8.DecodeRuneInString(s[i:])
+				if !tokenizer.IsSpaceRune(r) {
+					break
+				}
+				i += size
 			}
 			start := i
-			for i < len(s) && strClass[s[i]]&clSpace == 0 {
-				i++
+			for i < len(s) {
+				r, size := utf8.DecodeRuneInString(s[i:])
+				if tokenizer.IsSpaceRune(r) {
+					break
+				}
+				i += size
 			}
-			if start < i && tokenizer.WordIsBrokenClaim(s[start:i]) {
-				return true
+			if start < i {
+				w := s[start:i]
+				// A word that reads as a non-string, or as a broken numeric
+				// claim, must be quoted wherever it sits — not only when it
+				// begins the text.
+				if tokenizer.WordIsBrokenClaim(w) || tokenizer.WordReadsNonString(w) {
+					return true
+				}
 			}
 		}
 	}
