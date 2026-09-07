@@ -1,6 +1,7 @@
 # SPEC 0002 — Decimal
 
-- **Status:** Draft for implementation, 2026-09-07
+- **Status:** IMPLEMENTED 2026-09-07. Landed green: corpus 1,572+262, -race, seven fuzzers,
+  100% statement coverage on `internal/core/decimal.go`, hot benchmarks unmoved.
 - **Decides:** the value semantics and API of `core.Decimal`. Sits under
   [ADR 0011](../decisions/0011-core-model-and-layout.md) and follows
   [SPEC 0001](core-value-model.md) §1's lowering rules: `core` depends on nothing.
@@ -155,7 +156,28 @@ equality `choices` means for decimals.
 
 ### 6.2 Precision of a leading-zero fraction — spec prose vs SQL definition
 
-§3. Finding #25. io-go changes to the oracle's answer as part of this spec.
+§3. Finding #25. **Closed:** io-go now computes `max(digits, scale)` and agrees with the
+oracle on every probed case, pinned by `TestPrecisionMatchesTheOracle`.
+
+### 6.3 `mul` silently loses the product in the reference — found during implementation
+
+Probing the oracle to build the differential table (§8.1) turned up a data-loss defect nobody
+was looking for. `decimal.ts` `mul()` computes the exact product at `scale1 + scale2` and then
+rounds it down to `max(scale1, scale2)`:
+
+| expression | reference | exact |
+| --- | --- | --- |
+| `0.01 * 0.01` | `0.00` | `0.0001` |
+| `0.001 * 0.002` | `0.000` | `0.000002` |
+| `1.5 * 1.5` | `2.3` | `2.25` |
+
+The sum of the scales is exactly the scale at which a product is exact, so that rounding step
+can only destroy information — and when the product is smaller than the operands' own scale it
+destroys all of it. This is more serious than the `div` note above: division has no exact
+answer so any scale is defensible, but multiplication always has one.
+
+io-go's `Mul` is exact. The fuzzer asserts the property directly — *a product is zero only when
+an operand is* — which the reference fails. Escalated as finding #26.
 
 ---
 
@@ -195,6 +217,16 @@ Beyond SPEC 0001 §7 (corpus, `-race`, fuzzers, benchmarks unchanged):
 
 ## ▶ RESUME HERE
 
-Spec written; nothing implemented. Order: §3 precision fix (one line, pins a divergence) →
-§4 comparison (move the helpers onto the type) → §7 constructors → §5 arithmetic → §8 tests.
-Findings #24, #25 recorded in `io-js2/.private/docs/go-port/FINDINGS.md`.
+**Done.** `internal/core/decimal.go` holds the type; `decimal.go` exposes it as `io.Decimal`
+with `ParseDecimal`, `NewDecimal`, `DecimalFromBig`, `ErrDivideByZero`. The validator's four
+private helpers are gone — `internal/schema/type-decimal.go` now calls `Cmp`, `Precision` and
+`IsMultipleOf` on the value itself.
+
+Gates: 1,572+262 corpus, `-race`, `FuzzDecimalProperties` (15.9M execs) and `FuzzParseDecimal`
+(13.7M) plus the five existing fuzzers, 100% statement coverage on the type, and the four hot
+benchmarks unchanged to the allocation (§1 invariant 5 holds).
+
+Findings #24 (decimal `choices` never match — still open, io-go keeps structural equality),
+#25 (**closed**), #26 (`mul` data loss — new) in `io-js2/.private/docs/go-port/FINDINGS.md`.
+
+**Next: SPEC 0001 §4.9** — the `Code` constants.

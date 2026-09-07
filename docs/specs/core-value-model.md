@@ -309,7 +309,7 @@ still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `
 | `IOSection`, `IOSectionCollection` | `Section`, `Document.Sections()` | ✅ |
 | `IOHeader`, `IODefinitions` | `Definitions` (§4.5) | ❌ |
 | `IOErrorItem` | `ErrorItem`, `IsError` | ✅ |
-| `Decimal` | `Decimal` (SPEC 0002) | ❌ |
+| `Decimal` | `Decimal` (SPEC 0002) | ✅ |
 | `IOError`, `IOSyntaxError`, `IOValidationError` | `Error` with `Category` (syntax/validation/stream) — one type, a field, not a hierarchy | ✅ |
 | `ErrorCodes` | `Code` constants (§4.9) | ❌ |
 | `IOSchema`, `parseSchema` | `Schema`, `ParseSchema`, `SchemaFor[T]` | ✅ |
@@ -327,7 +327,7 @@ still compiles (untyped constant), so no caller breaks. `ErrorList.Has(Code)`. `
 | `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
 | `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-Delivered: 14. Missing: 8. Partial: 2.
+Delivered: 15. Missing: 7. Partial: 2.
 
 ---
 
@@ -413,9 +413,9 @@ Rules this spec adds:
 
 ## ▶ RESUME HERE
 
-- Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split.
-- **Next, in order, each landing green under §8:** (1) `Decimal` — SPEC 0002, standalone;
-  (2) §4.9 `Code` constants — small, unblocks tests that name codes; (3) §4.5 `Definitions`;
+- Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split,
+  **`Decimal` (§4.10 / SPEC 0002)**.
+- **Next, in order, each landing green under §8:** (1) §4.9 `Code` constants — small, unblocks tests that name codes; (3) §4.5 `Definitions`;
   (4) §4.6 `Builder`; (5) §4.4 `Collection[T]`; (6) §4.7 `StreamMarshaler`; (7) §4.8 `JSON`;
   (8) §2 file renames, last, so history stays readable.
 - Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded

@@ -1,8 +1,6 @@
 package schema
 
 import (
-	"math/big"
-
 	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 )
@@ -27,7 +25,7 @@ func validateDecimal(val any, md *MemberDef, defs Defs) any {
 	if sc, ok := md.Constraints["scale"].(float64); ok && float64(d.Scale) != sc {
 		vfail(errs.MismatchedScale)
 	}
-	if pr, ok := md.Constraints["precision"].(float64); ok && float64(decimalDigits(d)) > pr {
+	if pr, ok := md.Constraints["precision"].(float64); ok && float64(d.Precision()) > pr {
 		vfail(errs.MismatchedPrecision)
 	}
 	bound := func(key string) (core.Decimal, bool) {
@@ -41,51 +39,14 @@ func validateDecimal(val any, md *MemberDef, defs Defs) any {
 		}
 		return dd, true
 	}
-	if m, ok := bound("min"); ok && cmpDecimal(d, m) < 0 {
+	if m, ok := bound("min"); ok && d.Cmp(m) < 0 {
 		vfail(errs.MismatchedMin)
 	}
-	if m, ok := bound("max"); ok && cmpDecimal(d, m) > 0 {
+	if m, ok := bound("max"); ok && d.Cmp(m) > 0 {
 		vfail(errs.MismatchedMax)
 	}
-	if m, ok := bound("multipleOf"); ok && !decimalMultiple(d, m) {
+	if m, ok := bound("multipleOf"); ok && !d.IsMultipleOf(m) {
 		vfail(errs.MismatchedMultipleOf)
 	}
 	return val // the original box; see validateString
-}
-
-// decimalDigits counts a decimal's significant digits (its precision).
-func decimalDigits(d core.Decimal) int {
-	s := new(big.Int).Abs(d.Coef).String()
-	if s == "0" {
-		return 1
-	}
-	return len(s)
-}
-
-// cmpDecimal compares two decimals numerically, aligning scales.
-func cmpDecimal(a, b core.Decimal) int {
-	av, bv := a.Coef, b.Coef
-	if a.Scale < b.Scale {
-		av = new(big.Int).Mul(av, pow10(b.Scale-a.Scale))
-	} else if b.Scale < a.Scale {
-		bv = new(big.Int).Mul(bv, pow10(a.Scale-b.Scale))
-	}
-	return av.Cmp(bv)
-}
-
-func decimalMultiple(d, m core.Decimal) bool {
-	dv, mv := d.Coef, m.Coef
-	if d.Scale < m.Scale {
-		dv = new(big.Int).Mul(dv, pow10(m.Scale-d.Scale))
-	} else if m.Scale < d.Scale {
-		mv = new(big.Int).Mul(mv, pow10(d.Scale-m.Scale))
-	}
-	if mv.Sign() == 0 {
-		return false
-	}
-	return new(big.Int).Mod(dv, mv).Sign() == 0
-}
-
-func pow10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }

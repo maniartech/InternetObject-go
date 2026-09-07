@@ -46,8 +46,6 @@ type (
 	Object = core.Object
 	// Member is one member of an Object.
 	Member = core.Member
-	// Decimal is an exact fixed-point value; its scale is part of the value.
-	Decimal = core.Decimal
 	// ErrorItem stands in for a record that failed, INSIDE projected data:
 	// the row keeps its position and carries this marker instead of a value,
 	// so the good records around it are untouched. Test for it with IsError.
