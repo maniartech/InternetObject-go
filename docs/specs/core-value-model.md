@@ -330,7 +330,7 @@ constant nothing raises. Verified by breaking it deliberately.
 | `loadInferred` | — | out of scope by decision |
 | `stringify`, `stringifyDocument` | `Marshal`, `Document.String` | ✅ |
 | `stringifyHeader` | `Schema.String`, `Definitions.String` | ✅ |
-| `toObject`, `toJSON` | `Value`, `JSON` (§4.8) | JSON ❌ |
+| `toObject`, `toJSON` | `Value`, `JSON` (§4.8) | ✅ |
 | `validate`, `validateObject`, `validateCollection` | `Validate`, `ValidateWith` (structs, slices; maps ❌) | ⚠️ |
 | `createStreamReader`, `IOStreamReader` | `Stream`, `StreamAs[T]` | ✅ |
 | `createStreamWriter` | `StreamMarshaler` (§4.7) | ✅ |
@@ -338,7 +338,7 @@ constant nothing raises. Verified by breaking it deliberately.
 | `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
 | `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-Delivered: 22. Missing: 0. Partial: 1.
+Delivered: 23. Missing: 0. Partial: 1 (`Validate` on maps).
 
 ---
 
@@ -425,8 +425,8 @@ Rules this spec adds:
 ## ▶ RESUME HERE
 
 - Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split,
-  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**, **`Collection[T]` (§4.4)**, **`StreamMarshaler` (§4.7)**.
-- **Next, in order, each landing green under §8:** (1) §4.8 `JSON`; (2) §2 file renames, last,
-  so history stays readable; (3) hygiene — the five dead functions.
+  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**, **`Collection[T]` (§4.4)**, **`StreamMarshaler` (§4.7)**, **`JSON` (§4.8)**.
+- **Next:** (1) §2 file renames; (2) hygiene — the five dead functions; (3) `Validate` on maps,
+  the last partial row.
 - Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded
   object base is still unchosen (ADR 0004 D4 note) but nothing in this spec depends on it.

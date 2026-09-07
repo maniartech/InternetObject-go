@@ -2,6 +2,7 @@ package internetobject_test
 
 import (
 	"bytes"
+	"encoding/json"
 	stdio "io"
 	"testing"
 
@@ -290,6 +291,49 @@ func FuzzStreamRoundTrip(f *testing.F) {
 		// A stream is also an ordinary document.
 		if _, err := io.Parse(buf.String()); err != nil {
 			t.Fatalf("the stream is not a valid document: %v\n%q", err, buf.String())
+		}
+	})
+}
+
+// FuzzJSONIsAlwaysValid asserts the projection never produces text
+// encoding/json cannot read, for ANY document this package can parse — the one
+// property a JSON encoder cannot be allowed to break.
+//
+// It is checked against the standard library rather than by inspection,
+// because "looks like JSON" and "is JSON" differ exactly at the escaping edge
+// cases a fuzzer finds.
+func FuzzJSONIsAlwaysValid(f *testing.F) {
+	for _, s := range fuzzSeedDocs {
+		f.Add(s)
+	}
+	for _, s := range playgroundSeeds(f) {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		doc, _ := io.Parse(src)
+		if doc == nil {
+			return
+		}
+		for _, opts := range []*io.JSONOptions{
+			nil,
+			{SkipErrors: true},
+			{Indent: "  "},
+			{SkipErrors: true, Indent: "\t"},
+		} {
+			out, err := doc.JSON(opts)
+			if err != nil {
+				continue // a value with no JSON spelling is a reported error
+			}
+			var v any
+			if err := json.Unmarshal(out, &v); err != nil {
+				t.Fatalf("invalid JSON from %q:\n%v\n%s", src, err, out)
+			}
+		}
+		// Two projections of one document agree.
+		a, errA := doc.JSON(nil)
+		b, errB := doc.JSON(nil)
+		if (errA == nil) != (errB == nil) || string(a) != string(b) {
+			t.Fatalf("JSON is not deterministic for %q", src)
 		}
 	})
 }
