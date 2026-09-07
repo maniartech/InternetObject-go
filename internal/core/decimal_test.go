@@ -1,6 +1,8 @@
 package core_test
 
 import (
+	"encoding/json"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -527,5 +529,137 @@ func TestScalesBeyondThePow10Table(t *testing.T) {
 	q, err := dec(t, "1").Quo(dec(t, "3"), 40)
 	if err != nil || q.Scale != 40 || !strings.HasPrefix(q.String(), "0.3333333333") {
 		t.Errorf("1/3 at scale 40 = %q (%v)", q.String(), err)
+	}
+}
+
+// A decimal that can only be built from its own coefficient is one nobody can
+// use. These are the routes a caller actually has.
+func TestConversionsFromNativeTypes(t *testing.T) {
+	if got := core.DecimalFromInt(42); got.String() != "42" || got.Scale != 0 {
+		t.Errorf("DecimalFromInt(42) = %q scale %d", got.String(), got.Scale)
+	}
+	if got := core.DecimalFromInt(-7); got.String() != "-7" {
+		t.Errorf("DecimalFromInt(-7) = %q", got.String())
+	}
+	// The unsigned range reaches past int64, so it must not go through one.
+	if got := core.DecimalFromInt(uint64(18446744073709551615)); got.String() != "18446744073709551615" {
+		t.Errorf("DecimalFromInt(max uint64) = %q", got.String())
+	}
+	if got := core.DecimalFromInt(int8(-128)); got.String() != "-128" {
+		t.Errorf("DecimalFromInt(int8) = %q", got.String())
+	}
+
+	// A float has no honest scale of its own, so the caller supplies one.
+	for _, tc := range []struct {
+		f     float64
+		scale int
+		want  string
+	}{
+		{19.99, 2, "19.99"}, {19.99, 4, "19.9900"}, {19.99, 0, "20"},
+		{-2.5, 0, "-3"}, {0.5, 0, "1"}, {1.0 / 3.0, 5, "0.33333"},
+	} {
+		got, err := core.DecimalFromFloat(tc.f, tc.scale)
+		if err != nil {
+			t.Fatalf("DecimalFromFloat(%v, %d): %v", tc.f, tc.scale, err)
+		}
+		if got.String() != tc.want {
+			t.Errorf("DecimalFromFloat(%v, %d) = %q, want %q", tc.f, tc.scale, got.String(), tc.want)
+		}
+	}
+	// A non-finite float has no decimal value at all.
+	for _, f := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if _, err := core.DecimalFromFloat(f, 2); err == nil {
+			t.Errorf("DecimalFromFloat(%v) was accepted", f)
+		}
+	}
+	if d, _ := core.DecimalFromFloat(1.5, -1); d.Scale != 0 {
+		t.Errorf("a negative scale was not clamped: %d", d.Scale)
+	}
+}
+
+// Int64 reports rather than truncating: a silent truncation in an exact type
+// is the failure the type exists to prevent.
+func TestInt64IsExactOrRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int64
+		ok   bool
+	}{
+		{"42", 42, true}, {"42.0", 42, true}, {"42.000", 42, true},
+		{"-42", -42, true}, {"0", 0, true}, {"0.0", 0, true},
+		{"42.5", 0, false}, {"0.1", 0, false},
+		{"9223372036854775807", 9223372036854775807, true},
+		{"9223372036854775808", 0, false}, // one past int64
+		{"99999999999999999999999", 0, false},
+	} {
+		got, ok := dec(t, tc.in).Int64()
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("Int64(%s) = %d, %v; want %d, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+	// Rounding is opt-in and explicit.
+	if got, ok := dec(t, "42.5").Round(0).Int64(); !ok || got != 43 {
+		t.Errorf("Round(0).Int64() = %d, %v", got, ok)
+	}
+}
+
+// Without these, encoding/json reflects over the struct and emits
+// {"Coef":1999,"Scale":2} — the representation leaking into a caller's API,
+// and unreadable back.
+func TestStandardEncoders(t *testing.T) {
+	d := dec(t, "19.99")
+
+	b, err := json.Marshal(d)
+	if err != nil || string(b) != `"19.99"` {
+		t.Fatalf("MarshalJSON = %s, %v", b, err)
+	}
+	var back core.Decimal
+	if err := json.Unmarshal(b, &back); err != nil || !back.Same(d) {
+		t.Errorf("JSON round trip: %v, %v", back, err)
+	}
+	// A JSON NUMBER is accepted too — it is what other producers send — and is
+	// read through its text, so no float is involved.
+	for _, in := range []string{`19.99`, `"19.99"`, `0.1`, `-0.05`} {
+		var v core.Decimal
+		if err := json.Unmarshal([]byte(in), &v); err != nil {
+			t.Fatalf("UnmarshalJSON(%s): %v", in, err)
+		}
+		want := strings.Trim(in, `"`)
+		if v.String() != want {
+			t.Errorf("UnmarshalJSON(%s) = %q, want %q", in, v.String(), want)
+		}
+	}
+	// null leaves the zero value, as encoding/json does elsewhere.
+	var z core.Decimal
+	if err := json.Unmarshal([]byte("null"), &z); err != nil || !z.IsZero() {
+		t.Errorf("null = %v, %v", z, err)
+	}
+	if err := json.Unmarshal([]byte(`"nope"`), &z); err == nil {
+		t.Error("a non-decimal string was accepted")
+	}
+
+	// Text, for every codec that honours TextMarshaler.
+	tb, err := d.MarshalText()
+	if err != nil || string(tb) != "19.99" {
+		t.Fatalf("MarshalText = %s, %v", tb, err)
+	}
+	var td core.Decimal
+	if err := td.UnmarshalText(tb); err != nil || !td.Same(d) {
+		t.Errorf("text round trip: %v, %v", td, err)
+	}
+	if err := td.UnmarshalText([]byte("nope")); err == nil {
+		t.Error("UnmarshalText accepted rubbish")
+	}
+
+	// Inside a struct, which is where the leak actually showed.
+	type row struct {
+		Price core.Decimal `json:"price"`
+	}
+	out, _ := json.Marshal(row{d})
+	if string(out) != `{"price":"19.99"}` {
+		t.Errorf("in a struct: %s", out)
+	}
+	if strings.Contains(string(out), "Coef") {
+		t.Errorf("the representation leaked: %s", out)
 	}
 }

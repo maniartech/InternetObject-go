@@ -1,6 +1,6 @@
 # SPEC 0002 — Decimal
 
-- **Status:** IMPLEMENTED 2026-09-07. Landed green: corpus 1,572+262, -race, seven fuzzers,
+- **Status:** IMPLEMENTED 2026-09-07 (§7 native conversions added the same day). Landed green: corpus 1,572+262, -race, seven fuzzers,
   100% statement coverage on `internal/core/decimal.go`, hot benchmarks unmoved.
 - **Decides:** the value semantics and API of `core.Decimal`. Sits under
   [ADR 0011](../decisions/0011-core-model-and-layout.md) and follows
@@ -93,6 +93,21 @@ func (d Decimal) Sign() int
 func (d Decimal) IsZero() bool
 ```
 
+**These operators are load-bearing, not conveniences.** `type-decimal.go` validates every
+constraint the decimal typedef declares through them, so removing one as "unused public API"
+breaks validation:
+
+| Constraint | Operator |
+| --- | --- |
+| `min`, `max` | `Cmp` |
+| `multipleOf` | `IsMultipleOf` |
+| `precision` | `Precision` |
+| `scale` | the `Scale` field |
+| `choices` | `Same`, through `core.Equal` |
+
+A test asserts each constraint still reports its designated code, so the coupling cannot
+rot silently.
+
 `Cmp` is what validation's `min`/`max`/`multipleOf` already do (scale-aligning), promoted onto
 the type; `type-decimal.go` calls it instead of carrying its own copy. `Same` is what
 `core.Equal` already does for two decimals and stays what `choices` and the corpus adapter use
@@ -181,20 +196,72 @@ an operand is* — which the reference fails. Escalated as finding #26.
 
 ---
 
-## 7. Construction and conversion
+## 7. Construction and conversion — in and out of Go's own types
+
+A decimal that can only be built from its own coefficient is a decimal nobody can use. Every
+route a caller actually has — a literal, a Go number, a database column, a JSON payload —
+must lead in and back out without silently losing the exactness the type exists for.
+
+### 7.1 Constructors
 
 ```go
-func ParseDecimal(s string) (Decimal, error)      // "1.50", "-0.05"; the literal grammar minus the m
-func NewDecimal(coef int64, scale int) Decimal    // 150, 2 → 1.50m
-func DecimalFromBig(coef *big.Int, scale int) Decimal   // copies coef
-func (d Decimal) Float64() float64                // lossy, documented as such
-func (d Decimal) Precision() int
-func (d Decimal) String() string                  // exists; unchanged
+func ParseDecimal(s string) (Decimal, error)             // "1.50", "-0.05"
+func NewDecimal(coef int64, scale int) Decimal           // 150, 2 → 1.50
+func DecimalFromInt[T Integer](i T) Decimal              // exact, scale 0
+func DecimalFromFloat(f float64, scale int) (Decimal, error)  // rounded to scale
+func DecimalFromBig(coef *big.Int, scale int) Decimal    // copies coef
 ```
 
-`ParseDecimal` reuses the tokenizer's literal rules through one shared function so a string
-accepted here is a string the parser accepts, and vice versa — one grammar, one site.
-Vocabulary follows ADR 0004 D0: `Parse`/`String` are the pair; no `Load`, `Read`, `Write`.
+`DecimalFromFloat` **takes a scale and returns an error**, and both are the point. A float64
+cannot represent `19.99`, so there is no honest scale to infer — asking the caller is the only
+way the result is theirs rather than the binary expansion's. A non-finite float is an error
+rather than a silent zero.
+
+`ParseDecimal` reuses the tokenizer's literal rules, so a string it accepts is a string the
+document parser accepts.
+
+### 7.2 Accessors
+
+```go
+func (d Decimal) String() string          // exact, always
+func (d Decimal) Float64() float64        // LOSSY, documented
+func (d Decimal) Int64() (int64, bool)    // exact or false — never a silent truncation
+func (d Decimal) Precision() int
+func (d Decimal) Scale int                // the field
+```
+
+`Int64` reports rather than truncates. A decimal with a fractional part, or one beyond
+int64's range, returns `false`; a caller who wants rounding says `d.Round(0).Int64()`.
+
+### 7.3 The standard encoders
+
+```go
+func (d Decimal) MarshalJSON() ([]byte, error)
+func (d *Decimal) UnmarshalJSON(b []byte) error
+func (d Decimal) MarshalText() ([]byte, error)
+func (d *Decimal) UnmarshalText(b []byte) error
+```
+
+Without these, `encoding/json` reflects over the struct and emits
+`{"Coef":1999,"Scale":2}` — the library's representation leaking into someone's API — and
+cannot read it back at all. **JSON carries a decimal as a STRING**, for the reason §4.8 of
+SPEC 0001 gives: a JSON number is a double by convention, and handing an exact type to one
+silently is the failure this type exists to prevent. `UnmarshalJSON` accepts a JSON number
+too, since that is what other producers send, and reads it through its literal text so no
+float is ever involved.
+
+`MarshalText`/`UnmarshalText` make the same value work with every codec that honours them —
+`encoding/xml`, YAML libraries, map keys, `flag.Value`-style parsing — from one implementation.
+
+### 7.4 Binding to Go fields
+
+A `decimal` in a document binds to a Go `Decimal` (exact), and also to `string` (exact) and
+`float64` (lossy, and the caller asked for a float). It binds to an integer field only when
+the value has no fractional part, by the same rule as `Int64`.
+
+In the other direction a Go `string`, integer or float in a `decimal`-typed member is
+converted on the way in, so a caller is not forced to build a `Decimal` by hand to satisfy a
+schema they did not write.
 
 ---
 
@@ -229,4 +296,6 @@ benchmarks unchanged to the allocation (§1 invariant 5 holds).
 Findings #24 (decimal `choices` never match — still open, io-go keeps structural equality),
 #25 (**closed**), #26 (`mul` data loss — new) in `io-js2/.private/docs/go-port/FINDINGS.md`.
 
-**Next: SPEC 0001 §4.9** — the `Code` constants.
+§7's conversions are in: `DecimalFromInt`, `DecimalFromFloat`, `Int64`, and the four standard
+encoder methods. The operator/validation coupling is pinned by
+`TestValidationUsesTheDecimalOperators`, which names the operator each constraint depends on.

@@ -40,3 +40,17 @@ func NewDecimal(coef int64, scale int) Decimal { return core.NewDecimal(coef, sc
 // DecimalFromBig builds a decimal from an arbitrary-precision coefficient,
 // copying it so later changes to the argument cannot reach the value.
 func DecimalFromBig(coef *big.Int, scale int) Decimal { return core.DecimalFromBig(coef, scale) }
+
+// DecimalFromInt converts any Go integer exactly, at scale 0.
+func DecimalFromInt[T core.Integer](i T) Decimal { return core.DecimalFromInt(i) }
+
+// DecimalFromFloat converts a float64 at the given scale, rounding half away
+// from zero.
+//
+// The scale is required because a float64 cannot represent 19.99 — it holds
+// 19.989999999999998436805981327 — so there is no honest scale to infer, and
+// inferring one would hand back the binary expansion rather than the number
+// meant. A NaN or an infinity is an error.
+func DecimalFromFloat(f float64, scale int) (Decimal, error) {
+	return core.DecimalFromFloat(f, scale)
+}

@@ -187,6 +187,31 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 			rv.Set(reflect.ValueOf(d))
 			return nil
 		}
+		// A schema-less document has no `decimal` type to read, so a value
+		// meant for a Decimal field arrives as a number, a bigint or a string.
+		// Each converts exactly, through the value's own TEXT — never through
+		// a float — so nothing is lost binding into the exact type.
+		switch x := v.(type) {
+		case string:
+			d, err := core.ParseDecimal(x)
+			if err != nil {
+				return typeMismatch(at, v, t)
+			}
+			rv.Set(reflect.ValueOf(d))
+			return nil
+		case float64:
+			// The shortest text that round-trips this float is also the scale
+			// a writer would emit for it.
+			d, err := core.ParseDecimal(strconv.FormatFloat(x, 'f', -1, 64))
+			if err != nil {
+				return typeMismatch(at, v, t)
+			}
+			rv.Set(reflect.ValueOf(d))
+			return nil
+		case *big.Int:
+			rv.Set(reflect.ValueOf(core.DecimalFromBig(x, 0)))
+			return nil
+		}
 		return typeMismatch(at, v, t)
 	case t == timeType:
 		if tm, ok := v.(time.Time); ok {
@@ -211,6 +236,12 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 			rv.SetString(s)
 			return nil
 		}
+		// A decimal into a string field is EXACT, scale included — the one
+		// lossless way to carry one through a type that is not Decimal.
+		if d, ok := v.(core.Decimal); ok {
+			rv.SetString(d.String())
+			return nil
+		}
 	case reflect.Bool:
 		if b, ok := v.(bool); ok {
 			rv.SetBool(b)
@@ -229,6 +260,12 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 	case reflect.Float32, reflect.Float64:
 		if f, ok := v.(float64); ok {
 			rv.SetFloat(f)
+			return nil
+		}
+		// Lossy, and the caller asked for a float: a field declared float64
+		// has already accepted that a decimal will not fit it exactly.
+		if d, ok := v.(core.Decimal); ok {
+			rv.SetFloat(d.Float64())
 			return nil
 		}
 	case reflect.Slice:
@@ -273,6 +310,9 @@ func setValue(rv reflect.Value, v any, at pathAt) error {
 // integralOf extracts an exact int64 from the numeric wire types.
 func integralOf(v any) (int64, bool) {
 	switch x := v.(type) {
+	case core.Decimal:
+		// Exact or nothing: 42.0 is 42, 42.5 is not an integer at all.
+		return x.Int64()
 	case float64:
 		if x != math.Trunc(x) || math.IsInf(x, 0) || math.IsNaN(x) {
 			return 0, false

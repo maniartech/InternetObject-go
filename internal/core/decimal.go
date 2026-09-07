@@ -8,7 +8,9 @@ package core
 
 import (
 	"errors"
+	"math"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -68,6 +70,120 @@ func DecimalFromBig(coef *big.Int, scale int) Decimal {
 		c.Set(coef)
 	}
 	return Decimal{Coef: c, Scale: scale}
+}
+
+// Integer is every Go integer type, so DecimalFromInt takes the one a caller
+// happens to hold rather than making them convert first.
+type Integer interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// DecimalFromInt converts a Go integer exactly, at scale 0.
+func DecimalFromInt[T Integer](i T) Decimal {
+	// The unsigned range reaches past int64, so the conversion goes through
+	// the decimal text rather than assuming int64 can hold it.
+	if i < 0 {
+		return Decimal{Coef: big.NewInt(int64(i))}
+	}
+	c := new(big.Int).SetUint64(uint64(i))
+	return Decimal{Coef: c}
+}
+
+// DecimalFromFloat converts a float64 at the GIVEN scale, rounding half away
+// from zero — the same rule Round uses, so the two never disagree.
+//
+// The scale is required and there is no version without it, deliberately. A
+// float64 cannot represent 19.99 — it holds 19.989999999999998436805981327 —
+// so there is no honest scale to infer from one, and inferring would hand the
+// caller the binary expansion instead of the number they meant. Saying
+// DecimalFromFloat(19.99, 2) says what was meant.
+//
+// A NaN or an infinity has no decimal value at all and is an error rather than
+// a silent zero.
+func DecimalFromFloat(f float64, scale int) (Decimal, error) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return Decimal{}, errors.New("internet-object: cannot convert " +
+			strconv.FormatFloat(f, 'g', -1, 64) + " to a decimal")
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	// Take the SHORTEST text that round-trips this float — the number the
+	// caller wrote, not its binary expansion — and then round with this type's
+	// own rule.
+	//
+	// Not strconv.FormatFloat(f, 'f', scale, 64), which rounds half to EVEN:
+	// that would make DecimalFromFloat(-2.5, 0) give -2 while Round(0) gives
+	// -3, two rounding modes inside one type.
+	exact, err := ParseDecimal(strconv.FormatFloat(f, 'f', -1, 64))
+	if err != nil {
+		return Decimal{}, err
+	}
+	return exact.Round(scale), nil
+}
+
+// Int64 returns the value as an int64 when it is exactly one, and reports
+// false otherwise — a fractional part, or a magnitude int64 cannot hold.
+//
+// It never truncates silently. A caller who wants rounding asks for it:
+// d.Round(0).Int64().
+func (d Decimal) Int64() (int64, bool) {
+	whole, ok := d.Rescale(0)
+	if !ok {
+		return 0, false // it has a fractional part
+	}
+	if !whole.coef().IsInt64() {
+		return 0, false // beyond int64
+	}
+	return whole.coef().Int64(), true
+}
+
+// MarshalText renders the decimal exactly, so every codec that honours
+// encoding.TextMarshaler — xml, yaml, map keys, database drivers — carries the
+// value rather than the struct behind it.
+func (d Decimal) MarshalText() ([]byte, error) { return []byte(d.String()), nil }
+
+// UnmarshalText reads what MarshalText wrote.
+func (d *Decimal) UnmarshalText(b []byte) error {
+	v, err := ParseDecimal(string(b))
+	if err != nil {
+		return err
+	}
+	*d = v
+	return nil
+}
+
+// MarshalJSON renders the decimal as a JSON STRING.
+//
+// A JSON number is a double by convention, and handing an exact type to one
+// silently loses the digits this type exists to keep. Without this method
+// encoding/json reflects over the struct instead and emits
+// {"Coef":1999,"Scale":2} — the representation leaking into a caller's API,
+// and unreadable back.
+func (d Decimal) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + d.String() + `"`), nil
+}
+
+// UnmarshalJSON reads a decimal from a JSON string OR a JSON number.
+//
+// A number is accepted because that is what other producers send; it is read
+// through its literal TEXT, so no float64 is involved and nothing is lost on
+// the way in.
+func (d *Decimal) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if s == "null" {
+		return nil // leave the zero value, as encoding/json does elsewhere
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	v, err := ParseDecimal(s)
+	if err != nil {
+		return err
+	}
+	*d = v
+	return nil
 }
 
 // String renders the decimal without its `m` suffix, at its own scale:
