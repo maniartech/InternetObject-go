@@ -60,12 +60,6 @@ func appendObjectKey(dst []byte, key string) []byte {
 	return appendRegularString(dst, key)
 }
 
-// isSpaceByte reports ASCII whitespace — the word separators a bare run can
-// carry (multi-byte Unicode spaces never appear inside one unquoted word).
-func isSpaceByte(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
-}
-
 // ── exported spelling helpers ──────────────────────────────────────────────
 //
 // These are THE sites that decide how a value is spelled. A caller that walks

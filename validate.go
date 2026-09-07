@@ -76,8 +76,46 @@ func validateAgainst(v any, override *schema.Schema) error {
 			records = append(records, rec)
 		}
 		return checkRecords(schemaOr(override, plan), records)
+	// A MAP or an *Object is a record too, and the marshaler already knows how
+	// to encode one (isRecordType). What it does NOT have is a derived schema:
+	// a map declares no types, so there is nothing to check it against unless
+	// the caller supplies one.
+	case isRecordType(rv.Type()):
+		if override == nil {
+			return &MarshalError{Path: "$", Msg: "a map or an Object declares no types, " +
+				"so it has nothing to validate against; use ValidateWith with a schema"}
+		}
+		rec, err := encodeValue(rv, "", rootPath)
+		if err != nil {
+			return err
+		}
+		obj, ok := rec.(*core.Object)
+		if !ok {
+			return &MarshalError{Path: "$", Msg: "cannot validate a nil record"}
+		}
+		return checkRecords(override, []any{obj})
+
+	case rv.Kind() == reflect.Slice && isRecordType(rv.Type().Elem()):
+		if override == nil {
+			return &MarshalError{Path: "$", Msg: "a map or an Object declares no types, " +
+				"so it has nothing to validate against; use ValidateWith with a schema"}
+		}
+		var records []any
+		for i := 0; i < rv.Len(); i++ {
+			el := rv.Index(i)
+			if isNilRecord(el) {
+				return &MarshalError{Path: rootPath.record(i).String(),
+					Msg: "a collection record cannot be nil"}
+			}
+			rec, err := encodeValue(el, "", rootPath.record(i))
+			if err != nil {
+				return err
+			}
+			records = append(records, rec)
+		}
+		return checkRecords(override, records)
 	}
-	return &MarshalError{Path: "$", Msg: "Validate takes a struct or a slice of structs"}
+	return &MarshalError{Path: "$", Msg: "Validate takes a struct, a map, an Object, or a slice of those"}
 }
 
 // schemaOr picks the explicitly given schema over the type-derived one.

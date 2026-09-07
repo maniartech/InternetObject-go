@@ -331,14 +331,15 @@ constant nothing raises. Verified by breaking it deliberately.
 | `stringify`, `stringifyDocument` | `Marshal`, `Document.String` | ✅ |
 | `stringifyHeader` | `Schema.String`, `Definitions.String` | ✅ |
 | `toObject`, `toJSON` | `Value`, `JSON` (§4.8) | ✅ |
-| `validate`, `validateObject`, `validateCollection` | `Validate`, `ValidateWith` (structs, slices; maps ❌) | ⚠️ |
+| `validate`, `validateObject`, `validateCollection` | `Validate`, `ValidateWith` (structs, maps, Objects, slices of those) | ✅ |
 | `createStreamReader`, `IOStreamReader` | `Stream`, `StreamAs[T]` | ✅ |
 | `createStreamWriter` | `StreamMarshaler` (§4.7) | ✅ |
 | `createPushSource`, `BufferTransport` | an `io.Reader` — `io.Pipe` is the push source, `bufio` the transport | ✅ by the standard library |
 | `IOStreamError`, `StreamErrorCode` | `Error` with `Category: "stream"`, codes in `Code` | ✅ |
 | `proxyDocument`, `proxyValue`, `subscribe`, `version`, tag functions | — | not ported, §6 |
 
-Delivered: 23. Missing: 0. Partial: 1 (`Validate` on maps).
+**Delivered: 24. Missing: 0. Partial: 0.** Every capability the reference exports, except the
+one excluded by decision, is delivered in Go's own idiom.
 
 ---
 
@@ -425,8 +426,8 @@ Rules this spec adds:
 ## ▶ RESUME HERE
 
 - Delivered: `Object` (§4.1), `Section` errors (§4.3), marshal record dispatch, writer split,
-  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**, **`Collection[T]` (§4.4)**, **`StreamMarshaler` (§4.7)**, **`JSON` (§4.8)**.
-- **Next:** (1) §2 file renames; (2) hygiene — the five dead functions; (3) `Validate` on maps,
-  the last partial row.
+  **`Decimal` (§4.10 / SPEC 0002)**, **`Code` constants (§4.9)**, **`Definitions` (§4.5)**, **`Builder` (§4.6)**, **`Collection[T]` (§4.4)**, **`StreamMarshaler` (§4.7)**, **`JSON` (§4.8)**, **`Validate` on maps and Objects**, the §2 file layout, and the dead code removed.
+- **Next:** nothing in this spec. Remaining work is outside it: ADR 0004 phases 1-2 (the
+  Level-1 embedded surface), CI's `CORPUS_TOKEN`, and the branch hygiene before merge.
 - Open decision for the owner: none. The base-type name for the ADR 0004 Level-1 embedded
   object base is still unchosen (ADR 0004 D4 note) but nothing in this spec depends on it.

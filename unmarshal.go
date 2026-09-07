@@ -91,28 +91,6 @@ func bindDoc(doc *document.Doc, v any) error {
 	}
 }
 
-// UnmarshalError is a binding fault: the value at Path cannot be stored in
-// the target's Go type. Wire-level faults return as the ErrorList instead.
-type UnmarshalError struct {
-	Path string
-	Msg  string
-}
-
-func (e *UnmarshalError) Error() string { return e.Path + ": " + e.Msg }
-
-// sectionNames lists a document's section names for an error message.
-func sectionNames(doc *document.Doc) string {
-	names := make([]string, 0, len(doc.Sections))
-	for _, sec := range doc.Sections {
-		n := sec.Name
-		if n == "" {
-			n = DefaultSectionName
-		}
-		names = append(names, n)
-	}
-	return strings.Join(names, ", ")
-}
-
 // allRecords collects every record in document order.
 func allRecords(doc *document.Doc) []*core.Object {
 	var out []*core.Object
@@ -352,4 +330,17 @@ func absorbedByCollections(doc *document.Doc, elem reflect.Value) bool {
 	// A fault attributed to no section at all — a header or binding fault — is
 	// never a row fault, so it is never absorbed.
 	return accounted == len(doc.Errors)
+}
+
+// sectionNames lists a document's section names for an error message.
+func sectionNames(doc *document.Doc) string {
+	names := make([]string, 0, len(doc.Sections))
+	for _, sec := range doc.Sections {
+		n := sec.Name
+		if n == "" {
+			n = DefaultSectionName
+		}
+		names = append(names, n)
+	}
+	return strings.Join(names, ", ")
 }

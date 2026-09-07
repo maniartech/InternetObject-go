@@ -253,18 +253,4 @@ func refSpelling(ref string) string {
 	return regularString(ref)
 }
 
-// hasBareUnsafeControl reports a C0 control character other than \n\r\t —
-// characters that survive neither a bare word, an open string, nor a raw
-// string (a raw \b splits the word and the remainder re-reads as a number:
-// silent data loss, found by the fuzzer). Such strings must be quoted with
-// escapes.
-func hasBareUnsafeControl(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c < 0x20 && c != '\n' && c != '\r' && c != '\t' {
-			return true
-		}
-	}
-	return false
-}
-
 // autoString picks the leanest spelling that reads back as the same string.

@@ -21,9 +21,6 @@ func AppendTemporalValue(dst []byte, t time.Time, declared string) []byte {
 	return appendTemporal(dst, t, declared)
 }
 
-// AppendKey appends an object key, quoted only when it must be.
-func AppendKey(dst []byte, key string) []byte { return appendObjectKey(dst, key) }
-
 // AppendRecord renders ONE record the way a document section would, so a
 // stream writer frames records with the same code the document writer uses
 // rather than a second, drifting copy of it.

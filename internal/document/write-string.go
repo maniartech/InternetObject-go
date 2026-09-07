@@ -118,10 +118,6 @@ func appendRegularString(dst []byte, s string) []byte {
 	return append(dst, '"')
 }
 
-func openEscaped(s string) string {
-	return string(appendOpenEscaped(nil, s))
-}
-
 func appendOpenEscaped(dst []byte, s string) []byte {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
