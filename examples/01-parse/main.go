@@ -26,8 +26,8 @@ func main() {
 	records := doc.Value().([]any)
 	fmt.Println("records loaded:", len(records))
 	first := records[0].(*io.Object)
-	if i := first.Find("name"); i >= 0 {
-		fmt.Println("first name:", first.Members[i].Value)
+	if name, ok := first.Get("name"); ok {
+		fmt.Println("first name:", name)
 	}
 
 	// String() is the canonical writer: its output always re-parses to the

@@ -67,7 +67,8 @@ func main() {
 			continue
 		}
 		rec := item.Value.(*io.Object)
-		fmt.Printf("stream record %d ok: %v\n", item.Index, rec.Members[rec.Find("name")].Value)
+		name, _ := rec.Get("name")
+		fmt.Printf("stream record %d ok: %v\n", item.Index, name)
 	}
 
 	// A schema can equally be lifted out of another document's header, or

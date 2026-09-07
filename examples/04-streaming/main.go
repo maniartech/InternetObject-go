@@ -32,7 +32,8 @@ func main() {
 				continue
 			}
 			rec := item.Value.(*io.Object)
-			name, _ := rec.Members[rec.Find("name")].Value.(string)
+			v, _ := rec.Get("name")
+			name, _ := v.(string)
 			fmt.Printf("  record %d ok: %s (schema %s)\n", item.Index, name, item.SchemaName)
 		}
 	}
