@@ -232,6 +232,15 @@ all. Export them as typed constants.
 
 ---
 
+### 5.6 `Decimal` — comparison, arithmetic, precision
+
+`core.Decimal` is a coefficient and a scale with a `String()`. No constructor, no comparison,
+no arithmetic; the behaviour lives as unexported helpers inside `internal/schema`. Specified
+separately in **[SPEC 0002](decimal.md)**, which also records two divergences from the
+reference the analysis exposed (precision of `0.05m`; `choices` on decimals).
+
+---
+
 ## 6. What is not ported, and why
 
 | Reference | Verdict |
@@ -264,9 +273,39 @@ Nothing in §5 lands without all of:
 
 ---
 
+---
+
+## Review 2026-09-07 — open items, not yet resolved
+
+A critical pass against the code found these. They are recorded here so the spec is not built
+against as written; each is resolved by revising the section named, not by implementing around it.
+
+1. **§5.2 `StreamWriter.Write` is banned vocabulary** (ADR 0004 D0 lists `Write`). Reshape
+   as a function like the reader's `Stream`.
+2. **§4 `core.Collection` contradicts ADR 0004 D4**, which already specifies `io.Collection[T]`
+   with a job (tolerant row binding: `Items/Errors/Len/All/Add`). §4's type has no consumer.
+   Drop §4; build ADR 0004's.
+3. **Ownership is unstated.** `Value()`/`Records()` return views; `Object` is now mutable; so
+   editing a projected record rewrites the parsed document and races if shared. Needs a rule:
+   a parsed `Document` is immutable and shareable; mutation belongs to the builder.
+4. **§5.1 `String() (string, error)` collides with `Document.String() string`.** Make the
+   builder its own type and validate at `Add` (also what the reference does).
+5. **§5.1 `Define` is definitions mutation, which §2 forbids.** Resolve: allowed before any
+   record is validated (builder), never on a parsed document.
+6. **§1.1 OCP claim is false** — adding a type also touches `family.go`, `validate.go`,
+   `write-typedef.go`, `gen/types.go`, `enc-kind.go`. Fix the code or drop the claim.
+7. **`Object` doc says the scan was "measured"; it was not.** Reword or measure.
+8. **§5.3 overclaims** — `headerFor` caches the default schema only and declines variables
+   and `$Name` selectors; a shareable `Defs` is not "already implemented".
+9. **§7.5 benchmarks were not run for the last two landings.** Allocation counts unchanged
+   on the three hot benchmarks, but the rule was broken by its author.
+10. **§5.4 `JSON()` underspecified**: Decimal/bigint precision, temporal form, positional
+    keys, error rows, key order. **§5.5** typed codes change `Error.Code`'s type — breaking.
+    **§5.2** per-record flush is a syscall per record; buffer, flush on `Close`.
+
 ## ▶ RESUME HERE
 
 - §3 `core.Object` — **done**.
 - Marshal record dispatch — **done** (three defects fixed; `isRecordType`).
-- **Next:** §4 `core.Collection`, then §5.1 the builder, then §5.2 `StreamWriter`,
-  then §5.3–5.5.
+- **Next:** resolve the review items above (revise §4, §5.1, §5.2, add an ownership section),
+  then SPEC 0002 Decimal, then §5.1 the builder, then the stream writer, then §5.3–5.5.
