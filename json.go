@@ -2,9 +2,9 @@ package internetobject
 
 import (
 	"encoding/base64"
+	"fmt"
 	"math"
 	"math/big"
-	"reflect"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -117,8 +117,11 @@ func (e *jsonEncoder) value(v any, depth int) {
 	case []byte:
 		e.str(base64.StdEncoding.EncodeToString(x))
 	default:
-		e.err = &MarshalError{Path: "$", Msg: "cannot render " +
-			typeNameOf(v) + " as JSON"}
+		// Defensive: every value the pipeline produces is handled above. This
+		// exists so that ADDING a value type cannot silently emit invalid
+		// JSON — it reports instead.
+		e.err = &MarshalError{Path: "$",
+			Msg: fmt.Sprintf("cannot render %T as JSON", v)}
 	}
 }
 
@@ -256,11 +259,4 @@ func temporalJSON(t time.Time) string {
 	default:
 		return u.Format(time.RFC3339Nano)
 	}
-}
-
-func typeNameOf(v any) string {
-	if v == nil {
-		return "nil"
-	}
-	return reflect.TypeOf(v).String()
 }

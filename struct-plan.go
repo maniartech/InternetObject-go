@@ -252,9 +252,26 @@ func objectFormWithFlags(ann any, optional, nullable bool) *core.Object {
 		}
 		out.Members = append(out.Members, core.Member{Key: "of", Value: elem})
 	case *core.Object:
-		out.Members = append(out.Members,
-			core.Member{Positional: true, Value: "object"},
-			core.Member{Key: "schema", Value: tv})
+		// An object annotation is one of two different things, and they are
+		// told apart by the schema compiler's own rule:
+		//
+		//   {int, min: 0}       a TYPEDEF — already the form we want, so the
+		//                       flags are appended to it
+		//   {a: int, b: string} a nested object SCHEMA — wrapped as
+		//                       {object, schema: …}
+		//
+		// Treating every object as the second wrapped a typedef into
+		// `{object, schema: {int, min: 0}}`, where `int` became a stray
+		// positional and the whole thing failed as unknown-type. It only
+		// showed up for a QUOTED member name that was also optional, since
+		// nothing else reaches this branch.
+		if schema.IsTypedefForm(tv) {
+			out.Members = append(out.Members, tv.Members...)
+		} else {
+			out.Members = append(out.Members,
+				core.Member{Positional: true, Value: "object"},
+				core.Member{Key: "schema", Value: tv})
+		}
 	}
 	if optional {
 		out.Members = append(out.Members, core.Member{Key: "optional", Value: true})

@@ -365,3 +365,20 @@ func compileArrayElem(v any, path string) *MemberDef {
 	fail(errs.UnknownType)
 	return nil
 }
+
+// IsTypedefForm reports whether an object is a TYPEDEF (`{int, min: 0}`)
+// rather than a nested object schema (`{a: int, b: string}`).
+//
+// Both are objects, and telling them apart is the same decision
+// typedefTypeName makes — exported so callers outside this package ask it here
+// instead of keeping a second copy. The struct planner needed exactly this: it
+// treated every object annotation as a nested schema, so a `schema` tag of
+// `{int, min: 0}` on a quoted optional member was wrapped as
+// `{object, schema: {int, min: 0}}` and failed to compile as unknown-type.
+func IsTypedefForm(obj *core.Object) bool {
+	if obj == nil {
+		return false
+	}
+	_, ok := typedefTypeName(obj)
+	return ok
+}
