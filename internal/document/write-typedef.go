@@ -78,30 +78,22 @@ func (d *Doc) longFormBodyOf(md *schema.MemberDef) string {
 	if md.Type == "object" && md.Schema != nil {
 		return "object, schema: " + d.nestedSchemaAnnotation(md.Schema)
 	}
-	if md.Type == "array" && md.Of != nil {
-		if isUntypedElem(md.Of) {
-			return "array"
-		}
-		return "array, of: " + d.arrayElemAnnotation(md.Of)
-	}
 	typeName := md.Type
 	if typeName == "" {
 		typeName = "any"
 	}
-	parts := []string{typeName}
-	for _, key := range md.Keys {
-		var v any
-		switch key {
-		case "default":
-			v = md.Default
-		case "choices":
-			v = md.Choices
-		default:
-			v = md.Constraints[key]
-		}
-		parts = append(parts, key+":"+d.constraintValue(typeName, v))
-	}
-	return strings.Join(parts, ", ")
+	// The SAME parts the short form writes, not a second copy of the rule.
+	//
+	// This used to carry its own copy of typeWithConstraints' key loop, and the
+	// copy had drifted twice. It had no `anyOf` case, so an anyOf — which lives
+	// in md.AnyOf, not md.Constraints — was read as nil and written `anyOf:null`,
+	// a document that no longer re-parses (FuzzParse, 2026-09-13). And its array
+	// branch returned `array, of: T` before the loop, dropping every constraint:
+	// `00?: {array, of: int, minLen: 2}` was written without `minLen`, re-parsed
+	// cleanly, and silently accepted arrays it used to reject. Both were
+	// reachable only through a member name that needs quoting, since only that
+	// forces the long form.
+	return strings.Join(d.constraintParts(typeName, md), ", ")
 }
 
 // memberAnnotation renders a memberdef's type annotation — empty for a bare
@@ -187,6 +179,15 @@ func (d *Doc) arrayElemAnnotation(of *schema.MemberDef) string {
 }
 
 func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string {
+	return "{" + strings.Join(d.constraintParts(typeName, md), ", ") + "}"
+}
+
+// constraintParts is THE spelling of a typedef's inside — its type, `of:` for a
+// typed array, and every declared key in declaration order. The short form
+// wraps it in braces; the long form (a member name that needs quoting) appends
+// the optional/null flags to it. One statement of the rule, so the two forms
+// cannot drift apart again.
+func (d *Doc) constraintParts(typeName string, md *schema.MemberDef) []string {
 	parts := []string{typeName}
 	for _, key := range md.Keys {
 		var v any
@@ -212,7 +213,7 @@ func (d *Doc) typeWithConstraints(typeName string, md *schema.MemberDef) string 
 			parts = append(parts[:1], append([]string{"of: " + d.arrayElemAnnotation(md.Of)}, parts[1:]...)...)
 		}
 	}
-	return "{" + strings.Join(parts, ", ") + "}"
+	return parts
 }
 
 // constraintValue renders a constraint's value: @-references resolved,
