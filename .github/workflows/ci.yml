@@ -100,6 +100,12 @@ jobs:
 
       # The corpus ladder (1,572 + 262) runs inside this. A missing corpus FAILS
       # the suite rather than skipping it, so a broken checkout cannot pass CI.
+      #
+      # So do the performance budgets (perf-budget_test.go): bytes and
+      # allocations per operation plus the document's wire size, enforced on the
+      # `stable` jobs. Go 1.24 allocates differently for reasons unrelated to
+      # this library, so those jobs skip the allocation budgets visibly. Load-
+      # independent, which is why they can gate CI where timings cannot.
       - name: test
         run: go test ./...
 

@@ -65,7 +65,7 @@ Two related loose ends ADR 0004 D4 leaves open, both blocked on this: the name f
 embedded base (the `Object`→`Record` rename was withdrawn 2026-09-07), and `StreamAs[T]`,
 which is a small typed wrapper over `Stream` and could ship independently.
 
-## 4. Encode regressed below `encoding/json` — found 2026-09-13, **not fixed**
+## 4. Encode regressed below `encoding/json` — found 2026-09-13, **FIXED 2026-09-13**
 
 **Measured, and bisected to one commit.** `BenchmarkCompareMarshalStruct_IO` (1,000 records):
 
@@ -93,7 +93,39 @@ hot benchmarks it checked (2954 / 21 / 16 / 14), not for the 1,000-record marsha
 There is still no benchmark gate in CI, and a bytes-per-op regression would slip past an
 allocation-count gate anyway.
 
-**Proposed, not applied** (the writer's quoting rule is a correctness decision, so spec first):
+**Proposed** (the writer's quoting rule is a correctness decision, so spec first) — and approved by the owner the same day:
 keep the reader's own space set, and check only the first word for a numeric or broken-numeric
 reading. Gate it with the round-trip fuzzers that found the original bug, plus a test pinning
 that `Person 0` is written open, plus a CI check on bytes/op for the comparison benchmarks.
+
+### Resolution (2026-09-13)
+
+**Fixed as proposed, and measured back to the numbers before the regression:** 22 allocations
+and 180,920 bytes per 1,000-record marshal, and a 64,125-byte document.
+
+- **The rule now lives in one place.** `tokenizer.BareValueReadsNonString` states the scanner's
+  one-word rule, and the writer asks it. The two helpers the writer used to combine,
+  `WordReadsNonString` and `WordIsBrokenClaim`, are gone.
+- **The writer asks about the bytes it will write, not the raw string.** My first version
+  classified the raw text and was wrong: `0X0<TAB>"` is written `0X0	\"`, and to the reader an
+  escape is part of a word, so that is ONE word and a broken hex claim. The round-trip fuzzers
+  caught it within seconds. My own new quoting fuzzer did not, because I had excluded structural
+  and control characters from its safety check along with its minimality check. Safety now has no
+  excluded domain.
+- **The gate that was missing now exists.** `perf-budget_test.go` fails the ordinary `go test`
+  run when bytes or allocations per operation exceed a committed budget, and pins the document's
+  wire size exactly. It is load-independent, so it works in CI. It was checked by putting the
+  regression back: it failed on allocations (23 > 22), on bytes (+54.3%) and on wire size
+  (+2,000). An earlier draft had +1 slack on allocations, which let that 23 through; it is now
+  exact for small counts.
+
+**Two pre-existing writer bugs, found by `FuzzParse` during the soak** (both confirmed on
+untouched HEAD, both reachable only through a member name that needs quoting, such as `00`,
+which forces the long form). Both came from `longFormBodyOf` carrying its own drifted copy of
+`typeWithConstraints`' rule. It now calls the shared `constraintParts`:
+
+1. Any `anyOf` was written `anyOf:null`, so the document no longer re-parsed.
+2. **Silent:** an array's constraints were dropped. `00?: {array, of: int, minLen: 2}` was
+   written without `minLen`, re-parsed cleanly and was idempotent, so the schema quietly accepted
+   arrays it used to reject. The idempotence fuzzer could never have seen it. It is pinned by
+   behaviour (`[1]` must still be rejected after the round trip), not by spelling.

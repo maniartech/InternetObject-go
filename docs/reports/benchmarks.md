@@ -1,6 +1,6 @@
 # Performance report — where io-go stands
 
-**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05 · **Machine:** AMD Ryzen 7
+**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05, pass 9 2026-09-13 · **Machine:** AMD Ryzen 7
 5700G, Go 1.26.0, windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$'
 -count=6 .`, and `go test -bench . -benchmem ./examples/06-codegen/` for the generated path.
 
@@ -25,6 +25,12 @@ scaffolding nothing read, and a validated tree the caller threw away. Generated 
 needed a public API change. An inlined prototype shows the remaining ceiling: **~250 ns against
 `encoding/json`'s ~450**, blocked on exported spelling primitives
 ([ADR 0010](../decisions/0010-code-generation.md) D4).
+
+**Pass 9 (2026-09-13)** found that encode had silently fallen to **~1.5× slower** than
+`encoding/json`: a correctness fix had begun quoting strings like `Person 0` that no reader
+needs quoted. Fixed and measured back to **~1.24× faster**, with decode at **~1.96× faster**.
+The gap that let it happen is closed too: performance budgets now fail the ordinary `go test`
+run on any bytes, allocation or wire-size regression, and were proved against the real one.
 
 The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
 competitive with any JSON parser. Everything above it is where the time goes.
@@ -160,6 +166,49 @@ on the header text would collect most of the same win automatically. Filed as ro
 
 The residual 2.1× after hoisting is the honest floor of doing more work — schema binding and
 per-member validation with designated codes — on a payload too small to amortize anything.
+
+## What changed — pass 9 (a regression, found by hand, and the gate that would have caught it)
+
+**Measured 2026-09-13 on a quiet machine (21% load); `encoding/json` in the same run is the control.**
+
+| Operation (1,000 records unless noted) | io-go | `encoding/json` | |
+| --- | ---: | ---: | --- |
+| Unmarshal → struct | 1.07 ms · 4,024 allocs | 2.10 ms · 6,019 | **~1.96× faster** |
+| Marshal ← struct | 290 µs · 22 allocs | 361 µs · 2 | **~1.24× faster** |
+| Parse → dynamic | 2.61 ms · 17,952 allocs | 1.76 ms · 23,013 | ~1.48× slower |
+| Small record (133 B) decode | 2.87 µs · 14 allocs | 1.93 µs · 11 | ~1.48× slower |
+
+**The regression.** Commit `7a39123` (2026-09-07) fixed a real round-trip bug in the string
+writer and, in doing so, began quoting every string containing a later word that looks numeric:
+`Person 0` became `"Person 0"`. The 1,000-record document grew from 64,125 to 66,125 bytes,
+crossed the output buffer's size estimate, and paid a growth plus a copy. Encode went from
+faster than `encoding/json` to **~1.5× slower**, at 279,249 B / 23 allocs. The commit's gate said
+"allocation counts unchanged", which was true for the four benchmarks it checked. It was found
+by hand six days later, then bisected by exact bytes/op across 44 commits.
+
+**The quotes were never needed.** The reader's scanner classifies exactly one word of a bare
+value, its first; no later word is ever classified. io-js2 agrees, probed on six cases. The
+writer now asks `tokenizer.BareValueReadsNonString`, which states that one rule, instead of
+combining two helpers that approximated it. Encode is back to exactly 22 allocs and 180,920 B,
+and timed back to back against the commit before the regression, it is marginally faster
+(290 µs vs 302 µs). No CPU cost was hiding under the allocation fix.
+
+**The gate.** `perf-budget_test.go` runs in every ordinary `go test`: bytes and allocations per
+operation against committed budgets, plus the document's wire size pinned exactly. It is
+load-independent, so it works in CI where timings cannot. It was proved by putting the
+regression back: it failed on allocations (23 > 22), bytes (+54.3%) and wire size (+2,000). Two
+things it had to get right, both measured rather than assumed:
+
+- An early draft allowed +1 allocation of slack, and that let the regression's 22 → 23 through.
+  The allocation check is now exact for small counts.
+- Go 1.24.2 spends 24 allocations on the same marshal where Go 1.26.0 and 1.27.1 spend 22, a
+  compiler difference that has nothing to do with this library. Budgets are therefore enforced
+  on Go 1.26 and later, and skipped visibly on older releases, rather than loosened for all.
+
+**What still stands between io-go and `encoding/json`:** the dynamic parse and the small record,
+both ~1.48× slower. Roadmap items 10-11 (arena-allocated members, framing instead of a parser
+tree) are the known levers for the first. The small record's floor is schema binding and
+per-member validation JSON does not do.
 
 ## What changed — pass 8 (the marshal path stops doing work it discards)
 
