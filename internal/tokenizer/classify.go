@@ -1,6 +1,9 @@
 package tokenizer
 
-import "unicode"
+import (
+	"unicode"
+	"unicode/utf8"
+)
 
 // This file is the ONE site that decides what a whitespace-free word is:
 // keyword, number, bigint, decimal, a claimed-and-broken literal, or ordinary
@@ -15,28 +18,62 @@ import "unicode"
 //	suffixes m/n can only mean "number", so a run that carries one and does
 //	not decode is an error, not a string.
 
-// WordReadsNonString reports whether a bare, whitespace-free word would read
-// back as something other than ordinary text: a keyword, a number in any
-// form, or a claimed-and-broken literal. It is the writer's quote-this test,
-// answered by the reader's own classifier so the two can never disagree.
-func WordReadsNonString(w string) bool {
-	if w == "" {
+// BareValueReadsNonString reports whether s, written bare as a value, would
+// read back as something other than the open string s. It is the writer's
+// quote-this test for keywords and numbers, and it answers with the SAME rule
+// scanValue applies, so writer and reader cannot disagree.
+//
+// That rule classifies exactly ONE word — the first:
+//
+//   - a claimed-and-broken literal (`0.m`, `2.5e1n`, `0x1G`) becomes an error
+//     token whatever follows it;
+//   - a valid scalar (`12`, `T`, `0x1F`) stands only when nothing follows it;
+//     any further text makes the whole run an open string (`12 abc`).
+//
+// No later word is ever classified, so `Person 0` and `a 2.5e1n` are ordinary
+// open strings. Checking every word instead quoted them for nothing — measured
+// 2026-09-13 as a 3% larger document and a marshal that fell from 1.17x faster
+// than encoding/json to 1.5x slower (io-go OPEN-QUESTIONS #4).
+//
+// s must already be free of edge whitespace; the writer quotes such text
+// before asking. Word boundaries are the reader's own (IsSpaceRune), which is
+// what keeps `0.m<U+2000>0` quoted: to the reader its first word is `0.m`.
+func BareValueReadsNonString(s string) bool {
+	if s == "" {
 		return false
 	}
-	k, _, _ := classifyWord(w)
-	return k != KindString
+	first := firstWordLen(s)
+	if first == 0 {
+		// Leading whitespace: outside the contract, and the reader would trim
+		// it. Answer "quote" rather than classify an empty word.
+		return true
+	}
+	kind, _, code := classifyWord(s[:first])
+	if code != CodeNone {
+		return true
+	}
+	return kind != KindString && first == len(s)
 }
 
-// WordIsBrokenClaim reports whether a bare word is a claimed-and-broken
-// numeric literal (rule 2) — an error even in the middle of an open-string
-// run, where an ordinary number would just join the run. The writer quotes
-// any string containing one.
-func WordIsBrokenClaim(w string) bool {
-	if w == "" {
-		return false
+// firstWordLen returns the byte length of s's first word, ending at the
+// reader's whitespace. Pure-ASCII text never decodes a rune.
+func firstWordLen(s string) int {
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			if isASCIISpace(c) {
+				return i
+			}
+			i++
+			continue
+		}
+		r, w := utf8.DecodeRuneInString(s[i:])
+		if isUniSpace(r) {
+			return i
+		}
+		i += w
 	}
-	k, _, _ := classifyWord(w)
-	return k == KindError
+	return len(s)
 }
 
 // classifyWord classifies one non-empty word. A CodeNone/KindString result

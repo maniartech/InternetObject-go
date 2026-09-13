@@ -2,7 +2,6 @@ package document
 
 import (
 	"strings"
-	"unicode/utf8"
 
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
@@ -214,47 +213,21 @@ func wouldNotReadBack(s string, flags byte, numStart bool) bool {
 		// back as a number, a broken numeric claim or a temporal literal.
 		return false
 	}
-	// The reader's own classifier answers the numeric question, so writer and
-	// reader can never disagree about a bare word.
-	if tokenizer.WordReadsNonString(s) {
-		return true
+	// The reader answers the numeric question itself, with the one-word rule
+	// its scanner applies — so writer and reader cannot disagree, and a later
+	// word (`Person 0`) never forces quotes the reader does not need.
+	//
+	// It must be asked about the bytes it will actually READ. The open spelling
+	// escapes structural and control characters, and to the reader an escape is
+	// part of a word: `0X0<TAB>"` is written `0X0\t\"`, one word and a broken
+	// hex claim, although the raw text has whitespace in it. Classifying the raw
+	// text wrote exactly that value bare (FuzzBuilderRoundTrip, 2026-09-13).
+	written := s
+	if flags&clStruct != 0 {
+		written = string(appendOpenEscaped(make([]byte, 0, len(s)+8), s))
 	}
-	// A claimed-and-broken word (`2.5e1n`) errors even mid-run, where an
-	// ordinary numeric word would just join the open string. Only text with a
-	// digit AND a word boundary can hide one.
-	if flags&clDigit != 0 {
-		// Split on the READER's notion of a word boundary, not a byte table.
-		// The two are not the same: U+2000..U+200A are spaces to the
-		// tokenizer and ordinary bytes to strClass, so `0.m<U+2000>0` looked
-		// like one unclaimable word here and tokenized as the broken decimal
-		// `0.m` there — the writer emitted it bare and its own reader rejected
-		// it. Found by the builder round-trip fuzzer, 2026-09-07.
-		for i := 0; i < len(s); {
-			for i < len(s) {
-				r, size := utf8.DecodeRuneInString(s[i:])
-				if !tokenizer.IsSpaceRune(r) {
-					break
-				}
-				i += size
-			}
-			start := i
-			for i < len(s) {
-				r, size := utf8.DecodeRuneInString(s[i:])
-				if tokenizer.IsSpaceRune(r) {
-					break
-				}
-				i += size
-			}
-			if start < i {
-				w := s[start:i]
-				// A word that reads as a non-string, or as a broken numeric
-				// claim, must be quoted wherever it sits — not only when it
-				// begins the text.
-				if tokenizer.WordIsBrokenClaim(w) || tokenizer.WordReadsNonString(w) {
-					return true
-				}
-			}
-		}
+	if tokenizer.BareValueReadsNonString(written) {
+		return true
 	}
 	// A temporal literal always contains digits.
 	if flags&clDigit != 0 {
