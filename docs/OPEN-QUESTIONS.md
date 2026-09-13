@@ -64,3 +64,36 @@ generated type", ADR 0004's phase list should be amended to say so.
 Two related loose ends ADR 0004 D4 leaves open, both blocked on this: the name for the
 embedded base (the `Object`→`Record` rename was withdrawn 2026-09-07), and `StreamAs[T]`,
 which is a small typed wrapper over `Stream` and could ship independently.
+
+## 4. Encode regressed below `encoding/json` — found 2026-09-13, **not fixed**
+
+**Measured, and bisected to one commit.** `BenchmarkCompareMarshalStruct_IO` (1,000 records):
+
+| | bytes/op | allocs | vs `encoding/json` |
+| --- | ---: | ---: | --- |
+| up to `eea8ca4` | 180,945 | 22 | ~1.17× **faster** |
+| from `7a39123` to HEAD | 279,249 | 23 | ~1.5× **slower** |
+
+Bytes are exact, so this is not load noise. Every commit from `40eb8b4` to `eea8ca4` measures
+180,945; `7a39123` ("Two round-trip bugs…") is the first at 279,249.
+
+**Cause.** That commit fixed a real bug — the writer emitted `0.m<U+2000>0` open, which its own
+reader tokenizes as the broken decimal `0.m`. The fix splits words on `tokenizer.IsSpaceRune`
+(right) but then checks **every** word for a numeric reading, not just the first. So
+`Person 0` is now written `"Person 0"`. That is +2 bytes per record: the 1,000-record document
+grows 64,125 → 66,125 bytes, crosses the output buffer's size estimate, and pays one growth plus
+a copy — exactly the +1 alloc and +98 KB. The per-word scan also adds time.
+
+**The quoting is unnecessary.** Probed 2026-09-13: io-js2 AND io-go both read `Person 0`,
+`a 1e`, `x 0.m`, `T 1`, `hello 12.5 world` and `N 0x1F` back as the plain string. Only the
+FIRST word decides whether an open value reads as a string.
+
+**Why it was missed.** The commit's gate said "allocation counts unchanged" — true for the four
+hot benchmarks it checked (2954 / 21 / 16 / 14), not for the 1,000-record marshal comparison.
+There is still no benchmark gate in CI, and a bytes-per-op regression would slip past an
+allocation-count gate anyway.
+
+**Proposed, not applied** (the writer's quoting rule is a correctness decision, so spec first):
+keep the reader's own space set, and check only the first word for a numeric or broken-numeric
+reading. Gate it with the round-trip fuzzers that found the original bug, plus a test pinning
+that `Person 0` is written open, plus a CI check on bytes/op for the comparison benchmarks.
