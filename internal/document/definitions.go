@@ -135,7 +135,7 @@ func (d *Definitions) Var(name string) (any, *errs.Error) {
 			}
 			return nil, &errs.Error{Code: errs.UndefinedVariable, Line: 1, Col: 1}
 		}
-		if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+		if s, ok := v.(string); ok && core.IsVariableRef(s) {
 			name = s[1:]
 			continue
 		}
@@ -165,7 +165,7 @@ func ResolveVars(v any, defs *Definitions) *errs.Error {
 // designated code, never a crash.
 func resolveVarsAt(v any, defs *Definitions, seen map[string]bool) *errs.Error {
 	sub := func(s string, set func(any)) (bool, *errs.Error) {
-		if !strings.HasPrefix(s, "@") || len(s) <= 1 {
+		if !core.IsVariableRef(s) {
 			return false, nil
 		}
 		name := s[1:]

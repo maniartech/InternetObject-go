@@ -69,7 +69,8 @@ func perfBudgets(t *testing.T) []budget {
 		{"Marshal 1,000 structs", func() {
 			_, err := io.Marshal(benchData)
 			must(err)
-		}, 22, 180_920},
+		}, 20, 180_680}, // 22 -> 20 on 2026-09-14: the fast path stopped calling
+		// os.Getenv per Marshal, which allocates on Windows (UTF-16 conversion).
 		{"Unmarshal 1,000 structs", func() {
 			var out []benchPerson
 			must(io.Unmarshal(benchIOText, &out))

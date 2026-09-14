@@ -50,11 +50,12 @@ func decodeBothWays(t *testing.T, src string) (lazyRows, treeRows []lazyRow, laz
 	if err := io.Unmarshal(src, &a); err != nil {
 		lazyErr = errText(err)
 	}
-	t.Setenv("IO_NO_LAZY", "1")
 	var b []lazyRow
-	if err := io.Unmarshal(src, &b); err != nil {
-		treeErr = errText(err)
-	}
+	io.WithTreeDecode(func() {
+		if err := io.Unmarshal(src, &b); err != nil {
+			treeErr = errText(err)
+		}
+	})
 	return a, b, lazyErr, treeErr
 }
 

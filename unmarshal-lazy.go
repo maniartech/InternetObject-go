@@ -4,9 +4,10 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"sync/atomic"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
-	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
@@ -32,7 +33,19 @@ import (
 // specification and this is an optimization of it. `IO_NO_LAZY=1` forces the
 // fallback, which is how the differential test holds the two identical.
 
-var noLazy = os.Getenv("IO_NO_LAZY") != ""
+// noLazy forces the general path. It is an atomic flag rather than a plain
+// variable read once at init, because the differential test must flip it
+// INSIDE a test run (export_test.go, WithTreeDecode).
+//
+// It used to be `var noLazy = os.Getenv("IO_NO_LAZY") != ""`, read once, while
+// the test flipped the environment with t.Setenv. The flip never reached this
+// flag, so TestLazyMatchesTreePath and FuzzLazyMatchesTreePath compared the
+// lazy path against ITSELF from the commit that introduced them (f559ec6) until
+// 2026-09-14. Proved by sabotage: with every bound string corrupted, seven
+// ordinary tests failed and both differential tests passed.
+var noLazy atomic.Bool
+
+func init() { noLazy.Store(os.Getenv("IO_NO_LAZY") != "") }
 
 // lazyEligible reports whether every field can be decoded straight from a
 // token span. It is DECODE eligibility, deliberately narrower than the encode
@@ -60,7 +73,7 @@ func lazyEligible(plan *structPlan) bool {
 // unmarshalLazy binds src into v without building a value tree. took reports
 // whether it handled the call at all.
 func unmarshalLazy(src string, v any) (took bool, err error) {
-	if noLazy {
+	if noLazy.Load() {
 		return false, nil
 	}
 	rv := reflect.ValueOf(v)
@@ -111,11 +124,8 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 			return false, nil
 		}
 		tmp := reflect.New(elem.Type()).Elem()
-		if e := bindFramed(tmp, recs[0], f, plan, 0); e != nil {
-			if e == errUnsupportedLazy {
-				return false, nil // the general path takes it
-			}
-			return true, e
+		if bindFramed(tmp, recs[0], f, plan) != nil {
+			return false, nil // the general path decodes it, and reports any fault
 		}
 		elem.Set(tmp)
 		return true, nil
@@ -123,21 +133,36 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 
 	out := reflect.MakeSlice(elem.Type(), len(recs), len(recs))
 	for i := range recs {
-		if e := bindFramed(out.Index(i), recs[i], f, plan, i); e != nil {
-			if e == errUnsupportedLazy {
-				return false, nil
-			}
-			return true, e
+		if bindFramed(out.Index(i), recs[i], f, plan) != nil {
+			return false, nil
 		}
 	}
 	elem.Set(out)
 	return true, nil
 }
 
-// bindFramed decodes one framed record into a struct value.
-func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed,
-	plan *structPlan, recIndex int) error {
-
+// bindFramed decodes one framed record into a struct value, or declines.
+//
+// It never REPORTS a fault. A record that is not a clean, complete match — a
+// type mismatch, an unknown or repeated member, a required member that never
+// arrived — returns errUnsupportedLazy, and the general path re-decodes the
+// document and reports every fault itself (ADR 0007, amended 2026-09-14).
+//
+// That is the fix for a validation bypass this path shipped with. It bound only
+// the members PRESENT, so `~ Alice` against a five-member schema decoded
+// silently into Age 0, Score 0, Active false, where the general path reports
+// missing-value four times. An empty slot (`Alice,,1.5`) did the same for one
+// member. It went unseen because the differential test meant to compare the
+// two paths never actually switched paths (see noLazy).
+//
+// Reporting faults here instead would mean re-implementing the validator's
+// accumulation rules — every fault, in order, across records — which is a second
+// copy of a rule: the shape of bug this port keeps finding. Faults are the rare
+// case; decoding them twice costs nothing that matters.
+func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan *structPlan) error {
+	if len(plan.fields) > 64 {
+		return errUnsupportedLazy // `seen` is a 64-bit mask
+	}
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			rv.Set(reflect.New(rv.Type().Elem()))
@@ -146,28 +171,52 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed,
 	}
 	names, defs := document.SchemaMemberDefs(f.Schema)
 
+	var seen uint64
+	var keyed, positional bool
 	for i, m := range rec.Members {
 		if i >= len(plan.fields) {
-			return lazyFault(errs.UnknownMember, f, m, recIndex, "")
+			return errUnsupportedLazy
 		}
+		// A record mixing keyed and positional members has ordering rules of its
+		// own (`age: 0, name: A, 0, T` is unexpected-positional-member). Rather
+		// than copy them, decline, and let the general path apply them. Found by
+		// the differential fuzzer the moment it could see this path, 2026-09-14.
+		if m.Positional() {
+			positional = true
+		} else {
+			keyed = true
+		}
+		if keyed && positional {
+			return errUnsupportedLazy
+		}
+		j := i
 		if !m.Positional() {
 			// A keyed member may name any declared member, in any order.
-			j, known := plan.byName[m.Key]
+			k, known := plan.byName[m.Key]
 			if !known {
-				return lazyFault(errs.UnknownMember, f, m, recIndex, m.Key)
+				return errUnsupportedLazy
 			}
-			if e := bindMember(rv.FieldByIndex(plan.fields[j].index), m, f,
-				defs[names[j]], recIndex, names[j]); e != nil {
-				return e
-			}
-			continue
+			j = k
+		} else if m.Absent {
+			continue // an empty slot: required-ness is checked below
 		}
-		if m.Absent {
-			continue // an empty slot leaves the field at its zero value
+		if seen&(1<<j) != 0 {
+			return errUnsupportedLazy // the same member twice
 		}
-		if e := bindMember(rv.FieldByIndex(plan.fields[i].index), m, f,
-			defs[names[i]], recIndex, names[i]); e != nil {
+		seen |= 1 << j
+		if e := bindMember(rv.FieldByIndex(plan.fields[j].index), m, f, defs[names[j]]); e != nil {
 			return e
+		}
+	}
+
+	// Every declared member that never arrived — omitted at the end, or left as
+	// an empty slot — must be optional. (IsSimpleSchema already excludes
+	// defaults, so there is no value to fill in.)
+	for j := range plan.fields {
+		if seen&(1<<j) == 0 {
+			if md := defs[names[j]]; md == nil || !md.Optional {
+				return errUnsupportedLazy
+			}
 		}
 	}
 	return nil
@@ -175,8 +224,7 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed,
 
 // bindMember decodes one framed member into one field, checking the schema's
 // declared type as it goes.
-func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed,
-	md *schema.MemberDef, recIndex int, name string) error {
+func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed, md *schema.MemberDef) error {
 
 	s := f.Stream
 	tok := s.Tokens[m.Tok]
@@ -184,7 +232,7 @@ func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed,
 	// Null first: it is legal only where the schema allows it.
 	if m.Kind == tokenizer.KindNull {
 		if md != nil && !md.Null {
-			return lazyFault(errs.ForbiddenNull, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		field.SetZero()
 		return nil
@@ -198,26 +246,26 @@ func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed,
 	switch declared {
 	case "string":
 		if m.Kind != tokenizer.KindString {
-			return lazyFault(errs.ExpectedString, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 	case "int":
 		if m.Kind != tokenizer.KindNumber {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		if n := s.Number(tok); n != math.Trunc(n) || math.IsInf(n, 0) || math.IsNaN(n) {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 	case "number":
 		if m.Kind != tokenizer.KindNumber {
-			return lazyFault(errs.ExpectedNumber, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 	case "bool":
 		if m.Kind != tokenizer.KindBoolean {
-			return lazyFault(errs.ExpectedBoolean, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 	case "array":
 		if m.Kind != tokenizer.KindBracketOpen {
-			return lazyFault(errs.ExpectedArray, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 	}
 
@@ -225,61 +273,67 @@ func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed,
 	switch field.Kind() {
 	case reflect.String:
 		if m.Kind != tokenizer.KindString {
-			return lazyFault(errs.ExpectedString, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
-		field.SetString(s.StringValue(tok))
+		v := s.StringValue(tok)
+		if core.IsVariableRef(v) {
+			// A reference, not text: the general path resolves it, or reports
+			// undefined-variable. Binding it literally accepted `@0` as the string
+			// "@0" (differential fuzzer, 2026-09-14).
+			return errUnsupportedLazy
+		}
+		field.SetString(v)
 		return nil
 	case reflect.Bool:
 		if m.Kind != tokenizer.KindBoolean {
-			return lazyFault(errs.ExpectedBoolean, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		field.SetBool(s.Bool(tok))
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if m.Kind != tokenizer.KindNumber {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		n := s.Number(tok)
 		if n != math.Trunc(n) || math.IsInf(n, 0) || math.IsNaN(n) {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		if field.OverflowInt(int64(n)) {
-			return lazyFault(errs.OutOfRangeInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		field.SetInt(int64(n))
 		return nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if m.Kind != tokenizer.KindNumber {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		n := s.Number(tok)
 		if n != math.Trunc(n) || n < 0 || math.IsInf(n, 0) || math.IsNaN(n) {
-			return lazyFault(errs.ExpectedInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		if field.OverflowUint(uint64(n)) {
-			return lazyFault(errs.OutOfRangeInteger, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		field.SetUint(uint64(n))
 		return nil
 	case reflect.Float32, reflect.Float64:
 		if m.Kind != tokenizer.KindNumber {
-			return lazyFault(errs.ExpectedNumber, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
 		field.SetFloat(s.Number(tok))
 		return nil
 	case reflect.Slice:
 		if m.Kind != tokenizer.KindBracketOpen {
-			return lazyFault(errs.ExpectedArray, f, m, recIndex, name)
+			return errUnsupportedLazy
 		}
-		return bindFramedArray(field, m, f, md, recIndex, name)
+		return bindFramedArray(field, m, f, md)
 	}
 	return errUnsupportedLazy
 }
 
 // bindFramedArray decodes a bracketed span into a slice, re-framing the
 // interior on demand.
-func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed,
-	md *schema.MemberDef, recIndex int, name string) error {
+func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed, md *schema.MemberDef) error {
 
 	elems, ok := parser.FrameSpan(f.Stream, m.Tok+1, m.End-1)
 	if !ok {
@@ -291,7 +345,7 @@ func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed
 		of = md.Of
 	}
 	for i, e := range elems {
-		if err := bindMember(out.Index(i), e, f, of, recIndex, name); err != nil {
+		if err := bindMember(out.Index(i), e, f, of); err != nil {
 			return err
 		}
 	}
@@ -299,32 +353,7 @@ func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed
 	return nil
 }
 
-// errUnsupportedLazy makes the caller fall back rather than report; it never
-// reaches a user.
+// errUnsupportedLazy makes the caller fall back to the general path, which
+// decodes the document again and reports any fault. It never reaches a user:
+// this path does not report faults of its own.
 var errUnsupportedLazy = &UnmarshalError{Path: "$", Msg: "unsupported by the lazy path"}
-
-// lazyFault builds a designated wire fault positioned at the offending token.
-func lazyFault(code errs.Code, f *document.Framed, m parser.RawMember, recIndex int, name string) error {
-	// An EMPTY member — a trailing comma slot, as in `a,b,c` against a schema
-	// of two — has no token of its own, and its Tok is one PAST the end. It
-	// used to index out of range and panic, which rule 10 forbids outright: a
-	// designated code, never a host-runtime crash. Found by fuzzing the lazy
-	// path against the tree path with `name,age,score,active,tags---,,,,,`.
-	line, col := int32(1), int32(1)
-	if toks := f.Stream.Tokens; len(toks) > 0 {
-		i := int(m.Tok)
-		if i < 0 || i >= len(toks) {
-			i = len(toks) - 1 // the nearest real position we have
-		}
-		line, col = toks[i].Line, toks[i].Col
-	}
-	at := rootPath.record(recIndex)
-	if name != "" {
-		at = at.member(name)
-	}
-	path := at.String()
-	return ErrorList{{
-		Code: code, Category: errs.CategoryOf(code), Path: path,
-		RecordIndex: recIndex, Line: int(line), Col: int(col),
-	}}
-}

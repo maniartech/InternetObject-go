@@ -129,3 +129,22 @@ which forces the long form). Both came from `longFormBodyOf` carrying its own dr
    written without `minLen`, re-parsed cleanly and was idempotent, so the schema quietly accepted
    arrays it used to reject. The idempotence fuzzer could never have seen it. It is pinned by
    behaviour (`[1]` must still be rejected after the round trip), not by spelling.
+
+## 5. The lazy decoder's differential test never compared two paths — found and fixed 2026-09-14
+
+**Found while profiling for OPEN-QUESTIONS #4's follow-up**, and proved by sabotage: with the lazy
+decoder corrupting every string it bound, seven ordinary tests failed and
+`TestLazyMatchesTreePath` / `FuzzLazyMatchesTreePath` both passed. The switch was read once at
+init; the test flipped the environment with `t.Setenv`. Broken since the lazy path landed
+(`f559ec6`). `TestFastPathMatchesTreePath` had a milder form: its `t.Setenv` lasted the whole
+test, so only its first sample compared fast against tree.
+
+**Made live, it found three shipped validation bypasses in `io.Unmarshal`** — a missing required
+member, a positional member after keyed ones, and an undefined `@`-reference, each silently
+accepted. Fixed by amending ADR 0007 D2: the lazy path never reports a fault, it declines, and the
+general path reports. Full account in ADR 0007's amendment.
+
+**One loose end, for the owner:** `schema/typedef.go` tests `strings.HasPrefix(s, "@")` without
+the length check the other five sites used, so a lone `@` in a typedef position is treated as a
+reference there and as text everywhere else. Left as found. Whether a lone `@` is ever a
+reference is a format question.

@@ -229,7 +229,7 @@ func (d *Doc) constraintValue(typeName string, v any) string {
 	// write differed from the first. Keeping the reference in that case obeys
 	// this file's own law: never emit text your own reader rejects. Found by
 	// the idempotence property.
-	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+	if s, ok := v.(string); ok && core.IsVariableRef(s) {
 		if r, verr := d.Defs.Var(s[1:]); verr == nil && schema.ValueFitsType(typeName, r) {
 			v = r
 		}

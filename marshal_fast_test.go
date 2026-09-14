@@ -55,8 +55,7 @@ func marshalBothWays(t *testing.T, v any) (fast, tree string) {
 	if err != nil {
 		t.Fatalf("fast path: %v", err)
 	}
-	t.Setenv("IO_NO_FAST_PATH", "1")
-	tree, err = io.Marshal(v)
+	io.WithTreeEncode(func() { tree, err = io.Marshal(v) })
 	if err != nil {
 		t.Fatalf("tree path: %v", err)
 	}
@@ -120,8 +119,8 @@ func FuzzFastPathMatchesTreePath(f *testing.F) {
 		if err != nil {
 			return // both paths refuse the same inputs; TestFastPath… pins that
 		}
-		t.Setenv("IO_NO_FAST_PATH", "1")
-		tree, err := io.Marshal(v)
+		var tree string
+		io.WithTreeEncode(func() { tree, err = io.Marshal(v) })
 		if err != nil {
 			t.Fatalf("tree path refused what the fast path accepted: %v", err)
 		}
@@ -138,8 +137,8 @@ func TestFastPathRefusalsMatch(t *testing.T) {
 	}
 	v := big64{N: 1 << 60}
 	_, fastErr := io.Marshal(v)
-	t.Setenv("IO_NO_FAST_PATH", "1")
-	_, treeErr := io.Marshal(v)
+	var treeErr error
+	io.WithTreeEncode(func() { _, treeErr = io.Marshal(v) })
 	if (fastErr == nil) != (treeErr == nil) {
 		t.Fatalf("disagree on refusal: fast=%v tree=%v", fastErr, treeErr)
 	}

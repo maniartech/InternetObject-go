@@ -293,6 +293,11 @@ rationale in [ADR 0009](../decisions/0009-shared-compiled-state.md); in short:
 divergent the moment a document contained `NaN` (`N,N,NaN`). The comparator is now NaN-aware
 and otherwise exactly as strict, keeping nil-vs-empty slices distinct.
 
+> **Correction, 2026-09-14.** Both "decodes" in that report came from the lazy path: this
+> fuzzer never actually switched to the tree path (ADR 0007, "What the differential test never
+> did"). The NaN comparator is still right; the claim that the fuzzer was comparing two paths
+> was not.
+
 ## What changed — pass 6 (encode: the last of the per-value work)
 
 Encode went from 3,922 allocations to **22**, and from 1.80 ms to 0.37 ms, in four steps —
@@ -341,6 +346,13 @@ members, no constraints, defaults, choices, references or variables) and
 otherwise falls back to the path that has always run — so the fallback is the
 specification. `IO_NO_LAZY=1` forces it, and a differential fuzzer (4.6M
 executions) holds the two to identical values and identical designated codes.
+
+> **Correction, 2026-09-14: that sentence was false.** The fuzzer's in-process switch never
+> reached the flag, which was read once at init, so it compared the lazy path with itself and
+> its 4.6M executions proved nothing about equivalence. Made live on 2026-09-14, it found three
+> shipped validation bypasses within minutes: a missing required member was accepted, so was a
+> positional member after keyed ones, and so was an undefined `@`-reference, bound as text. All
+> three are fixed; see ADR 0007's amendment.
 Framing itself is held to the parser by a second differential fuzzer (36M
 executions), which found five real divergences during development.
 

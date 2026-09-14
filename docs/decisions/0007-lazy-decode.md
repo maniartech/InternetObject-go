@@ -2,9 +2,10 @@
 
 - **Status:** Accepted, 2026-09-02. **Implemented** — the framed decode path
   (`internal/parser/raw.go`, `internal/document/framed.go`, `unmarshal_lazy.go`), forced off by
-  `IO_NO_LAZY=1`, held to the tree path by `FuzzLazyMatchesTreePath`. The status line said
-  "Proposed, awaiting a decision" until 2026-09-04, long after the work shipped; corrected here
-  rather than left to mislead the next reader.
+  `IO_NO_LAZY=1`. **Amended 2026-09-14 — read "What the differential test never did" below
+  before trusting anything else in this ADR about equivalence.** The status line once also said
+  this path was "held to the tree path by `FuzzLazyMatchesTreePath`"; that was false from the
+  first commit, and was written into this line on 2026-09-04 without being checked.
 - **Context:** decode allocates ~22 objects per record where `encoding/json` allocates ~6
   ([reports/benchmarks.md](../reports/benchmarks.md)). The gap is not tuning: we materialize
   the document as a boxed tree, copy it during validation, then bind it into the caller's
@@ -164,3 +165,61 @@ the semantics stay where they are, and both are held to the existing route by a 
 test. The honest alternative is to accept ~1.5× on decode and spend the effort on the
 developer-experience work instead; that is a legitimate choice, and the reason this ADR is
 Proposed rather than Accepted.
+
+## What the differential test never did — amendment, 2026-09-14
+
+**`TestLazyMatchesTreePath` and `FuzzLazyMatchesTreePath` compared this path with ITSELF, from
+the commit that introduced them (`f559ec6`) until 2026-09-14.** The switch was
+`var noLazy = os.Getenv("IO_NO_LAZY") != ""`, read once at init; the test flipped the environment
+with `t.Setenv`, which never reached it. Every execution count quoted for that fuzzer — 4.6M here
+and in the performance report — measured nothing about agreement with the tree path.
+
+**Found while profiling, and proved by sabotage rather than by reading:** with this path
+corrupting every string it bound, seven ordinary tests failed and both differential tests passed.
+
+**Three validation bypasses had shipped in the gap; the live test found them within minutes:**
+
+1. **A missing required member was accepted.** `bindFramed` bound only the members PRESENT.
+   `~ Alice` against a five-member schema decoded silently into `Age 0, Score 0, Active false`,
+   where the tree path reports `missing-value` four times; an empty slot (`Alice,,1.5`) did the
+   same for one member. That input had been sitting in the seed corpus all along.
+2. **A positional member after keyed members was accepted.** `~ a: 1, b: 2, 3, [4]` bound the
+   positional values into the remaining fields; the tree path reports
+   `unexpected-positional-member`.
+3. **An undefined variable reference was accepted as text.** `~ @0, …` bound the string "@0";
+   the tree path resolves any `@`-string as a reference and reports `undefined-variable`.
+   `ParseFramed` declined headers that DEFINE variables, so only an undefined reference got
+   through. The rule — `@` plus at least one character, in any string form — had been written
+   out at five sites; it is now `core.IsVariableRef`, and this path asks it too. (A sixth site,
+   in `schema/typedef.go`, omits the length check and so treats a lone `@` differently; left
+   as found, and noted rather than silently changed.)
+
+The corpus could not catch either: it runs the tree path, never decode-into-struct.
+
+### D2 is amended: this path never reports a fault
+
+D2 made the type check and the decode one step, with a fault reported at the token. That cannot
+meet D4's own requirement — identical designated codes — because the tree path reports EVERY
+fault, in order, across records, and a binder that stops at the first one reports a different
+list. Doing it here would mean re-implementing the validator's accumulation rules: a second copy
+of a rule, the exact shape of the other bugs this port has found.
+
+So: **any record that is not a clean, complete match declines** — a type mismatch, an unknown or
+repeated member, a required member that never arrived, a record mixing keyed and positional
+members, or a string value that is a variable reference. The general path then re-decodes the document and reports every fault. Faults are the
+rare case, and decoding them twice costs nothing that matters. `lazyFault` is gone.
+
+### The harness, and how it was checked
+
+- The switch is an atomic flag, flipped by `WithTreeDecode`/`WithTreeEncode` (export_test.go),
+  **scoped to a closure.** A test-lifetime flip leaks into the next case of a table test:
+  `TestFastPathMatchesTreePath` used `t.Setenv` exactly that way, so only its first sample ever
+  compared fast against tree. The encoder's FUZZ test was live throughout, because the encoder
+  also re-read the environment on every call — which cost Marshal two allocations per call on
+  Windows, now gone.
+- Each fix was **seen to fail first**: sabotage now fails the repaired tests on docs 0, 1, 2, 3
+  and 12 (not only the first); removing the required-member check fails nine shape cases;
+  removing only the mixed-record check fails `~ a: 1, b: 2, 3, [4]`.
+- `unmarshal-lazy-shapes_test.go` covers what the fuzzer's fixed struct never reaches: optional,
+  nullable, pointer, narrow-integer and integer-array members, single records and collections.
+- The live fuzzer then ran 37.2M executions with no divergence.

@@ -417,7 +417,7 @@ func undeclaredMemberDef(name string, open any) *MemberDef {
 func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 	// Resolution: an @-string is a variable reference (the reference resolves
 	// these before every other check).
-	if s, ok := val.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+	if s, ok := val.(string); ok && core.IsVariableRef(s) {
 		v, verr := defs.Var(s[1:])
 		if verr != nil {
 			panic(valFail{*verr})
@@ -504,7 +504,7 @@ func validateMember(val any, present bool, md *MemberDef, defs Defs) any {
 // resolveRef resolves an @-reference in a constraint value (a choice, bound
 // or default may name a variable).
 func resolveRef(v any, defs Defs) any {
-	if s, ok := v.(string); ok && strings.HasPrefix(s, "@") && len(s) > 1 {
+	if s, ok := v.(string); ok && core.IsVariableRef(s) {
 		r, verr := defs.Var(s[1:])
 		if verr != nil {
 			panic(valFail{*verr})

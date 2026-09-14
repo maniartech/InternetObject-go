@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
@@ -223,13 +224,19 @@ func appendFastValue(dst []byte, rv reflect.Value, kind string, at pathAt) ([]by
 
 // noFastPath forces the general path. It exists for the differential test,
 // which encodes the same value both ways and requires the two to be
-// byte-identical; it is read once, not per call.
-var noFastPath = os.Getenv("IO_NO_FAST_PATH") != ""
+// byte-identical (export_test.go, WithTreeEncode).
+//
+// An atomic flag, so a test can flip it mid-run without this path paying for
+// os.Getenv — a lock and a map lookup — on every Marshal, which is what it did
+// before 2026-09-14 to make the same flip work.
+var noFastPath atomic.Bool
+
+func init() { noFastPath.Store(os.Getenv("IO_NO_FAST_PATH") != "") }
 
 // marshalFast renders v without the intermediate tree, or reports notFast so
 // the caller uses the general path.
 func marshalFast(rv reflect.Value) (string, bool, error) {
-	if noFastPath || os.Getenv("IO_NO_FAST_PATH") != "" {
+	if noFastPath.Load() {
 		return "", false, nil
 	}
 	var et reflect.Type
