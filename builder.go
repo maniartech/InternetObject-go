@@ -77,6 +77,9 @@ func NewBuilderFrom(doc *Document) *Builder {
 			b.header.Upsert(def)
 		}
 		b.header.Inline = h.Inline
+		// The header changed after NewBuilder resolved it: resolve it again, or
+		// every Add would re-resolve referenced schemas per record.
+		b.defs = document.NewDefinitions(b.header)
 	}
 	for _, sec := range doc.doc.Sections {
 		name := sec.Name

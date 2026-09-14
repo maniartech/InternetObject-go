@@ -10,12 +10,11 @@ import (
 // be written to again — so it can be shared across goroutines and reused for
 // any number of documents.
 //
-// Definitions, the ordinary form, memoizes as it resolves: it compiles a named
-// schema the first time something asks for it and remembers the answer. That
-// makes it fast and single-owner, and it is why every parsed document gets a
-// fresh one. A caller who wants to compile a header once and reuse it needs the
-// opposite property, so Freeze does all the work up front and hands back
-// something with no mutable state left.
+// Definitions, the ordinary form, also compiles its named schemas up front and
+// never writes afterwards, but it resolves @variables on each lookup and holds
+// the parsed header itself. Frozen goes one step further for a header that
+// will serve many documents: every variable resolved too, and the result
+// reduced to plain maps a document's own Definitions consults as its parent.
 //
 // It is consulted as a READ-ONLY PARENT by a document's own Definitions
 // (see Definitions.parent), which is what implements the precedence io-specs
@@ -81,5 +80,5 @@ func Freeze(h *parser.Header) (*Frozen, *errs.Error) {
 // precedence io-specs/streaming/schema-and-state.md requires; a document that
 // declares no schema of its own binds to the frozen default.
 func ParseWithDefs(src string, parent *Frozen) *Doc {
-	return parseWith(src, nil, parent)
+	return load(parser.Parse(src), nil, parent)
 }

@@ -31,7 +31,8 @@ import (
 // constraints, defaults, choices, references or variables. Everything else
 // falls back to the path that has always run, so the fallback is the
 // specification and this is an optimization of it. `IO_NO_LAZY=1` forces the
-// fallback, which is how the differential test holds the two identical.
+// fallback for a whole run; the differential tests flip it per call instead
+// (WithTreeDecode), which is how they hold the two identical.
 
 // noLazy forces the general path. It is an atomic flag rather than a plain
 // variable read once at init, because the differential test must flip it
@@ -70,15 +71,16 @@ func lazyEligible(plan *structPlan) bool {
 	return len(plan.fields) > 0
 }
 
-// unmarshalLazy binds src into v without building a value tree. took reports
-// whether it handled the call at all.
-func unmarshalLazy(src string, v any) (took bool, err error) {
+// unmarshalLazy binds the tokenized document s into v without building a value
+// tree, and reports whether it did. False leaves v untouched: the caller decodes
+// s on the general path, which also reports any fault — this path never does.
+func unmarshalLazy(s *tokenizer.Stream, v any) bool {
 	if noLazy.Load() {
-		return false, nil
+		return false
 	}
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		return false, nil
+		return false
 	}
 	elem := rv.Elem()
 
@@ -93,52 +95,53 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 	case elem.Kind() == reflect.Struct && !isModelStruct(elem.Type()):
 		et = elem.Type()
 	default:
-		return false, nil
+		return false
 	}
 
 	plan, perr := planFor(et)
 	if perr != nil || !plan.lazyOK {
-		return false, nil // only kinds this path decodes directly
+		return false // only kinds this path decodes directly
 	}
 
-	f, ok := document.ParseFramed(src)
-	if !ok || f.Schema == nil || !document.IsSimpleSchema(f.Schema) {
-		return false, nil
+	// Everything that can decline on the schema alone is decided BEFORE a
+	// record is framed, so a declined document costs its header and no more.
+	sch, ok := document.HeaderSchema(s)
+	if !ok || sch == nil || !document.IsSimpleSchema(sch) || len(sch.Names) != len(plan.fields) {
+		return false
 	}
-	names, defs := document.SchemaMemberDefs(f.Schema)
-	if len(names) != len(plan.fields) {
-		return false, nil // shapes differ: let the general path decide
-	}
-	for i, n := range names {
+	for i, n := range sch.Names {
 		if n != plan.fields[i].name {
-			return false, nil
+			return false // shapes differ: let the general path decide
 		}
 	}
-	_ = defs
+	raw, ok := parser.FrameData(s)
+	if !ok {
+		return false
+	}
 
 	// Bind into a temporary and publish only on success, so a fallback can
 	// never leave the caller's value half-written.
-	recs := f.Raw.Records
+	recs := raw.Records
 	if !collection {
 		if len(recs) != 1 {
-			return false, nil
+			return false
 		}
 		tmp := reflect.New(elem.Type()).Elem()
-		if bindFramed(tmp, recs[0], f, plan) != nil {
-			return false, nil // the general path decodes it, and reports any fault
+		if bindFramed(tmp, recs[0], s, sch, plan) != nil {
+			return false // the general path decodes it, and reports any fault
 		}
 		elem.Set(tmp)
-		return true, nil
+		return true
 	}
 
 	out := reflect.MakeSlice(elem.Type(), len(recs), len(recs))
 	for i := range recs {
-		if bindFramed(out.Index(i), recs[i], f, plan) != nil {
-			return false, nil
+		if bindFramed(out.Index(i), recs[i], s, sch, plan) != nil {
+			return false
 		}
 	}
 	elem.Set(out)
-	return true, nil
+	return true
 }
 
 // bindFramed decodes one framed record into a struct value, or declines.
@@ -159,7 +162,7 @@ func unmarshalLazy(src string, v any) (took bool, err error) {
 // accumulation rules — every fault, in order, across records — which is a second
 // copy of a rule: the shape of bug this port keeps finding. Faults are the rare
 // case; decoding them twice costs nothing that matters.
-func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan *structPlan) error {
+func bindFramed(rv reflect.Value, rec parser.RawRecord, s *tokenizer.Stream, sch *schema.Schema, plan *structPlan) error {
 	if len(plan.fields) > 64 {
 		return errUnsupportedLazy // `seen` is a 64-bit mask
 	}
@@ -169,8 +172,6 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan
 		}
 		rv = rv.Elem()
 	}
-	names, defs := document.SchemaMemberDefs(f.Schema)
-
 	var seen uint64
 	var keyed, positional bool
 	for i, m := range rec.Members {
@@ -204,7 +205,7 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan
 			return errUnsupportedLazy // the same member twice
 		}
 		seen |= 1 << j
-		if e := bindMember(rv.FieldByIndex(plan.fields[j].index), m, f, defs[names[j]]); e != nil {
+		if e := bindMember(rv.FieldByIndex(plan.fields[j].index), m, s, sch.Defs[sch.Names[j]]); e != nil {
 			return e
 		}
 	}
@@ -214,7 +215,7 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan
 	// defaults, so there is no value to fill in.)
 	for j := range plan.fields {
 		if seen&(1<<j) == 0 {
-			if md := defs[names[j]]; md == nil || !md.Optional {
+			if md := sch.Defs[sch.Names[j]]; md == nil || !md.Optional {
 				return errUnsupportedLazy
 			}
 		}
@@ -224,9 +225,7 @@ func bindFramed(rv reflect.Value, rec parser.RawRecord, f *document.Framed, plan
 
 // bindMember decodes one framed member into one field, checking the schema's
 // declared type as it goes.
-func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed, md *schema.MemberDef) error {
-
-	s := f.Stream
+func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md *schema.MemberDef) error {
 	tok := s.Tokens[m.Tok]
 
 	// Null first: it is legal only where the schema allows it.
@@ -326,16 +325,15 @@ func bindMember(field reflect.Value, m parser.RawMember, f *document.Framed, md 
 		if m.Kind != tokenizer.KindBracketOpen {
 			return errUnsupportedLazy
 		}
-		return bindFramedArray(field, m, f, md)
+		return bindFramedArray(field, m, s, md)
 	}
 	return errUnsupportedLazy
 }
 
 // bindFramedArray decodes a bracketed span into a slice, re-framing the
 // interior on demand.
-func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed, md *schema.MemberDef) error {
-
-	elems, ok := parser.FrameSpan(f.Stream, m.Tok+1, m.End-1)
+func bindFramedArray(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md *schema.MemberDef) error {
+	elems, ok := parser.FrameSpan(s, m.Tok+1, m.End-1)
 	if !ok {
 		return errUnsupportedLazy
 	}
@@ -345,7 +343,7 @@ func bindFramedArray(field reflect.Value, m parser.RawMember, f *document.Framed
 		of = md.Of
 	}
 	for i, e := range elems {
-		if err := bindMember(out.Index(i), e, f, of); err != nil {
+		if err := bindMember(out.Index(i), e, s, of); err != nil {
 			return err
 		}
 	}

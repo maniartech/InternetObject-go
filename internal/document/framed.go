@@ -11,27 +11,19 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
 
-// Framed is a document whose HEADER has been parsed normally — it is small,
-// read once, and defines the schema — while its DATA records are only framed
-// (ADR 0007 phase 2). Nothing in the data has been decoded or boxed.
-type Framed struct {
-	Stream *tokenizer.Stream
-	Raw    *parser.RawDoc
-	Schema *schema.Schema // the schema the data section binds to, or nil
-	Defs   schema.Defs    // for @variables and $refs inside records
-}
-
-// ParseFramed parses src's header and frames its data, or reports that it
-// could not — in which case the caller uses Parse, which is the path that has
-// always run.
+// HeaderSchema returns the schema a framed decode of s binds its data to
+// (ADR 0007 phase 2): the compiled schema of s's header, from the header cache.
+// It reports false for a document framing does not own — no separator, a
+// `--- $Name` selector, or a header that does not resolve cleanly, whose fault
+// the tree path must report with its designated code. A nil schema with true
+// is a header that declares none.
 //
-// It declines the shapes framing does not own (see parser.FrameData) and, in
-// addition, any document whose header does not resolve cleanly: a header
-// fault must be reported by the normal path with its designated code, not
-// swallowed here.
-func ParseFramed(src string) (*Framed, bool) {
-	s := tokenizer.Tokenize(src)
-
+// It frames NOTHING. A caller decides from the schema whether it can use a
+// framed decode at all, and only then calls parser.FrameData. Framing first
+// and asking afterwards used to frame every record of every document the lazy
+// decoder then declined — measured 2026-09-14 as ~22% of the bytes of a
+// constrained 1,000-record Unmarshal, all of it thrown away.
+func HeaderSchema(s *tokenizer.Stream) (*schema.Schema, bool) {
 	// The header is everything before the first separator. Re-parsing just
 	// that text is O(header), not O(document).
 	sepAt := -1
@@ -55,16 +47,8 @@ func ParseFramed(src string) (*Framed, bool) {
 		}
 	}
 
-	he := headerFor(src[:s.Tokens[sepAt].Start])
-	if !he.ok {
-		return nil, false
-	}
-
-	raw, ok := parser.FrameData(s)
-	if !ok {
-		return nil, false
-	}
-	return &Framed{Stream: s, Raw: raw, Schema: he.sch, Defs: NewDefinitions(he.header)}, true
+	he := headerFor(s.Src[:s.Tokens[sepAt].Start])
+	return he.sch, he.ok
 }
 
 // A header's compiled form, memoized on the header text.
@@ -73,7 +57,7 @@ func ParseFramed(src string) (*Framed, bool) {
 // document and dominates a one-record one: it measured as ~45% of the
 // allocations of a 133-byte payload, the shape an HTTP handler decodes all day.
 // The header text is a SUFFICIENT key here because compilation is a pure
-// function of it on this path — ParseFramed has already declined any `--- $Name`
+// function of it on this path — HeaderSchema has already declined any `--- $Name`
 // selector above, so no section binding can vary; the section it compiles
 // against is built locally with no name; and Compile deliberately does not
 // resolve @-references, so variable values never enter a compiled schema.
@@ -82,13 +66,9 @@ func ParseFramed(src string) (*Framed, bool) {
 // compiled schema is now read-only — the lazily-compiled `pattern` regexp that
 // used to be written during validation was a data race, fixed in
 // schema.compilePattern. Do not reintroduce a write-at-validation field.
-//
-// Deliberately NOT cached: the *Definitions, which is mutable (it memoizes
-// per-name compilation), so each document gets a fresh one.
 type headerEntry struct {
-	header *parser.Header
-	sch    *schema.Schema
-	ok     bool // false: this header is not framable, decline as before
+	sch *schema.Schema
+	ok  bool // false: this header is not framable, decline as before
 }
 
 // The cache never evicts, so it is bounded twice: a header bigger than this
@@ -133,23 +113,23 @@ func compileHeader(headerSrc string) headerEntry {
 	if len(hdoc.Errors) > 0 {
 		return headerEntry{} // the normal path reports the header's fault
 	}
-	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, NewDefinitions(hdoc.Header))
+	defs := NewDefinitions(hdoc.Header)
+	if defs.Fault() != nil {
+		// A named schema that does not resolve fails the whole document on the
+		// tree path, referenced or not — so the lazy path must decline it, not
+		// bind the records against the default schema. It used to accept
+		// `$draft: {title: nosuchtype}` beside a good `$schema` (review of
+		// SPEC 0003 §5.1, 2026-09-14): a fast path may only decline.
+		return headerEntry{}
+	}
+	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, defs)
 	if cerr != nil {
 		return headerEntry{}
 	}
 	if hdoc.Header != nil && len(hdoc.Header.Vars) > 0 {
 		return headerEntry{} // @variables resolve during the tree walk
 	}
-	return headerEntry{header: hdoc.Header, sch: sch, ok: true}
-}
-
-// SchemaMemberDefs exposes the compiled member definitions in schema order,
-// which is what a binder walks alongside the framed members.
-func SchemaMemberDefs(s *schema.Schema) ([]string, map[string]*schema.MemberDef) {
-	if s == nil {
-		return nil, nil
-	}
-	return s.Names, s.Defs
+	return headerEntry{sch: sch, ok: true}
 }
 
 // IsSimpleSchema reports whether every declared member is a plain typed

@@ -198,3 +198,26 @@ func TestNilDefinitionsAreInert(t *testing.T) {
 		t.Errorf("a nil Definitions should still parse: %v", err)
 	}
 }
+
+// A document's own definition may be an alias of a shared one. Resolving the
+// document's names before the shared definitions were in scope reported these
+// as undefined-schema (review of SPEC 0004 A1, 2026-09-14).
+func TestLocalAliasOfASharedDefinition(t *testing.T) {
+	defs, err := io.ParseDefinitions("~ $base: {name: string}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []string{
+		"~ $person: $base\n--- $person\n~ Alice\n",
+		"~ $schema: $base\n---\n~ Alice\n",
+	} {
+		doc, err := defs.Parse(src)
+		if err != nil {
+			t.Errorf("%q: %v", src, err)
+			continue
+		}
+		if !strings.Contains(doc.String(), "Alice") {
+			t.Errorf("%q wrote %q", src, doc.String())
+		}
+	}
+}

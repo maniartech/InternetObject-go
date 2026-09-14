@@ -104,6 +104,33 @@ extended differential test fails when the fast path is wrong.**
 Risk: low. (c) removes a field with no reader; (a) and (b) reorder work without changing what is
 decided. Gate: budgets must move DOWN; the differential tests must stay green.
 
+**Landed 2026-09-14 — measured** (allocs/op and B/op, the floor of repeated runs; bytes vary by a
+few hundred run to run):
+
+| Budget | Before | After |
+| --- | ---: | ---: |
+| **Marshal 1,000 structs** | 20 · 180,680 B | **4 · 180,248 B** — `encoding/json` spends 2 |
+| Unmarshal one small record | 14 · 2,160 B | **10 · 1,968 B** — `encoding/json` spends 11 |
+| Unmarshal 1,000 constrained | 18,997 · 2,501,261 B | 18,974 · **1,589,533 B (−36%)** |
+| Unmarshal one constrained record | 82 · 9,984 B | 71 · 7,528 B |
+| Unmarshal 1,000 structs (plain) | 4,024 · 1,145,608 B | 4,020 · 1,145,416 B |
+
+How: `Unmarshal` tokenizes once and hands the same `tokenizer.Stream` to both paths
+(`parser.ParseTokens`, `document.ParseTokens`); `document.HeaderSchema` returns the cached header
+schema WITHOUT framing, so every schema-only decline happens before `parser.FrameData`; the
+`Framed` type and its unread `Defs` are gone. `unmarshalLazy` now returns a plain `bool` — since
+the D2 amendment it had no error to return. The small record beat the estimate (11) because the
+second scan's stream also went.
+
+**(d), found while landing it:** `marshalFast` re-rendered the schema header — a constant per Go
+type — on every call: 16 of Marshal's 20 allocations. The plan now renders it once
+(`structPlan.header`).
+
+**Gates for 5.2, from this landing's review:** the constrained benchmark schema must gain a
+`choices` member and a `pattern` member before 5.2's code lands (`choices` compares with
+`core.Equal`, the representation-sensitive case), and 5.2 must say whether its encode-side check
+reaches `StreamMarshaler`, which validates each record on the tree path today.
+
 ### 5.2 Constraints on the fast paths — ADR 0007 D2 as written
 
 **Decode.** After a member binds, if its definition carries keys or constraints, box the decoded
@@ -193,4 +220,6 @@ order, and it is the only way the budgets can hold 5.2's gains once they exist.
 - **Done before this spec, 2026-09-14:** §3 — the lazy decoder's differential test made live, three
   validation bypasses fixed (commit `5507afc`); the encoder's per-call `os.Getenv` removed
   (Marshal 22 → 20 allocs).
-- **Next:** 5.6 (honest constrained benchmarks and budgets), then 5.1.
+- **Done:** 5.6 (constrained benchmarks and budgets), 5.1 (discarded work) — see their sections.
+- **Next:** the correctness batch from the Go-nativity audit (SPEC 0004 §A — bugs, not design), then
+  5.2.

@@ -20,8 +20,13 @@ import (
 
 // Parse parses one document. It never panics or returns an error: faults are
 // accumulated on the Document per the discipline above.
-func Parse(src string) *Document {
-	p := &parser{s: tokenizer.Tokenize(src), doc: &Document{}}
+func Parse(src string) *Document { return ParseTokens(tokenizer.Tokenize(src)) }
+
+// ParseTokens parses an already tokenized document. A caller that has scanned
+// the source for another purpose — the lazy decoder, deciding whether it can
+// frame the data — parses from the same tokens instead of scanning twice.
+func ParseTokens(s *tokenizer.Stream) *Document {
+	p := &parser{s: s, doc: &Document{}}
 	p.run()
 	return p.doc
 }

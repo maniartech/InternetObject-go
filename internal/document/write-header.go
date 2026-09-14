@@ -10,7 +10,7 @@ import (
 // Writing the HEADER: the definitions block above the first `---`.
 
 func SchemaText(s *schema.Schema) string {
-	d := &Doc{Defs: NewDefinitions(nil)}
+	d := &Doc{Defs: noHeader}
 	return d.writeSchemaBody(s)
 }
 

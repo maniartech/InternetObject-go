@@ -262,14 +262,12 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 		return "", false, nil
 	}
 
-	header := document.SchemaText(plan.compiled)
 	n := 1
 	if collection {
 		n = rv.Len()
 	}
-	dst := make([]byte, 0, len(header)+8+48*n)
-	dst = append(dst, header...)
-	dst = append(dst, '\n', '-', '-', '-', '\n')
+	dst := make([]byte, 0, len(plan.header)+8+48*n)
+	dst = append(dst, plan.header...)
 
 	if !collection {
 		if dst, err = appendFastRecord(dst, rv, plan, rootPath); err != nil {

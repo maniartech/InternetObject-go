@@ -188,7 +188,7 @@ corrupting every string it bound, seven ordinary tests failed and both different
    `unexpected-positional-member`.
 3. **An undefined variable reference was accepted as text.** `~ @0, …` bound the string "@0";
    the tree path resolves any `@`-string as a reference and reports `undefined-variable`.
-   `ParseFramed` declined headers that DEFINE variables, so only an undefined reference got
+   `ParseFramed` (now `HeaderSchema`) declined headers that DEFINE variables, so only an undefined reference got
    through. The rule — `@` plus at least one character, in any string form — had been written
    out at five sites; it is now `core.IsVariableRef`, and this path asks it too. (A sixth site,
    in `schema/typedef.go`, omits the length check and so treats a lone `@` differently; left

@@ -1,6 +1,6 @@
 // Package document is the top of the pipeline: it parses a source text, binds
 // each data section to its schema (explicit `$ref`, the default `$schema`, or
-// the inline header schema), compiles schemas lazily in one place, validates
+// the inline header schema), compiles schemas in one place, validates
 // records, and surfaces deferred literal errors. The result is a
 // parser.Document whose records hold VALIDATED values.
 package document
@@ -12,6 +12,7 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
 
 // Doc is a loaded (parsed, bound, validated) document.
@@ -38,21 +39,25 @@ func (d *Doc) schemaFor(sec *parser.Section) *schema.Schema {
 	return d.SecSchemas[sec]
 }
 
-// Load parses and validates one document, binding each section to the schema
+// Parse parses and validates one document, binding each section to the schema
 // its own header names.
-func Parse(src string) *Doc { return parseWith(src, nil, nil) }
+func Parse(src string) *Doc { return load(parser.Parse(src), nil, nil) }
+
+// ParseTokens is Parse over an already tokenized document.
+func ParseTokens(s *tokenizer.Stream) *Doc { return load(parser.ParseTokens(s), nil, nil) }
 
 // ParseWith parses and validates one document against an ALREADY COMPILED
 // schema, which overrides whatever the document's own header would bind (ADR
 // 0004 D5: attached > header > tag-derived). The header is still read, so
 // `@variables` and `$refs` it defines stay resolvable inside records.
-func ParseWith(src string, override *schema.Schema) *Doc { return parseWith(src, override, nil) }
+func ParseWith(src string, override *schema.Schema) *Doc {
+	return load(parser.Parse(src), override, nil)
+}
 
-// parseWith is THE parse: an optional compiled schema that overrides whatever
-// the header would bind, and an optional frozen header in scope whose
-// definitions this document's own header overrides.
-func parseWith(src string, override *schema.Schema, parent *Frozen) *Doc {
-	pdoc := parser.Parse(src)
+// load is THE load of a parsed document: an optional compiled schema that
+// overrides whatever the header would bind, and an optional frozen header in
+// scope whose definitions this document's own header overrides.
+func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 	defs := NewDefinitionsWith(pdoc.Header, parent)
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 
@@ -76,23 +81,16 @@ func parseWith(src string, override *schema.Schema, parent *Frozen) *Doc {
 			return doc
 		}
 
-		// Every NAMED schema is compiled here, whether or not anything
-		// references it. io-go used to compile them lazily, so a header could
-		// carry a `$draft: {title: nosuchtype}` that nothing referenced and the
-		// document parsed CLEAN — the reference rejects it with unknown-type
-		// (probed 2026-09-06). Lazy compilation was also what made the writer
-		// silently drop such a definition: it compiled in order to write, found
-		// it broken, and skipped it. Compiling here fixes the divergence and
-		// removes the writer's problem at the source rather than teaching the
-		// writer to render shapes it cannot compile.
-		for _, def := range pdoc.Header.Defs {
-			if def.Kind != parser.DefSchema {
-				continue
-			}
-			if _, cerr := defs.SchemaOf(def.Key); cerr != nil {
-				doc.Errors = append(doc.Errors, *cerr)
-				return doc
-			}
+		// Every NAMED schema must resolve, whether or not anything references
+		// it (NewDefinitions compiled them all). io-go used to compile them
+		// lazily, so a header could carry a `$draft: {title: nosuchtype}` that
+		// nothing referenced and the document parsed CLEAN — the reference
+		// rejects it with unknown-type (probed 2026-09-06). Lazy compilation was
+		// also what made the writer silently drop such a definition: it
+		// compiled in order to write, found it broken, and skipped it.
+		if f := defs.Fault(); f != nil {
+			doc.Errors = append(doc.Errors, *f)
+			return doc
 		}
 	}
 
@@ -243,9 +241,6 @@ func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
 	}
 	pdoc.Header = header
 	defs := NewDefinitions(header)
-	// The name is already compiled; seeding the cache IS the statement that
-	// this schema needs no shape to resolve.
-	defs.compiled["schema"] = s
 	doc := &Doc{Document: pdoc, Defs: defs, SecSchemas: map[*parser.Section]*schema.Schema{}}
 	for _, sec := range pdoc.Sections {
 		doc.SecSchemas[sec] = s
@@ -253,7 +248,7 @@ func NewWithSchema(pdoc *parser.Document, s *schema.Schema) *Doc {
 	return doc
 }
 
-// CompileSchemaString parses a schema definition string and compiles it — the
+// ParseSchema parses a schema definition string and compiles it — the
 // schemaDef pipeline stage, used by the conformance suite and (later) the
 // public API.
 func ParseSchema(src string) (*schema.Schema, *errs.Error) {
@@ -311,16 +306,7 @@ func sectionSchema(sec *parser.Section, defs *Definitions) (*schema.Schema, *err
 		return defs.SchemaOf("schema")
 	}
 	if defs.Header.Inline != nil {
-		// The inline schema is cached on its own field — the compiled map is
-		// keyed by declared names, and "" is a legal declared name (`~ $: x`).
-		if defs.inline == nil {
-			s, cerr := schema.Compile(defs.Header.Inline, "")
-			if cerr != nil {
-				return nil, cerr
-			}
-			defs.inline = s
-		}
-		return defs.inline, nil
+		return defs.inlineSchema()
 	}
 	return nil, nil
 }

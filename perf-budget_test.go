@@ -69,21 +69,23 @@ func perfBudgets(t *testing.T) []budget {
 		{"Marshal 1,000 structs", func() {
 			_, err := io.Marshal(benchData)
 			must(err)
-		}, 20, 180_680}, // 22 -> 20 on 2026-09-14: the fast path stopped calling
-		// os.Getenv per Marshal, which allocates on Windows (UTF-16 conversion).
+		}, 4, 180_248}, // 22 -> 20 on 2026-09-14: no os.Getenv per Marshal (it
+		// allocates on Windows). 20 -> 4 the same day (SPEC 0003 §5.1): the schema
+		// header is rendered once per type, not once per call.
 		{"Unmarshal 1,000 structs", func() {
 			var out []benchPerson
 			must(io.Unmarshal(benchIOText, &out))
-		}, 4_025, 1_145_675},
+		}, 4_020, 1_145_416}, // 4,024 -> 4,020 on 2026-09-14 (SPEC 0003 §5.1)
 		{"Parse 1,000 records dynamically", func() {
 			doc, err := io.Parse(benchIOText)
 			must(err)
 			_ = doc.Value()
-		}, 17_952, 1_456_562},
+		}, 17_950, 1_456_488},
 		{"Unmarshal one small record", func() {
 			var p benchPerson
 			must(io.Unmarshal(oneIO, &p))
-		}, 14, 2_160},
+		}, 10, 1_968}, // 14 -> 10 on 2026-09-14 (§5.1): no unread Definitions, no
+		// second scan. encoding/json spends 11.
 		{"Validate 1,000 structs", func() {
 			must(io.Validate(benchData))
 		}, 12_009, 659_154},
@@ -94,27 +96,28 @@ func perfBudgets(t *testing.T) []budget {
 		{"Unmarshal 1,000 constrained", func() {
 			var out []constrainedPerson
 			must(io.Unmarshal(constrainedIOText, &out))
-		}, 18_997, 2_501_261},
+		}, 18_974, 1_589_533}, // from 18,997 · 2,501,261 B (§5.1): records are no
+		// longer framed before the lazy decoder declines the document.
 		{"Marshal 1,000 constrained", func() {
 			_, err := io.Marshal(constrainedData)
 			must(err)
-		}, 12_088, 877_348},
+		}, 12_087, 877_315},
 		{"Unmarshal one constrained record", func() {
 			var p constrainedPerson
 			must(io.Unmarshal(constrainedOneIO, &p))
-		}, 82, 9_984},
+		}, 71, 7_528}, // from 82 · 9,984 B (§5.1)
 		{"UnmarshalWith one record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneIO, &p, constrainedSchema))
-		}, 49, 4_568}, // generated code's Unmarshal: the header is re-parsed per call
+		}, 47, 4_488}, // generated code's Unmarshal: the header is re-parsed per call
 		{"UnmarshalWith one headerless record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneRow, &p, constrainedSchema))
-		}, 29, 2_296},
+		}, 27, 2_216},
 		{"UnmarshalWith 1,000 records", func() {
 			var out []benchPerson
 			must(io.UnmarshalWith(constrainedIOText, &out, constrainedSchema))
-		}, 18_952, 1_586_584},
+		}, 18_950, 1_586_496},
 		{"MarshalWith one record", func() {
 			_, err := io.MarshalWith(onePerson, constrainedSchema)
 			must(err)
@@ -123,9 +126,68 @@ func perfBudgets(t *testing.T) []budget {
 			_, err := io.MarshalWith(benchData, constrainedSchema)
 			must(err)
 		}, 12_015, 872_293},
+		// A header's bare schema expression is compiled once per document, not
+		// once per section that binds to it (review of SPEC 0004 A1: 69 -> 96
+		// allocations when it was recompiled per section).
+		{"Parse a 4-section document", func() {
+			_, err := io.Parse(fourSections)
+			must(err)
+		}, 67, 5_632},
+		// A builder started from a parsed document resolves that document's
+		// schemas once, not once per record added (same review: +7 allocations
+		// per Add when it did not). A fresh builder each time, so the section's
+		// growing record slice cannot make the figure drift.
+		{"NewBuilderFrom, then Add twice", func() {
+			sec := io.NewBuilderFrom(builderDoc).Section("", "p")
+			must(sec.Add(builderRecord))
+			must(sec.Add(builderRecord))
+		}, 94, 5_168},
 		{"ValidateWith one record", func() {
 			must(io.ValidateWith(onePerson, constrainedSchema))
 		}, 12, 672}, // generated code's constructor and every setter
+	}
+}
+
+const fourSections = "name: string, age: int\n--- a\n~ A, 1\n--- b\n~ B, 2\n--- c\n~ C, 3\n--- d\n~ D, 4"
+
+var (
+	builderDoc    *io.Document
+	builderRecord = map[string]any{"name": "B", "home": map[string]any{"city": "Y"}}
+)
+
+func init() {
+	var err error
+	builderDoc, err = io.Parse("~ $addr: {city: string}\n~ $p: {name: string, home: $addr}\n--- $p\n~ A, {X}")
+	if err != nil {
+		panic(err)
+	}
+}
+
+// The lazy decoder takes a CRLF document as it takes the same document with LF
+// endings: normalizing them costs one allocation, and falling back to the tree
+// would cost several times the whole decode. Until 2026-09-14 a multi-line CRLF
+// header made the lazy path decline — it sliced the caller's text with offsets
+// into the normalized copy — and nothing noticed, because declining is always
+// correct. This is the test that notices.
+func TestLazyPathTakesCRLFDocuments(t *testing.T) {
+	if v := forcedRoute(); v != "" {
+		t.Skipf("%s forces a general route", v)
+	}
+	lf := "~ $other: {x: int}\n~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\n" +
+		"---\n~ Alice, 30, 1.5, T, [a]\n~ Bob, 25, 2, F, []\n"
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+	decode := func(src string) func() {
+		return func() {
+			var rows []lazyRow
+			if err := io.Unmarshal(src, &rows); err != nil || len(rows) != 2 {
+				t.Fatalf("%q: %v %v", src, rows, err)
+			}
+		}
+	}
+	lfAllocs, _ := measure(10, decode(lf))
+	crlfAllocs, _ := measure(10, decode(crlf))
+	if crlfAllocs > lfAllocs+1 {
+		t.Errorf("CRLF decode spends %.0f allocations against LF's %.0f: it is not taking the lazy path", crlfAllocs, lfAllocs)
 	}
 }
 

@@ -41,6 +41,22 @@ var lazyDocs = []string{
 	lazySchema + "~ age: 30, name: Alice, score: 1, active: T, tags: []",
 	lazySchema + "~ N, 30, 1.5, T, []", // forbidden-null
 	lazySchema,
+
+	// A header whose OTHER named schemas do not resolve fails the whole document
+	// on the tree path, referenced or not; the lazy path used to bind these
+	// against the good default (review of SPEC 0003 §5.1, 2026-09-14).
+	"~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\n" +
+		"~ $draft: {title: nosuchtype}\n---\n~ Alice, 30, 1.5, T, []", // unknown-type
+	"~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\n" +
+		"~ $a: $b\n~ $b: $a\n---\n~ Alice, 30, 1.5, T, []", // invalid-definition
+	"~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\n" +
+		"~ $a: $nope\n---\n~ Alice, 30, 1.5, T, []", // undefined-schema
+
+	// CRLF line endings through a multi-line header. The lazy path once cut the
+	// header short here — it sliced the caller's text with offsets into the
+	// normalized one — and declined by accident.
+	"~ $other: {x: int}\r\n~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\r\n" +
+		"---\r\n~ Alice, 30, 1.5, T, [a]\r\n~ Bob, 25, 2, F, []\r\n",
 }
 
 // decodeBothWays returns the lazy and tree results for the same document.

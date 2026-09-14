@@ -36,7 +36,7 @@ HTTP handler decodes all day.
 `sync.Map`, following the existing `planCache` pattern rather than inventing a second cache
 idiom.
 
-**Why the header text alone is a sufficient key**, on this path specifically: `ParseFramed` has
+**Why the header text alone is a sufficient key**, on this path specifically: `ParseFramed` (since 2026-09-14 `HeaderSchema`) has
 already declined any `--- $Name` selector, so no section binding can vary; the section it
 compiles against is constructed locally with no name; and `Compile` deliberately does not
 resolve `@`-references, so variable *values* never enter a compiled schema. Compilation is
@@ -44,6 +44,9 @@ therefore a pure function of that text.
 
 **Deliberately not cached:** the `*docDefs`, which is mutable — it memoizes per-name
 compilation — so every document still gets a fresh one. Caching it would race.
+*(Amended 2026-09-14, SPEC 0004 A1: that memo DID race once a parsed Document was shared.
+`Definitions` now resolves every named schema when built and never writes those maps again; the
+framed path no longer builds one per call at all — SPEC 0003 §5.1.)*
 
 **Bounds, because header text can be attacker-controlled.** The cache never evicts, so it is
 bounded twice: headers over 4 KB are not stored (they amortize their own compilation), and past

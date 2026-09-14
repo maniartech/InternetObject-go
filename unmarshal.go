@@ -11,6 +11,7 @@ import (
 
 	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
 
 // Unmarshal parses src and stores the result in the value pointed to by v:
@@ -24,11 +25,12 @@ import (
 func Unmarshal(src string, v any) error {
 	// Simple shapes decode straight from token spans, with no value tree
 	// built at all (ADR 0007). Anything else — and anything the lazy path is
-	// not certain about — takes the general path below.
-	if took, err := unmarshalLazy(src, v); took {
-		return err
+	// not certain about — takes the general path below, from the same tokens.
+	s := tokenizer.Tokenize(src)
+	if unmarshalLazy(s, v) {
+		return nil
 	}
-	return bindDoc(document.Parse(src), v)
+	return bindDoc(document.ParseTokens(s), v)
 }
 
 // bindDoc binds a loaded document into v — the shared tail of Unmarshal and

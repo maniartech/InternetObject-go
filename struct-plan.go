@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/maniartech/InternetObject-go/internal/core"
+	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 	"github.com/maniartech/InternetObject-go/internal/schema"
 )
@@ -18,6 +19,11 @@ type structPlan struct {
 	validate bool           // any field (own or nested) carries a `schema` tag
 	fastOK   bool           // every member can be WRITTEN without the tree
 	lazyOK   bool           // every member can be READ from a token span
+	// header is the document head the fast encoder writes — the schema text and
+	// its separator — rendered once, by planFor, for a fastOK plan only. It is a
+	// pure function of compiled, which never changes; rendering it on every
+	// Marshal was 16 of that call's 20 allocations (measured 2026-09-14).
+	header string
 }
 
 var planCache sync.Map // reflect.Type → *structPlan
@@ -29,6 +35,11 @@ func planFor(t reflect.Type) (*structPlan, error) {
 	p, err := buildPlan(t, map[reflect.Type]bool{})
 	if err != nil {
 		return nil, err
+	}
+	if p.fastOK {
+		// Only a plan that can head a document needs its header: buildPlan
+		// also builds the plans of nested struct types, which never do.
+		p.header = document.SchemaText(p.compiled) + "\n---\n"
 	}
 	planCache.Store(t, p)
 	return p, nil
@@ -301,8 +312,6 @@ func isPlainMemberName(s string) bool {
 
 // ── schema derivation ──────────────────────────────────────────────────────
 
-// isModelStruct reports the value-model structs, which marshal as VALUES, not
-// as records with fields.
 // isModelStruct reports a struct the FORMAT owns, which must never be
 // reflected over as if it were a user's record: its fields are representation,
 // not data. Marshalling an Object as a user struct emitted `Members`,

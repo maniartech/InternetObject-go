@@ -19,10 +19,9 @@ import (
 //	doc, err := defs.Parse(payload)
 //	for item, err := range defs.Stream(conn, nil) { … }
 //
-// A *Definitions is IMMUTABLE and safe to use from many goroutines at once.
-// That is the difference between this and the resolver a parsed document
-// carries internally: that one memoizes as it goes, so it belongs to one
-// document on one goroutine, while this one has no work left to do.
+// A *Definitions is IMMUTABLE and safe to use from many goroutines at once:
+// every definition is compiled and every variable resolved when it is parsed,
+// so it has no work left to do.
 //
 // PRECEDENCE, as io-specs requires: a document's own header wins. A name it
 // defines shadows the same name here, its own `$schema` replaces this default,

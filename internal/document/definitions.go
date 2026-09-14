@@ -7,6 +7,7 @@ package document
 
 import (
 	"strings"
+	"sync/atomic"
 
 	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/errs"
@@ -14,14 +15,34 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/schema"
 )
 
-// Definitions resolves names for validation, compiling named schemas lazily and
-// exactly once.
+// Definitions resolves names for validation.
+//
+// It is safe for concurrent use, which a shared Document relies on. Every
+// schema its header names is resolved when it is built, and those maps are
+// never written again; the bare-expression schema, which many callers never
+// need, is compiled on first use and published through atomic pointers.
+//
+// It used to compile on first use and memoize into plain maps, failed lookups
+// of undefined names included, so two goroutines calling Document.SchemaOf on
+// one document raced (reproduced under -race, 2026-09-14, while the README
+// promised a parsed Document is safe to share). A mutex was measured and
+// rejected: locking a field of the receiver makes it escape, and with it every
+// *Doc holding one, which put heap allocations on every MarshalWith.
 type Definitions struct {
-	// Header is the parsed header these definitions came from.
-	Header   *parser.Header
-	compiled map[string]*schema.Schema
-	failed   map[string]*errs.Error
-	inline   *schema.Schema // the compiled bare-expression header schema
+	// Header is the parsed header these definitions came from. It must not be
+	// changed afterwards; build new Definitions instead.
+	Header *parser.Header
+
+	compiled map[string]*schema.Schema // by declared name, aliases included
+	failed   map[string]*errs.Error    // by declared name
+	fault    *errs.Error               // the first declared schema that failed
+
+	// The bare-expression schema, or its compile fault — whichever is set is
+	// final. Two goroutines may both compile it first; they publish equal
+	// results.
+	inline    atomic.Pointer[schema.Schema]
+	inlineErr atomic.Pointer[errs.Error]
+
 	// parent is a frozen header in scope, consulted only when this document
 	// defines no such name. It is READ-ONLY and may be shared across
 	// goroutines; checking it second is what makes an in-stream definition
@@ -29,16 +50,64 @@ type Definitions struct {
 	parent *Frozen
 }
 
-func NewDefinitions(h *parser.Header) *Definitions {
-	return &Definitions{Header: h, compiled: map[string]*schema.Schema{}, failed: map[string]*errs.Error{}}
-}
+// NewDefinitions resolves every schema h names.
+func NewDefinitions(h *parser.Header) *Definitions { return NewDefinitionsWith(h, nil) }
 
-// NewDefinitionsWith is NewDefinitions with a frozen header in scope.
+// NewDefinitionsWith is NewDefinitions with a frozen header in scope. The
+// parent is in place before any name resolves, because a local definition may
+// be an alias of a shared one (`~ $person: $base`); resolving first reported
+// that alias as undefined-schema (review of SPEC 0004 A1, 2026-09-14).
 func NewDefinitionsWith(h *parser.Header, parent *Frozen) *Definitions {
-	d := NewDefinitions(h)
-	d.parent = parent
+	d := &Definitions{Header: h, parent: parent}
+	if h == nil {
+		return d
+	}
+	// Targets first, aliases second, so an alias declared ahead of its target
+	// (`~ $a: $b` then `~ $b: {…}`) finds the target compiled rather than
+	// compiling it a second time.
+	for _, aliases := range []bool{false, true} {
+		for _, def := range h.Defs {
+			if def.Kind != parser.DefSchema || isAlias(def.Value) != aliases {
+				continue
+			}
+			// SchemaOf never writes; every write to these maps is here, before
+			// d can be shared.
+			s, err := d.SchemaOf(def.Key)
+			if err != nil {
+				if d.failed == nil {
+					d.failed = map[string]*errs.Error{}
+				}
+				d.failed[def.Key] = err
+				continue
+			}
+			if d.compiled == nil {
+				d.compiled = map[string]*schema.Schema{}
+			}
+			d.compiled[def.Key] = s
+		}
+	}
+	for _, def := range h.Defs {
+		if e := d.failed[def.Key]; def.Kind == parser.DefSchema && e != nil {
+			d.fault = e // the first in header order, whichever pass found it
+			break
+		}
+	}
 	return d
 }
+
+// isAlias reports a schema definition that is only a reference to another.
+func isAlias(shape any) bool {
+	ref, ok := shape.(string)
+	return ok && strings.HasPrefix(ref, "$")
+}
+
+// noHeader resolves names for a document with no header. Being read-only, one
+// value serves every such write.
+var noHeader = NewDefinitions(nil)
+
+// Fault returns the fault of the first schema the header names that does not
+// resolve — in header order, whether or not anything references it — or nil.
+func (d *Definitions) Fault() *errs.Error { return d.fault }
 
 // fromParent reads a name out of the frozen header without writing anything,
 // which is what keeps a shared *Frozen safe to read concurrently.
@@ -50,13 +119,13 @@ func (d *Definitions) fromParent(name string) (*schema.Schema, bool) {
 	return s, ok
 }
 
-// SchemaOf resolves and compiles the named schema, chasing `$ref` aliases. A
-// self- or mutually-referential alias chain is invalid-definition — the
-// reference crashes with a bare stack overflow here (upstream finding), and a
-// designated code is the non-crashing spelling of that behavior.
+// SchemaOf returns the named schema, chasing `$ref` aliases. A self- or
+// mutually-referential alias chain is invalid-definition — the reference
+// crashes with a bare stack overflow here (upstream finding), and a designated
+// code is the non-crashing spelling of that behavior.
 func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 	name = strings.TrimPrefix(name, "$")
-	seen := map[string]bool{}
+	var seen map[string]bool // only an alias chain needs it
 	for {
 		if s, ok := d.compiled[name]; ok {
 			return s, nil
@@ -65,29 +134,26 @@ func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 			return nil, e
 		}
 		if seen[name] {
-			e := &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
-			d.failed[name] = e
-			return nil, e
+			return nil, &errs.Error{Code: errs.InvalidDefinition, Line: 1, Col: 1}
 		}
-		seen[name] = true
 		var shape any
 		if d.Header != nil {
-			if v, ok := d.Header.Schemas[name]; ok {
-				shape = v
-			}
+			shape = d.Header.Schemas[name]
 		}
 		if shape == nil {
 			// Not ours: a frozen header in scope may define it.
 			if s, ok := d.fromParent(name); ok {
 				return s, nil
 			}
-			e := &errs.Error{Code: errs.UndefinedSchema, Line: 1, Col: 1}
-			d.failed[name] = e
-			return nil, e
+			return nil, &errs.Error{Code: errs.UndefinedSchema, Line: 1, Col: 1}
 		}
 		// A named schema may itself be a `$ref` to another one.
-		if ref, ok := shape.(string); ok && strings.HasPrefix(ref, "$") {
-			name = strings.TrimPrefix(ref, "$")
+		if isAlias(shape) {
+			if seen == nil {
+				seen = map[string]bool{}
+			}
+			seen[name] = true
+			name = strings.TrimPrefix(shape.(string), "$")
 			continue
 		}
 		// A header may hold a shape the parser read, or a schema already
@@ -95,17 +161,28 @@ func (d *Definitions) SchemaOf(name string) (*schema.Schema, *errs.Error) {
 		// definitions of a name, so both resolve here rather than only at the
 		// site that happened to be written first.
 		if already, ok := shape.(*schema.Schema); ok {
-			d.compiled[name] = already
 			return already, nil
 		}
-		s, cerr := schema.Compile(shape, "")
-		if cerr != nil {
-			d.failed[name] = cerr
-			return nil, cerr
-		}
-		d.compiled[name] = s
+		return schema.Compile(shape, "")
+	}
+}
+
+// inlineSchema compiles the header's bare schema expression once, however
+// many sections and stream frames bind to it.
+func (d *Definitions) inlineSchema() (*schema.Schema, *errs.Error) {
+	if s := d.inline.Load(); s != nil {
 		return s, nil
 	}
+	if e := d.inlineErr.Load(); e != nil {
+		return nil, e
+	}
+	s, err := schema.Compile(d.Header.Inline, "")
+	if err != nil {
+		d.inlineErr.Store(err)
+		return nil, err
+	}
+	d.inline.Store(s)
+	return s, nil
 }
 
 // Var resolves a variable by (sigil-less) name, chasing @-references so a
