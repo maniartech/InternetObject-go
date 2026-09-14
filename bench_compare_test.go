@@ -202,21 +202,24 @@ func TestPayloadSizes(t *testing.T) {
 // they would go stale; these benchmarks exist so the comparison cannot leave the
 // constrained case out again.
 //
-// The schema is examples/06-codegen/person.io. encoding/json validates nothing,
+// The schema is examples/06-codegen/person.io plus a `pattern` on email and
+// `choices` on the tag elements, so every constraint family the fast paths
+// check is inside a budget. encoding/json validates nothing,
 // so its controls are the plain benchmarks above: the same data, the same work
 // minus the checks this package exists to make.
 
 type constrainedPerson struct {
 	Name   string   `io:"name"   json:"name"   schema:"{string, minLen: 2, maxLen: 50}"`
 	Age    int      `io:"age"    json:"age"    schema:"{int, min: 0, max: 130}"`
-	Email  string   `io:"email"  json:"email"`
+	Email  string   `io:"email"  json:"email"  schema:"{string, pattern: '^[a-z0-9.]+@'}"`
 	Active bool     `io:"active" json:"active"`
 	Score  float64  `io:"score"  json:"score"`
-	Tags   []string `io:"tags"   json:"tags"`
+	Tags   []string `io:"tags"   json:"tags"   schema:"[{string, choices: [alpha, beta, admin]}]"`
 }
 
 const constrainedSchemaText = "name: {string, minLen: 2, maxLen: 50}, age: {int, min: 0, max: 130}, " +
-	"email: string, active: bool, score: number, tags: [string]"
+	"email: {string, pattern: '^[a-z0-9.]+@'}, active: bool, score: number, " +
+	"tags: [{string, choices: [alpha, beta, admin]}]"
 
 var (
 	constrainedData   []constrainedPerson

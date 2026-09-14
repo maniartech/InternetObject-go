@@ -111,6 +111,37 @@ func TestLazyShapesMatchTreePath(t *testing.T) {
 		"~ a: 1, b: 2, 3, [4]", // keyed first, then positional onto UNFILLED fields
 	}
 
+	// Constraints and choices, one family per header, each with a document that
+	// passes and one that does not. The fast path asks the validator itself
+	// (schema.Accepts) and declines on a refusal, so both paths must agree on
+	// every one: the passing value bound identically, the failing one reported
+	// with the same code. TestLazyConstraintFamiliesAreLive proves each row can
+	// fail.
+	for _, c := range constrainedShapes {
+		sameBothWays[[]optRow](t, c.header+c.doc)
+		sameBothWays[optRow](t, c.header+c.doc)
+	}
+
+	// Branches a constrained schema reaches that the rows above do not: a
+	// constraint on an array as a whole (declined), a bool judged by choices,
+	// and an unsigned field with a bound.
+	type flagRow struct {
+		B bool   `io:"b"`
+		U uint16 `io:"u"`
+		D []int  `io:"d"`
+	}
+	for _, c := range []struct{ header, doc string }{
+		{"b: bool, u: int, d: {array, of: int, minLen: 1}\n---\n", "~ T, 1, []"},
+		{"b: bool, u: int, d: {array, of: int, minLen: 1}\n---\n", "~ T, 1, [2]"},
+		{"b: {any, choices: [T]}, u: int, d: [int]\n---\n", "~ F, 1, []"},
+		{"b: {any, choices: [T]}, u: int, d: [int]\n---\n", "~ T, 1, []"},
+		{"b: bool, u: {int, max: 10}, d: [int]\n---\n", "~ T, 11, []"},
+		{"b: bool, u: {int, max: 10}, d: [int]\n---\n", "~ T, 10, []"},
+	} {
+		sameBothWays[flagRow](t, c.header+c.doc)
+		sameBothWays[[]flagRow](t, c.header+c.doc)
+	}
+
 	for _, d := range optDocs {
 		sameBothWays[[]optRow](t, opt+d)
 		if !strings.Contains(d, "\n") {
@@ -124,5 +155,45 @@ func TestLazyShapesMatchTreePath(t *testing.T) {
 	for _, d := range narrowDocs {
 		sameBothWays[[]narrowRow](t, narrow+d)
 		sameBothWays[narrowRow](t, narrow+d)
+	}
+}
+
+// constrainedShapes is one row per constraint family the fast decoder now
+// accepts: a header and a document for optRow (name, nick?, age).
+var constrainedShapes = []struct{ family, header, doc string }{
+	{"minLen", "name: {string, minLen: 3}, nick?: string, age: int\n---\n", "~ Al, x, 1"},
+	{"maxLen", "name: {string, maxLen: 3}, nick?: string, age: int\n---\n", "~ Alice, x, 1"},
+	{"len", "name: {string, len: 3}, nick?: string, age: int\n---\n", "~ Alice, x, 1"},
+	{"pattern", "name: {string, pattern: '^[A-Z]'}, nick?: string, age: int\n---\n", "~ alice, x, 1"},
+	{"string choices", "name: {string, choices: [Ann, Bob]}, nick?: string, age: int\n---\n", "~ Cat, x, 1"},
+	{"min", "name: string, nick?: string, age: {int, min: 18}\n---\n", "~ Ann, x, 17"},
+	{"max", "name: string, nick?: string, age: {int, max: 130}\n---\n", "~ Ann, x, 131"},
+	{"multipleOf", "name: string, nick?: string, age: {int, multipleOf: 5}\n---\n", "~ Ann, x, 12"},
+	{"number choices", "name: string, nick?: string, age: {int, choices: [1, 2]}\n---\n", "~ Ann, x, 3"},
+	{"optional constrained", "name: string, nick?: {string, minLen: 2}, age: int\n---\n", "~ Ann, x, 3"},
+	{"bound naming a variable", "name: string, nick?: string, age: {int, min: @n}\n---\n", "~ Ann, x, 3"},
+}
+
+// Every constrainedShapes row must be one the constraint actually refuses —
+// otherwise its agreement proves nothing about the check. Its passing twin
+// (the same header, with a value that satisfies it) must decode cleanly.
+func TestLazyConstraintFamiliesAreLive(t *testing.T) {
+	passing := map[string]string{
+		"minLen": "~ Ann, x, 1", "maxLen": "~ Al, x, 1", "len": "~ Ann, x, 1",
+		"pattern": "~ Alice, x, 1", "string choices": "~ Bob, x, 1",
+		"min": "~ Ann, x, 18", "max": "~ Ann, x, 130", "multipleOf": "~ Ann, x, 15",
+		"number choices": "~ Ann, x, 2", "optional constrained": "~ Ann, xy, 3",
+	}
+	for _, c := range constrainedShapes {
+		var r optRow
+		if err := io.Unmarshal(c.header+c.doc, &r); err == nil {
+			t.Errorf("%s: %q was accepted; the row tests nothing", c.family, c.doc)
+		}
+		if ok, has := passing[c.family]; has {
+			sameBothWays[optRow](t, c.header+ok)
+			if err := io.Unmarshal(c.header+ok, &r); err != nil {
+				t.Errorf("%s: passing twin %q refused: %v", c.family, ok, err)
+			}
+		}
 	}
 }

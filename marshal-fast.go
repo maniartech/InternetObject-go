@@ -2,13 +2,16 @@ package internetobject
 
 import (
 	"encoding/base64"
+	"errors"
 	"math/big"
 	"os"
 	"reflect"
 	"sync/atomic"
 	"time"
 
+	"github.com/maniartech/InternetObject-go/internal/core"
 	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/schema"
 )
 
 // The direct encode path (ADR 0006 roadmap item 5).
@@ -28,18 +31,23 @@ import (
 // silent wire change.
 //
 // The path is taken only for a struct (or slice of structs) whose every
-// member is a scalar or a slice of scalars, and whose type declares no
-// `schema` constraints (those need the tree for validation anyway). Anything
-// else falls back.
+// member is a scalar or a slice of scalars. A type whose `schema` tags must be
+// validated is taken too when the fast encoder can ask the validator every
+// question the tree would (fastCheck); a value the validator refuses makes
+// it decline, and the tree path reports. Anything else falls back.
 
-// fastEligible reports whether a plan's every field can be written directly.
+// fastEligible reports whether a plan's every field can be written directly,
+// and for a type that validates records what to ask about each (plan.checks).
 // Computed once per type, in the plan.
 func fastEligible(t reflect.Type, plan *structPlan) bool {
+	var checks []fieldCheck
 	if plan.validate {
-		return false // constraints need the tree to validate against
+		checks = make([]fieldCheck, len(plan.fields))
 	}
-	for _, f := range plan.fields {
-		ft := t.FieldByIndex(f.index).Type
+	for i := range plan.fields {
+		f := &plan.fields[i]
+		declared := t.FieldByIndex(f.index).Type
+		ft := declared
 		for ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
@@ -48,9 +56,124 @@ func fastEligible(t reflect.Type, plan *structPlan) bool {
 				return false
 			}
 		}
+		if plan.validate {
+			c, ok := fastCheck(f, declared, plan.compiled.Defs[f.name])
+			if !ok {
+				return false
+			}
+			checks[i] = c
+		}
 	}
+	plan.checks = checks // only for a plan the fast encoder takes
 	return true
 }
+
+// fieldCheck is what the fast encoder asks schema.Accepts about one field of a
+// type that validates: the field's value, and each element of a slice field.
+// A nil definition means there is nothing to ask.
+type fieldCheck struct {
+	value, elem *schema.MemberDef
+}
+
+// fastCheck works out what to ask the validator about one field so that the
+// fast encoder refuses exactly what validating the record would, or reports
+// that Accepts alone cannot tell. It can when the field's definition md is
+// the one the field's Go type derives — a tag that adds constraints, not one
+// that changes the type (`schema:"string"` on an int must still reach the
+// tree, which reports expected-string) — with nothing that needs more than the
+// value: no default, union or schema, no constraint on an array as a whole,
+// and no `optional: false` on a field `omitempty` may leave out.
+//
+// What must be asked is anything a value of the derived type can still fail:
+// a constraint; nil, where null is not declared; and ANY string, because the
+// validator reads an `@`-string as a variable reference, which a record with
+// no definitions cannot resolve. That last one shipped as a bypass in review
+// (SPEC 0003 §5.2): an unconstrained name "@x" was written, where validation
+// reports undefined-variable.
+func fastCheck(f *fieldPlan, declared reflect.Type, md *schema.MemberDef) (fieldCheck, bool) {
+	var c fieldCheck
+	if md == nil || !md.Standalone() || (f.omitZero && !md.Optional) {
+		return c, false
+	}
+	derived, err := annotationFor(declared, f.kind, map[reflect.Type]bool{}, new(bool))
+	if err != nil {
+		return c, false
+	}
+	nilable := declared.Kind() == reflect.Pointer
+	switch d := derived.(type) {
+	case string:
+		if md.Type != d || md.Of != nil || (md.Constrained() && !acceptsKind(f.enc)) {
+			return c, false
+		}
+		if md.Constrained() || nilable || f.enc == encString {
+			c.value = md
+		}
+	case []any:
+		elem, ok := d[0].(string)
+		of := md.Of
+		if !ok || md.Type != "array" || len(md.Constraints) > 0 || of == nil || of.Type != elem ||
+			of.Of != nil || !of.Standalone() || (of.Constrained() && !acceptsKind(f.elem)) {
+			return c, false
+		}
+		if nilable {
+			c.value = md // a nil slice pointer is judged; a non-nil one has nothing more
+		}
+		st := declared
+		for st.Kind() == reflect.Pointer {
+			st = st.Elem()
+		}
+		if of.Constrained() || st.Elem().Kind() == reflect.Pointer || f.elem == encString {
+			c.elem = of
+		}
+	default:
+		return c, false
+	}
+	return c, true
+}
+
+// acceptsKind reports the kinds whose constrained value fastAccepts can box. A
+// bool is not among them: no bool typedef carries a constraint, and a tag that
+// makes one (`{any, choices: [T]}`) changes the type, which fastCheck refuses.
+func acceptsKind(k encKind) bool {
+	switch k {
+	case encString, encInt, encUint, encFloat:
+		return true
+	}
+	return false
+}
+
+// fastAccepts reports whether rv satisfies md, boxed exactly as encodeValue
+// boxes it for the tree's validation: a string, a float64 for every number,
+// nil for a nil pointer.
+func fastAccepts(rv reflect.Value, k encKind, md *schema.MemberDef) bool {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return md.Accepts(nil)
+		}
+		rv = rv.Elem()
+	}
+	if k == encString && core.IsVariableRef(rv.String()) {
+		return false // a reference the record's empty definitions cannot resolve
+	}
+	if !md.Constrained() {
+		return true
+	}
+	switch k {
+	case encString:
+		return md.Accepts(rv.String())
+	case encInt:
+		return md.Accepts(float64(rv.Int()))
+	case encUint:
+		return md.Accepts(float64(rv.Uint()))
+	case encFloat:
+		return md.Accepts(rv.Float())
+	}
+	return false // fastCheck admits no other constrained kind
+}
+
+// errFastDecline makes marshalFast hand the value to the tree path, which
+// validates it and reports the fault. It never reaches a caller.
+var errFastDecline = errors.New("the fast encoder declines this value")
 
 func fastScalarType(t reflect.Type) bool {
 	for t.Kind() == reflect.Pointer {
@@ -73,7 +196,11 @@ func fastScalarType(t reflect.Type) bool {
 // appendFastRecord writes one struct as a record body: members in plan order,
 // `omitempty` holes held back so trailing ones vanish — the same rule the
 // tree writer applies.
-func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, at pathAt) ([]byte, error) {
+//
+// checks is passed separately from plan because what must be asked depends on
+// the schema validated against, not only the type: Marshal passes the type's
+// own (plan.checks), MarshalWith those for the schema it was given (§5.3).
+func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, checks []fieldCheck, at pathAt) ([]byte, error) {
 	written, pending := 0, 0
 	for i := range plan.fields {
 		f := &plan.fields[i]
@@ -86,6 +213,20 @@ func appendFastRecord(dst []byte, rv reflect.Value, plan *structPlan, at pathAt)
 		if f.omitZero && fv.IsZero() {
 			pending++ // a hole: only emitted if a later member follows
 			continue
+		}
+		if checks != nil {
+			c := checks[i]
+			if c.value != nil && !fastAccepts(fv, f.enc, c.value) {
+				return nil, errFastDecline
+			}
+			if c.elem != nil {
+				sv := reflect.Indirect(fv)
+				for j := 0; sv.IsValid() && j < sv.Len(); j++ {
+					if !fastAccepts(sv.Index(j), f.elem, c.elem) {
+						return nil, errFastDecline
+					}
+				}
+			}
 		}
 		for ; pending > 0; pending-- {
 			if written > 0 {
@@ -270,7 +411,10 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 	dst = append(dst, plan.header...)
 
 	if !collection {
-		if dst, err = appendFastRecord(dst, rv, plan, rootPath); err != nil {
+		if dst, err = appendFastRecord(dst, rv, plan, plan.checks, rootPath); err != nil {
+			if err == errFastDecline {
+				return "", false, nil
+			}
 			return "", true, err
 		}
 		return string(dst), true, nil
@@ -288,7 +432,10 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 			dst = append(dst, '\n')
 		}
 		dst = append(dst, '~', ' ')
-		if dst, err = appendFastRecord(dst, ev, plan, path); err != nil {
+		if dst, err = appendFastRecord(dst, ev, plan, plan.checks, path); err != nil {
+			if err == errFastDecline {
+				return "", false, nil
+			}
 			return "", true, err
 		}
 	}

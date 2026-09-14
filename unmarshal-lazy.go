@@ -281,13 +281,20 @@ func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md
 			// "@0" (differential fuzzer, 2026-09-14).
 			return errUnsupportedLazy
 		}
+		if !accepts(v, md) {
+			return errUnsupportedLazy
+		}
 		field.SetString(v)
 		return nil
 	case reflect.Bool:
 		if m.Kind != tokenizer.KindBoolean {
 			return errUnsupportedLazy
 		}
-		field.SetBool(s.Bool(tok))
+		b := s.Bool(tok)
+		if !accepts(b, md) {
+			return errUnsupportedLazy
+		}
+		field.SetBool(b)
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if m.Kind != tokenizer.KindNumber {
@@ -297,7 +304,7 @@ func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md
 		if n != math.Trunc(n) || math.IsInf(n, 0) || math.IsNaN(n) {
 			return errUnsupportedLazy
 		}
-		if field.OverflowInt(int64(n)) {
+		if field.OverflowInt(int64(n)) || !accepts(n, md) {
 			return errUnsupportedLazy
 		}
 		field.SetInt(int64(n))
@@ -310,7 +317,7 @@ func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md
 		if n != math.Trunc(n) || n < 0 || math.IsInf(n, 0) || math.IsNaN(n) {
 			return errUnsupportedLazy
 		}
-		if field.OverflowUint(uint64(n)) {
+		if field.OverflowUint(uint64(n)) || !accepts(n, md) {
 			return errUnsupportedLazy
 		}
 		field.SetUint(uint64(n))
@@ -319,7 +326,11 @@ func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md
 		if m.Kind != tokenizer.KindNumber {
 			return errUnsupportedLazy
 		}
-		field.SetFloat(s.Number(tok))
+		n := s.Number(tok)
+		if !accepts(n, md) {
+			return errUnsupportedLazy
+		}
+		field.SetFloat(n)
 		return nil
 	case reflect.Slice:
 		if m.Kind != tokenizer.KindBracketOpen {
@@ -328,6 +339,22 @@ func bindMember(field reflect.Value, m parser.RawMember, s *tokenizer.Stream, md
 		return bindFramedArray(field, m, s, md)
 	}
 	return errUnsupportedLazy
+}
+
+// accepts reports whether a decoded value satisfies md's constraints and
+// choices, asking the validator itself (MemberDef.Accepts). v is the value the
+// token decodes to — exactly what the tree path boxes and validates — not the
+// Go field, whose type does not change the verdict.
+//
+// It is generic so that v is boxed only on the constrained branch: taking an
+// `any` boxed every member of every record before asking whether it was
+// constrained, and the plain 1,000-record decode went from 4,020 to 10,019
+// allocations (budget, 2026-09-14).
+func accepts[T string | float64 | bool](v T, md *schema.MemberDef) bool {
+	if md == nil || !md.Constrained() {
+		return true
+	}
+	return md.Accepts(v)
 }
 
 // bindFramedArray decodes a bracketed span into a slice, re-framing the

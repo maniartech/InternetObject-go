@@ -75,7 +75,8 @@ func perfBudgets(t *testing.T) []budget {
 		{"Unmarshal 1,000 structs", func() {
 			var out []benchPerson
 			must(io.Unmarshal(benchIOText, &out))
-		}, 4_020, 1_145_416}, // 4,024 -> 4,020 on 2026-09-14 (SPEC 0003 §5.1)
+		}, 4_021, 1_145_531}, // 4,024 -> 4,020 on 2026-09-14 (SPEC 0003 §5.1); 4,021 once
+		// measure refilled pools after each GC (§5.2) — HEAD reads the same: drift.
 		{"Parse 1,000 records dynamically", func() {
 			doc, err := io.Parse(benchIOText)
 			must(err)
@@ -96,20 +97,22 @@ func perfBudgets(t *testing.T) []budget {
 		{"Unmarshal 1,000 constrained", func() {
 			var out []constrainedPerson
 			must(io.Unmarshal(constrainedIOText, &out))
-		}, 18_974, 1_589_533}, // from 18,997 · 2,501,261 B (§5.1): records are no
-		// longer framed before the lazy decoder declines the document.
+		}, 9_022, 1_229_498}, // 18,997 -> 18,974 (§5.1: no framing before a
+		// decline); the schema then gained `pattern` and `choices` (19,014), and
+		// §5.2 took it to 9,022 — the fast decoder checks constraints itself.
 		{"Marshal 1,000 constrained", func() {
 			_, err := io.Marshal(constrainedData)
 			must(err)
-		}, 12_087, 877_315},
+		}, 5_005, 256_194}, // 12,136 with `pattern`/`choices` -> 5,005 (§5.2)
 		{"Unmarshal one constrained record", func() {
 			var p constrainedPerson
 			must(io.Unmarshal(constrainedOneIO, &p))
-		}, 71, 7_528}, // from 82 · 9,984 B (§5.1)
+		}, 15, 5_928}, // 82 -> 71 (§5.1); 108 with `pattern`/`choices` -> 15 (§5.2)
 		{"UnmarshalWith one record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneIO, &p, constrainedSchema))
-		}, 47, 4_488}, // generated code's Unmarshal: the header is re-parsed per call
+		}, 60, 8_848}, // generated code's Unmarshal: the header is re-parsed per call.
+		// 47 -> 60 when the benchmark schema gained `pattern` and `choices` (§5.2).
 		{"UnmarshalWith one headerless record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneRow, &p, constrainedSchema))
@@ -117,15 +120,15 @@ func perfBudgets(t *testing.T) []budget {
 		{"UnmarshalWith 1,000 records", func() {
 			var out []benchPerson
 			must(io.UnmarshalWith(constrainedIOText, &out, constrainedSchema))
-		}, 18_950, 1_586_496},
+		}, 18_966, 1_607_761},
 		{"MarshalWith one record", func() {
 			_, err := io.MarshalWith(onePerson, constrainedSchema)
 			must(err)
-		}, 17, 1_312},
+		}, 17, 1_376},
 		{"MarshalWith 1,000 records", func() {
 			_, err := io.MarshalWith(benchData, constrainedSchema)
 			must(err)
-		}, 12_015, 872_293},
+		}, 12_017, 887_780},
 		// A header's bare schema expression is compiled once per document, not
 		// once per section that binds to it (review of SPEC 0004 A1: 69 -> 96
 		// allocations when it was recompiled per section).
@@ -191,6 +194,29 @@ func TestLazyPathTakesCRLFDocuments(t *testing.T) {
 	}
 }
 
+// The fast encoder takes a type whose `schema` tags carry constraints
+// (SPEC 0003 §5.2) — otherwise the constrained differential tests compare the
+// tree with itself, as an invalid tag once made them do. Taking it is visible in
+// allocations: the tree builds a record per call, the fast path does not.
+func TestFastEncoderTakesConstrainedTypes(t *testing.T) {
+	if v := forcedRoute(); v != "" {
+		t.Skipf("%s forces a general route", v)
+	}
+	valid, _ := constrainedFastSamples()
+	v := valid[0]
+	marshal := func() {
+		if _, err := io.Marshal(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fast, _ := measure(10, marshal)
+	var tree float64
+	io.WithTreeEncode(func() { tree, _ = measure(10, marshal) })
+	if fast*2 > tree {
+		t.Errorf("Marshal spends %.0f allocations, the tree path %.0f: the fast encoder is not taking the type", fast, tree)
+	}
+}
+
 // measure returns allocations and bytes per call, as -benchmem computes them.
 // It warms first, so the plan and header caches are measured in the steady
 // state every real caller sees, and reports the MINIMUM of three rounds:
@@ -201,6 +227,11 @@ func measure(n int, op func()) (allocs, bytes float64) {
 	allocs, bytes = -1, -1
 	for round := 0; round < 3; round++ {
 		runtime.GC()
+		// The collection just emptied every sync.Pool — regexp keeps its
+		// matchers in one — so one untimed call refills them. Without it a
+		// `pattern` constraint made the bytes of an operation swing by
+		// kilobytes from run to run, on paths nothing had changed.
+		op()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		for i := 0; i < n; i++ {

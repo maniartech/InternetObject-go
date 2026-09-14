@@ -19,6 +19,7 @@ type structPlan struct {
 	validate bool           // any field (own or nested) carries a `schema` tag
 	fastOK   bool           // every member can be WRITTEN without the tree
 	lazyOK   bool           // every member can be READ from a token span
+	checks   []fieldCheck   // what the fast encoder asks per field; nil unless validate
 	// header is the document head the fast encoder writes — the schema text and
 	// its separator — rendered once, by planFor, for a fastOK plan only. It is a
 	// pure function of compiled, which never changes; rendering it on every

@@ -148,3 +148,31 @@ general path reports. Full account in ADR 0007's amendment.
 the length check the other five sites used, so a lone `@` in a typedef position is treated as a
 reference there and as text everywhere else. Left as found. Whether a lone `@` is ever a
 reference is a format question.
+
+## 6. A string length bound naming an undefined variable is silently ignored — found 2026-09-14
+
+**For the owner, through the escalation process** — not changed here, because both of io-go's
+paths agree and the question is what the format means.
+
+`name: {string, minLen: @n}` with no `@n` defined validates `~ Ann` cleanly: `validateString` reads
+`md.Constraints["minLen"].(float64)`, a string `"@n"` is not a float64, and the bound is skipped.
+A numeric bound written the same way, `age: {int, min: @n}`, resolves the reference and reports
+`undefined-variable`. So one spelling is checked and the other is not.
+
+Found while writing SPEC 0003 §5.2's constraint-family differential rows, where a row meant to be
+refused was accepted by BOTH paths. Questions for the reference and the spec: may `len`/`minLen`/
+`maxLen` name a variable at all; if so, should an undefined one be `undefined-variable` as `min` is;
+and does io-js2 skip it as io-go does?
+
+## 7. Two writer gaps both paths share — found in review of SPEC 0003 §5.2, 2026-09-14
+
+Neither was introduced by the fast paths; both are reproduced on the general path alone.
+
+1. **An untyped string beginning with `@` is written bare and does not read back.** A string member
+   holding `"@x"` marshals as `@x`, which the reader resolves as a variable reference:
+   `undefined-variable`. The format reads `@`-strings as references in every string form, so
+   quoting does not help. Is there a spelling for text that starts with `@`, or must a writer refuse
+   it?
+2. **A nullable element type loses its nullability in the header.** `[]*string` tagged
+   `[{string, "null": true}]` writes the header `[string]`, so a record `[N, x]` does not read back.
+   A long-form writer bug of the kind fixed on 2026-09-13; not yet fixed.

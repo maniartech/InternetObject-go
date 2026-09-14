@@ -52,6 +52,16 @@ var lazyDocs = []string{
 	"~ $schema: {name: string, age: int, score: number, active: bool, tags: [string]}\n" +
 		"~ $a: $nope\n---\n~ Alice, 30, 1.5, T, []", // undefined-schema
 
+	// Constrained members, which the lazy path checks through the validator
+	// (SPEC 0003 §5.2): a document that passes, and one fault per family.
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ Alice, 30, 1.5, T, [a, bcd]",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ A, 30, 1.5, T, []",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ alice, 30, 1.5, T, []",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ Alice, 31, 1.5, T, []",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ Alice, 135, 1.5, T, []",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ Alice, 30, 2, T, []",
+	"name: {string, minLen: 2, pattern: '^[A-Z]'}, age: {int, min: 0, max: 130, multipleOf: 5}, score: {number, choices: [1.5, 2.5]}, active: bool, tags: [{string, maxLen: 3}]\n---\n~ Alice, 30, 1.5, T, [abcd]",
+
 	// CRLF line endings through a multi-line header. The lazy path once cut the
 	// header short here — it sliced the caller's text with offsets into the
 	// normalized one — and declined by accident.

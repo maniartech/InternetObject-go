@@ -132,26 +132,26 @@ func compileHeader(headerSrc string) headerEntry {
 	return headerEntry{sch: sch, ok: true}
 }
 
-// IsSimpleSchema reports whether every declared member is a plain typed
-// member with no constraints, defaults, choices, nested schema or reference —
-// the shape a binder can check by looking at a token's kind alone. Anything
-// else keeps the general validation path.
+// IsSimpleSchema reports whether every declared member is one a binder can
+// judge from its own token: a plain type, optionally with constraints or
+// choices (which MemberDef.Accepts checks on the decoded value), but no default,
+// union, nested schema or reference, and no constraint on an array as a whole.
+// Anything else keeps the general validation path.
 func IsSimpleSchema(s *schema.Schema) bool {
 	if s == nil || s.Open != nil {
 		return false
 	}
 	for _, name := range s.Names {
 		md := s.Defs[name]
-		if md == nil || len(md.Keys) > 0 || md.HasDefault || md.Choices != nil ||
-			md.Schema != nil || md.SchemaRef != "" || md.AnyOf != nil ||
-			len(md.Constraints) > 0 {
+		if md == nil || !md.Standalone() {
 			return false
 		}
 		switch md.Type {
 		case "string", "number", "int", "bool", "any":
 		case "array":
-			if md.Of == nil || len(md.Of.Keys) > 0 || md.Of.Schema != nil ||
-				md.Of.SchemaRef != "" || len(md.Of.Constraints) > 0 {
+			// Array-level constraints (len, minLen, maxLen) need the whole boxed
+			// array to judge; the elements are judged one by one through Of.
+			if len(md.Constraints) > 0 || md.Of == nil || !md.Of.Standalone() {
 				return false
 			}
 			switch md.Of.Type {

@@ -185,8 +185,8 @@ value to bind), `anyOf`, nested and referenced schemas, open schemas. It stops d
 itself) stay declined in this step — checking them needs the boxed `[]any` the path exists to avoid;
 element constraints (`[{int, min: 0}]`) are checked per element through `md.Of`.
 
-*Cost.* A check runs only for a member whose definition carries a key; an unconstrained member pays
-one nil test. Boxing a string or float64 whose box does not escape `Accepts` should stay on the
+*Cost.* On decode a check runs only for a member whose definition carries a key; an unconstrained
+member pays one nil test. (Encode asks about more — see "Landed".) Boxing a string or float64 whose box does not escape `Accepts` should stay on the
 stack — measured, not assumed, by the constrained budgets.
 
 *Encode.* The fast encoder asks the same question of each constrained field's value (boxed as the
@@ -197,6 +197,45 @@ this step: it validates each record on the tree path by design, and moving it wa
 
 *Benchmark schema.* Before this code lands, the constrained benchmark gains a `choices` member and
 a `pattern` member (review of 5.6), so their cost is inside a budget.
+
+**Landed 2026-09-14 — measured** (allocations exact; bytes the floor of repeated runs). The
+benchmark schema gained its `pattern` and `choices` members first, so "before" is that schema on
+the §5.1 code:
+
+| Budget (constrained schema) | Before §5.2 | After | `encoding/json` |
+| --- | ---: | ---: | ---: |
+| Unmarshal 1,000 → struct | 19,014 allocs · 1.62 MB | **9,022 · 1.23 MB** | 6,019 · 0.39 MB |
+| Marshal 1,000 ← struct | 12,136 allocs · 0.90 MB | **5,005 · 0.26 MB** | 2 · 0.12 MB |
+| Unmarshal one record | 108 allocs | **15** | 11 |
+
+What remains is the check itself: every checked value is boxed, and the box escapes into the
+validator (`validateMember` leaks its value) — one allocation per constrained member per record,
+five per record here. Removing it means restructuring the validator's escape behaviour, not a
+second copy of any rule; it is left for a measured follow-up.
+
+*Found in review, fixed before commit — two validation bypasses in the fast ENCODER:*
+- an unconstrained string holding `@x` was written, where validating the record reports
+  `undefined-variable` (the validator reads any `@`-string as a reference). The encoder now asks
+  about every string field and element of a validating type and declines an `@`-string through the
+  same `core.IsVariableRef` the validator uses — no allocation;
+- an `omitempty` field whose tag says `optional: false` was left out, where validation reports
+  `missing-value`; `fastCheck` now refuses that combination.
+Both were unreachable by the fuzzer, whose sample type constrained every field; it now also drives
+a mostly unconstrained type. Every branch the review found unprotected has a row, each proven by
+sabotage.
+
+*Found while landing it:*
+- the plain decode briefly went 4,020 → 10,019 allocations because `accepts` took an `any` and
+  boxed every member before asking whether it was constrained; it is generic now (budget caught it);
+- the constrained encoder differential test first compared two ERRORS — its sample type carried an
+  invalid tag (`{bool, choices: …}`), so both paths refused everything and a sabotaged check passed.
+  It now asserts its valid samples marshal and its invalid ones do not, and
+  `TestFastEncoderTakesConstrainedTypes` proves the fast path is actually taken;
+- `measure` now refills `sync.Pool`s after its `runtime.GC()` — the `pattern` constraint's regexp
+  matchers made byte counts swing by kilobytes on untouched paths;
+- the general path silently ignores `{string, minLen: @n}` with `@n` undefined, where a numeric bound
+  naming an undefined variable is `undefined-variable` — both paths agree, so it is reported through
+  the escalation process rather than changed here (OPEN-QUESTIONS).
 
 ### 5.3 The `…With` functions take the fast paths
 
@@ -256,5 +295,5 @@ order, and it is the only way the budgets can hold 5.2's gains once they exist.
   validation bypasses fixed (commit `5507afc`); the encoder's per-call `os.Getenv` removed
   (Marshal 22 → 20 allocs).
 - **Done:** 5.6 (constrained benchmarks and budgets), 5.1 (discarded work) — see their sections.
-- **Next:** the correctness batch from the Go-nativity audit (SPEC 0004 §A — bugs, not design), then
-  5.2.
+- **Done:** SPEC 0004 §A (the correctness batch), and 5.2 — see its "Landed" note.
+- **Next:** 5.3, the `…With` functions on the fast paths (generated code's path).
