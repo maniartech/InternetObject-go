@@ -191,3 +191,140 @@ func TestPayloadSizes(t *testing.T) {
 	t.Logf("IO first row:  %s", strings.SplitN(benchIOText, "\n", 3)[2][:60])
 	t.Logf("JSON first row: %s", benchJSONText[:60])
 }
+
+// ── the schemas people actually write: CONSTRAINED ─────────────────────────
+//
+// Internet Object is schema-first, and a real schema carries constraints. The
+// benchmarks above use none, and on 2026-09-14 that was found to flatter this
+// package: both fast paths declined any constraint, so the constrained forms ran
+// several times slower than encoding/json while the plain ones ran faster. The
+// measured figures live in docs/reports/benchmarks.md (pass 10), not here, where
+// they would go stale; these benchmarks exist so the comparison cannot leave the
+// constrained case out again.
+//
+// The schema is examples/06-codegen/person.io. encoding/json validates nothing,
+// so its controls are the plain benchmarks above: the same data, the same work
+// minus the checks this package exists to make.
+
+type constrainedPerson struct {
+	Name   string   `io:"name"   json:"name"   schema:"{string, minLen: 2, maxLen: 50}"`
+	Age    int      `io:"age"    json:"age"    schema:"{int, min: 0, max: 130}"`
+	Email  string   `io:"email"  json:"email"`
+	Active bool     `io:"active" json:"active"`
+	Score  float64  `io:"score"  json:"score"`
+	Tags   []string `io:"tags"   json:"tags"`
+}
+
+const constrainedSchemaText = "name: {string, minLen: 2, maxLen: 50}, age: {int, min: 0, max: 130}, " +
+	"email: string, active: bool, score: number, tags: [string]"
+
+var (
+	constrainedData   []constrainedPerson
+	constrainedIOText string
+	constrainedSchema *io.Schema
+	constrainedOne    = constrainedPerson(onePerson)
+	// constrainedOneIO is one record WITH its header — exactly what generated
+	// code's Marshal writes and its Unmarshal passes to UnmarshalWith.
+	constrainedOneIO string
+	// constrainedOneRow is the same record with no header: a caller holding the
+	// schema out of band, which UnmarshalWith also serves.
+	constrainedOneRow string
+)
+
+func init() {
+	constrainedData = make([]constrainedPerson, len(benchData))
+	for i, p := range benchData {
+		constrainedData[i] = constrainedPerson(p)
+	}
+	var err error
+	if constrainedIOText, err = io.Marshal(constrainedData); err != nil {
+		panic(err)
+	}
+	if constrainedOneIO, err = io.Marshal(constrainedOne); err != nil {
+		panic(err)
+	}
+	if constrainedSchema, err = io.ParseSchema(constrainedSchemaText); err != nil {
+		panic(err)
+	}
+	_, row, found := strings.Cut(constrainedOneIO, "\n---\n")
+	if !found {
+		panic("constrained record has no header: " + constrainedOneIO)
+	}
+	constrainedOneRow = row
+}
+
+func BenchmarkCompareUnmarshalConstrained_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedIOText)))
+	b.ReportAllocs()
+	for b.Loop() {
+		var out []constrainedPerson
+		if err := io.Unmarshal(constrainedIOText, &out); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompareMarshalConstrained_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedIOText)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := io.Marshal(constrainedData); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompareSmallUnmarshalConstrained_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedOneIO)))
+	b.ReportAllocs()
+	for b.Loop() {
+		var p constrainedPerson
+		if err := io.Unmarshal(constrainedOneIO, &p); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// ── the runtime-schema functions, which generated code calls ───────────────
+
+func BenchmarkCompareSmallUnmarshalWith_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedOneIO)))
+	b.ReportAllocs()
+	for b.Loop() {
+		var p benchPerson
+		if err := io.UnmarshalWith(constrainedOneIO, &p, constrainedSchema); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompareSmallUnmarshalWithHeaderless_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedOneRow)))
+	b.ReportAllocs()
+	for b.Loop() {
+		var p benchPerson
+		if err := io.UnmarshalWith(constrainedOneRow, &p, constrainedSchema); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompareSmallMarshalWith_IO(b *testing.B) {
+	b.SetBytes(int64(len(constrainedOneIO)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := io.MarshalWith(onePerson, constrainedSchema); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompareSmallMarshal_JSON(b *testing.B) {
+	b.SetBytes(int64(len(oneJSON)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := json.Marshal(onePerson); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

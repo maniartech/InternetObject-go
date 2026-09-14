@@ -1,6 +1,6 @@
 # Performance report — where io-go stands
 
-**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05, pass 9 2026-09-13 · **Machine:** AMD Ryzen 7
+**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05, pass 9 2026-09-13, pass 10 2026-09-14 · **Machine:** AMD Ryzen 7
 5700G, Go 1.26.0, windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$'
 -count=6 .`, and `go test -bench . -benchmem ./examples/06-codegen/` for the generated path.
 
@@ -31,6 +31,26 @@ needed a public API change. An inlined prototype shows the remaining ceiling: **
 needs quoted. Fixed and measured back to **~1.24× faster**, with decode at **~1.96× faster**.
 The gap that let it happen is closed too: performance budgets now fail the ordinary `go test`
 run on any bytes, allocation or wire-size regression, and were proved against the real one.
+
+**Pass 10 (2026-09-14) — the honest line, and it is worse.** Every figure above uses a schema
+with NO constraints. Internet Object is schema-first and real schemas carry them, and on those
+both fast paths declined, so io-go ran **1.8-6.7× slower than `encoding/json`** where the headline
+says faster ([SPEC 0003](../specs/fast-paths.md)). The constrained variants now sit in
+`bench_compare_test.go` and in the budgets, so the comparison can no longer leave them out.
+Schema `examples/06-codegen/person.io` (`minLen`/`maxLen` on name, `min`/`max` on age). Times are
+the minimum of 3-5 runs (not the header's `-count=6`) on a loaded machine, so read the RATIO against the JSON control measured
+in the same run; allocations and bytes are exact.
+
+| Operation (constrained schema) | io-go | `encoding/json` (validates nothing) | |
+| --- | ---: | ---: | --- |
+| Unmarshal 1,000 → struct | 3.89 ms · 18,997 allocs · 2.50 MB | 2.11 ms · 6,019 · 0.39 MB | ~1.8× slower |
+| Marshal 1,000 ← struct | 1.73 ms · 12,088 allocs · 0.88 MB | 0.36 ms · 2 · 0.12 MB | ~4.8× slower |
+| Unmarshal one record | 12.96 µs · 82 allocs | 1.93 µs · 11 | ~6.7× slower |
+| `UnmarshalWith` one record, header included (what generated code sends) | 8.52 µs · 49 allocs · 4,568 B | 1.54-1.80 µs · 11 · 480 B | ~4.7-5.5× slower |
+| `UnmarshalWith` one headerless record | 3.64 µs · 29 allocs | 1.93 µs · 11 | ~1.9× slower |
+| `MarshalWith` one record | 2.35 µs · 17 allocs | 0.43 µs · 2 | ~5.5× slower |
+
+The SPEC 0003 §5 steps exist to move these; their budgets start here.
 
 The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
 competitive with any JSON parser. Everything above it is where the time goes.

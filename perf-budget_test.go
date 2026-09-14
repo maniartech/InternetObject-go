@@ -32,8 +32,9 @@ import (
 // WHEN A BUDGET FAILS: if the change is a real regression, fix it. If it is the
 // price of a correctness fix, raise the budget IN THE SAME COMMIT and say why —
 // that is the point: a performance cost becomes a reviewed decision instead of
-// a side effect. When a budget is beaten by a wide margin the test says so;
-// lower it, so the win cannot be given back silently.
+// a side effect. A budget beaten by a wide margin FAILS too, asking for the
+// lower figure: a win that is not written down can be given back silently, and
+// a budget far above the truth would let it.
 
 // budget is one operation's ceiling.
 type budget struct {
@@ -50,16 +51,15 @@ type budget struct {
 const (
 	bytesTolerance = 1.03
 	allocTolerance = 1.02
-	ratchetMargin  = 0.95 // at or below this fraction of budget, ask for a lower one
+	ratchetMargin  = 0.90 // at or below this fraction of budget, demand a lower one
 )
 
+// A newer Go release that allocates 10% less on a small operation would trip the
+// ratchet for reasons that are not this library's. If that happens, re-measure
+// on that release and bound the budgets above as well as below (as budgetGoMinor
+// bounds them below), rather than loosening the margin.
+
 func perfBudgets(t *testing.T) []budget {
-	one := benchPerson{Name: "Alice", Age: 30, Email: "alice@example.com",
-		Active: true, Score: 99.5, Tags: []string{"admin"}}
-	oneText, err := io.Marshal(one)
-	if err != nil {
-		t.Fatal(err)
-	}
 	must := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -82,11 +82,50 @@ func perfBudgets(t *testing.T) []budget {
 		}, 17_952, 1_456_562},
 		{"Unmarshal one small record", func() {
 			var p benchPerson
-			must(io.Unmarshal(oneText, &p))
+			must(io.Unmarshal(oneIO, &p))
 		}, 14, 2_160},
 		{"Validate 1,000 structs", func() {
 			must(io.Validate(benchData))
 		}, 12_009, 659_154},
+
+		// Constrained schemas and the runtime-schema functions (SPEC 0003 §5.6).
+		// Measured 2026-09-14 BEFORE any fast path accepted a constraint: these
+		// are the honest starting line, and each §5 step must lower them.
+		{"Unmarshal 1,000 constrained", func() {
+			var out []constrainedPerson
+			must(io.Unmarshal(constrainedIOText, &out))
+		}, 18_997, 2_501_261},
+		{"Marshal 1,000 constrained", func() {
+			_, err := io.Marshal(constrainedData)
+			must(err)
+		}, 12_088, 877_348},
+		{"Unmarshal one constrained record", func() {
+			var p constrainedPerson
+			must(io.Unmarshal(constrainedOneIO, &p))
+		}, 82, 9_984},
+		{"UnmarshalWith one record", func() {
+			var p benchPerson
+			must(io.UnmarshalWith(constrainedOneIO, &p, constrainedSchema))
+		}, 49, 4_568}, // generated code's Unmarshal: the header is re-parsed per call
+		{"UnmarshalWith one headerless record", func() {
+			var p benchPerson
+			must(io.UnmarshalWith(constrainedOneRow, &p, constrainedSchema))
+		}, 29, 2_296},
+		{"UnmarshalWith 1,000 records", func() {
+			var out []benchPerson
+			must(io.UnmarshalWith(constrainedIOText, &out, constrainedSchema))
+		}, 18_952, 1_586_584},
+		{"MarshalWith one record", func() {
+			_, err := io.MarshalWith(onePerson, constrainedSchema)
+			must(err)
+		}, 17, 1_312},
+		{"MarshalWith 1,000 records", func() {
+			_, err := io.MarshalWith(benchData, constrainedSchema)
+			must(err)
+		}, 12_015, 872_293},
+		{"ValidateWith one record", func() {
+			must(io.ValidateWith(onePerson, constrainedSchema))
+		}, 12, 672}, // generated code's constructor and every setter
 	}
 }
 
@@ -178,9 +217,9 @@ func TestPerformanceBudgets(t *testing.T) {
 			t.Errorf("%s: %.0f bytes/op exceeds the budget of %.0f (+%.1f%%)",
 				b.name, bytes, b.maxBytes, 100*(bytes/b.maxBytes-1))
 		}
-		if bytes < b.maxBytes*ratchetMargin {
-			t.Logf("  %s beat its byte budget by %.1f%%: lower it to %.0f so the win is kept",
-				b.name, 100*(1-bytes/b.maxBytes), bytes)
+		if allocs <= b.maxAlloc*ratchetMargin || bytes <= b.maxBytes*ratchetMargin {
+			t.Errorf("%s beat its budget (%.0f allocs, %.0f B): lower it to that, so the win is kept",
+				b.name, allocs, bytes)
 		}
 	}
 }
