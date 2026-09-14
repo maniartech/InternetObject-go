@@ -363,11 +363,11 @@ order, and it is the only way the budgets can hold 5.2's gains once they exist.
 
 ## ▶ RESUME HERE
 
-- **State:** APPROVED 2026-09-14 (§6). Implementation under way in the §5 order, each step
-  reviewed per §7 before its commit.
-- **Done before this spec, 2026-09-14:** §3 — the lazy decoder's differential test made live, three
-  validation bypasses fixed (commit `5507afc`); the encoder's per-call `os.Getenv` removed
-  (Marshal 22 → 20 allocs).
-- **Done:** 5.6 (constrained benchmarks and budgets), 5.1 (discarded work) — see their sections.
-- **Done:** SPEC 0004 §A (the correctness batch), 5.2 and 5.3 — see their "Landed" notes.
-- **Next:** 5.4 — its own spec first (the dynamic parse builds one tree, not two). Then 5.5.
+- **State (2026-09-14):** APPROVED (§6); 5.6, 5.1, 5.2 and 5.3 landed, each reviewed per §7 and
+  committed (`1a35df3`, `601d7fd`, `edf096e`, `302bd49`), with SPEC 0004 §A between 5.1 and 5.2.
+  Nothing pushed.
+- **5.4:** its own spec is written — [SPEC 0005](dynamic-parse.md), DRAFT — and **awaits the
+  owner's review of its §5** before any code.
+- **5.5 (generated code writes directly):** needs exported spelling primitives (ADR 0010 D4), a
+  public-API addition; it should be decided together with SPEC 0004 §B, which awaits the owner too.
+- **Where io-go stands against `encoding/json`:** docs/reports/benchmarks.md, pass 11.
