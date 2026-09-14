@@ -91,7 +91,10 @@ func bindSections(doc *document.Doc, elem reflect.Value, fields map[string]field
 			continue // a section this struct does not ask for
 		}
 		fv := elem.FieldByIndex(f.index)
-		at := pathAt{root: "$." + name}
+		// Built from rootPath, not a literal: a pathAt's zero index is element
+		// 0, not "no element", and the literal this replaced made every
+		// Collection fault report `$.people[0][0]`.
+		at := rootPath.member(name).deeper()
 
 		// A Collection[T] binds TOLERANTLY: it keeps the rows that bind and
 		// records the faults of the rest, rather than failing the whole load

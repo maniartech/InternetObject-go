@@ -37,7 +37,10 @@ type JSONOptions struct {
 //	number            number
 //	bigint            a number when it fits int64, else a string — exact either way
 //	decimal           a string, so the scale and every digit survive
-//	datetime/date/time RFC 3339 / YYYY-MM-DD / HH:MM:SS[.fff]
+//	datetime/date/time RFC 3339 / YYYY-MM-DD / HH:MM:SS[.fff], chosen from the
+//	                  value, since a temporal is a time.Time and carries no
+//	                  declared kind: midnight UTC writes as a date, and a time
+//	                  on the TimeAnchor date as a time
 //	binary            a base64 string
 //	failed row        null, or omitted with SkipErrors
 //

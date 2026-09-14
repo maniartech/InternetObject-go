@@ -51,6 +51,9 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 	}
 	visiting[t] = true
 	defer delete(visiting, t)
+	if definesText(t) {
+		return nil, textualError(t)
+	}
 
 	p := &structPlan{shape: &core.Object{}}
 	for _, f := range reflect.VisibleFields(t) {
@@ -121,6 +124,15 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		}
 		p.fields = append(p.fields, fp)
 	}
+	if len(p.fields) == 0 && t.NumField() > 0 && !reflect.PointerTo(t).Implements(collectionBinderType) {
+		// It has fields, but none to write — each unexported or tagged io:"-" —
+		// so the value would be written as `{}` and read back as its zero value,
+		// silently. netip.Addr did exactly that. A struct with no fields at all
+		// is different: `{}` is all there is to it. So is a Collection[T], which
+		// the section binder fills through its own interface.
+		return nil, &MarshalError{Path: t.String(),
+			Msg: "has no fields to write (every field is unexported or tagged io:\"-\"), so it has no Internet Object form"}
+	}
 	p.byName = make(map[string]int, len(p.fields))
 	for i, f := range p.fields {
 		p.byName[f.name] = i
@@ -173,6 +185,8 @@ func annotationFor(t reflect.Type, kind string, visiting map[reflect.Type]bool, 
 		// Binary is a value-level fact with no schema type of its own, so the
 		// derived schema admits it as `any`.
 		return "any", nil
+	case definesText(t):
+		return nil, textualError(t)
 	}
 	switch t.Kind() {
 	case reflect.String:
@@ -311,6 +325,27 @@ func isPlainMemberName(s string) bool {
 }
 
 // ── schema derivation ──────────────────────────────────────────────────────
+
+// definesText reports a type that defines its own text form, directly or
+// through its pointer: a field, a slice element and a pointer all reach a
+// pointer method, so either counts, as it does for encoding/json. It is THE
+// rule — the plan asks it of a declared type, encodeValue of a value met at run
+// time. Writing such a type's fields or underlying kind instead
+// misrepresents it silently — an ID with MarshalText came out as
+// `[0, 0, 0, 0]` — and honouring the text form is an open decision (SPEC 0004
+// §B2), so until then it is refused. The types the format spells natively
+// are never asked.
+func definesText(t reflect.Type) bool {
+	if t == timeType || t == decimalType || t == bigIntElemType {
+		return false
+	}
+	return t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType)
+}
+
+func textualError(t reflect.Type) error {
+	return &MarshalError{Path: t.String(),
+		Msg: "defines its own text form (encoding.TextMarshaler), which is not supported yet"}
+}
 
 // isModelStruct reports a struct the FORMAT owns, which must never be
 // reflected over as if it were a user's record: its fields are representation,

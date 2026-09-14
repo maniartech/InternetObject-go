@@ -5,6 +5,8 @@ import (
 	"iter"
 	"strconv"
 
+	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/streaming"
 )
 
@@ -14,6 +16,13 @@ import (
 // (an unknown schema selector, a read failure) ends iteration with a non-nil
 // error on the final pair. Transport chunk boundaries are never semantic.
 func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
+	return stream(r, opts, nil)
+}
+
+// stream is Stream with a compiled header in scope beneath everything opts and
+// the stream declare — how Definitions.Stream shares its compiled schemas
+// instead of rendering them back to text for every stream to parse again.
+func stream(r io.Reader, opts *StreamOptions, parent *document.Frozen) iter.Seq2[StreamItem, error] {
 	var o StreamOptions
 	if opts != nil {
 		o = *opts
@@ -22,6 +31,7 @@ func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
 		ropts := streaming.StreamOptions{
 			Definitions:   o.Definitions,
 			DefaultSchema: o.DefaultSchema,
+			Parent:        parent,
 		}
 		if o.Schema != nil {
 			ropts.Schema = o.Schema.s
@@ -69,7 +79,9 @@ func Stream(r io.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
 			return
 		}
 		if fatal != nil {
-			yield(StreamItem{}, Error{Code: fatal.Code, Line: 1, Col: 1})
+			// The reader records no position for a fatal stream fault, so none
+			// is reported; it used to claim 1:1.
+			yield(StreamItem{}, toError(errs.Error{Code: fatal.Code, Category: fatal.Category}))
 		}
 	}
 }

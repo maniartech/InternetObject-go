@@ -21,13 +21,22 @@ type Error struct {
 	// RecordIndex is the 0-based position of the failed record within its
 	// collection, or -1 when the fault is not inside one.
 	RecordIndex int
-	// Line, Col are the 1-based position of the offending value.
+	// Line, Col are the 1-based position of the offending value, or 0 when it
+	// has none: a value built in Go rather than read from text.
 	Line int
 	Col  int
 }
 
 func (e Error) Error() string {
-	if e.Path != "" && e.Path != "$" {
+	located := e.Path != "" && e.Path != "$"
+	switch {
+	case e.Line == 0 && located:
+		// A value built in Go — a Builder record, a marshaled struct — has no
+		// source position; printing 0:0 claimed one (2026-09-14).
+		return fmt.Sprintf("%s at %s", e.Code, e.Path)
+	case e.Line == 0:
+		return string(e.Code)
+	case located:
 		return fmt.Sprintf("%s at %s (%d:%d)", e.Code, e.Path, e.Line, e.Col)
 	}
 	return fmt.Sprintf("%s at %d:%d", e.Code, e.Line, e.Col)

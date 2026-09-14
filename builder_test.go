@@ -239,3 +239,29 @@ func TestBuilderVariables(t *testing.T) {
 		t.Errorf("variable lost: %v %v (%q)", v, ok, doc.String())
 	}
 }
+
+// The zero Builder works, as a strings.Builder does, and a nil *Section — what
+// Document.Section returns for a name the document lacks — answers every method
+// with its zero result, as a nil *Definitions does. Both used to panic.
+func TestZeroValuesAreUsable(t *testing.T) {
+	var b io.Builder
+	if err := b.Section("", "").Add(map[string]any{"a": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.String(); !strings.Contains(got, "a: 1") {
+		t.Fatalf("zero Builder wrote %q", got)
+	}
+
+	doc, err := io.Parse("a, b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := doc.Section("missing")
+	if s != nil {
+		t.Fatal("a missing section must be nil")
+	}
+	if s.Name() != "" || s.SchemaName() != "" || s.Schema() != nil || s.IsCollection() ||
+		s.Len() != 0 || s.Records() != nil || s.Value() != nil || s.Errors() != nil || s.HasErrors() {
+		t.Fatal("a nil *Section must answer with zero results")
+	}
+}

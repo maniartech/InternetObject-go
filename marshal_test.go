@@ -3,6 +3,7 @@ package internetobject_test
 import (
 	"errors"
 	"math/big"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -336,4 +337,166 @@ func nilOr(err error) any {
 		return "<nil>"
 	}
 	return err
+}
+
+// A nil handed to any top-level call is an error, never a panic. An untyped
+// nil is not a nil pointer to reflect — it is no value at all — and Marshal,
+// Validate and ValidateWith used to panic inside reflect on it (2026-09-14).
+func TestNilIsRefusedAtEveryEntryPoint(t *testing.T) {
+	s, err := io.ParseSchema("a: int")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nilPtr *person
+	var nilAny any = nilPtr
+	for _, v := range []any{nil, nilPtr, nilAny, &nilAny} {
+		calls := map[string]func() error{
+			"Marshal":      func() error { _, err := io.Marshal(v); return err },
+			"MarshalWith":  func() error { _, err := io.MarshalWith(v, s); return err },
+			"Validate":     func() error { return io.Validate(v) },
+			"ValidateWith": func() error { return io.ValidateWith(v, s) },
+		}
+		for name, call := range calls {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("%s(%#v) panicked: %v", name, v, r)
+					}
+				}()
+				if err := call(); err == nil || !strings.Contains(err.Error(), "nil value") {
+					t.Errorf("%s(%#v) = %v, want a nil-value error", name, v, err)
+				}
+			}()
+		}
+	}
+}
+
+// textID defines its own text form; its underlying kind is not what it means.
+type textID [4]byte
+
+func (id textID) MarshalText() ([]byte, error) { return []byte("id-1"), nil }
+
+// ptrID defines its text form on the pointer only.
+type ptrID [2]byte
+
+func (id *ptrID) MarshalText() ([]byte, error) { return []byte("id-2"), nil }
+
+// A type the package cannot represent faithfully is refused, never written as
+// something else. netip.Addr (every field unexported) used to marshal as `{}`
+// and textID as `[0, 0, 0, 0]`, both without an error, and both read back as
+// zero values (2026-09-14). Honouring encoding.TextMarshaler is SPEC 0004 §B2.
+func TestUnrepresentableTypesAreRefused(t *testing.T) {
+	type withAddr struct {
+		Addr netip.Addr `io:"addr"`
+	}
+	type withID struct {
+		ID textID `io:"id"`
+	}
+	type withPtrID struct {
+		ID *textID `io:"id"`
+	}
+	addr := netip.MustParseAddr("192.0.2.1")
+	refused := map[string]any{
+		"opaque struct":           addr,
+		"opaque struct field":     withAddr{Addr: addr},
+		"TextMarshaler field":     withID{},
+		"TextMarshaler via ptr":   withPtrID{},
+		"TextMarshaler in a map":  map[string]any{"id": textID{}},
+		"opaque struct in a map":  map[string]any{"addr": addr},
+		"TextMarshaler in []any":  []any{textID{}},
+		"collection of an opaque": []withAddr{{Addr: addr}},
+		// A pointer method counts wherever it could be called: through a
+		// pointer, on a slice element, behind an interface holding a pointer.
+		"pointer TextMarshaler":          &ptrID{},
+		"pointer TextMarshaler in a map": map[string]any{"id": &ptrID{}},
+		"pointer TextMarshaler elements": map[string]any{"ids": []ptrID{{1, 2}}},
+	}
+	for name, v := range refused {
+		out, err := io.Marshal(v)
+		if err == nil {
+			t.Errorf("%s: Marshal wrote %q, want an error", name, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "no fields to write") && !strings.Contains(err.Error(), "text form") {
+			t.Errorf("%s: error does not say why: %v", name, err)
+		}
+		if err := io.Validate(v); err == nil {
+			t.Errorf("%s: Validate accepted it", name)
+		}
+	}
+
+	var a withAddr
+	if err := io.Unmarshal("addr: any\n---\n~ {}", &a); err == nil {
+		t.Error("Unmarshal into an opaque struct field succeeded, leaving a zero value")
+	}
+	var id withID
+	if err := io.Unmarshal("~ [1, 2, 3, 4]", &id); err == nil {
+		t.Error("Unmarshal into a TextMarshaler field succeeded")
+	}
+
+	// What stays representable: a struct with no fields at all, and the types
+	// the format spells natively although they define text forms of their own.
+	type empty struct{}
+	type natives struct {
+		At  time.Time  `io:"at"`
+		Dec io.Decimal `io:"dec"`
+		Big *big.Int   `io:"big"`
+	}
+	for name, v := range map[string]any{
+		"empty struct": empty{},
+		"natives":      natives{At: time.Unix(0, 0), Dec: io.NewDecimal(15, 1), Big: big.NewInt(7)},
+	} {
+		if _, err := io.Marshal(v); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// A binding error names what the document held in the format's own words. It
+// used to print the Go type behind the value — `cannot store *core.Object in
+// string` — naming an internal package no user can import (2026-09-14).
+func TestBindingErrorsNameTheFormatsKinds(t *testing.T) {
+	var p struct {
+		Name string `io:"name"`
+	}
+	err := io.Unmarshal("~ name: {first: Ann}", &p)
+	if err == nil || !strings.Contains(err.Error(), "cannot store object in string") ||
+		strings.Contains(err.Error(), "core.") {
+		t.Fatalf("got %v, want it to name the object kind", err)
+	}
+}
+
+// A Collection of a type the package refuses fails the load; it is not a row
+// fault for the collection to absorb.
+func TestCollectionOfARefusedTypeFailsTheLoad(t *testing.T) {
+	type host struct {
+		Addr netip.Addr `io:"addr"`
+	}
+	var doc struct {
+		Hosts io.Collection[host] `io:"hosts"`
+	}
+	err := io.Unmarshal("--- hosts\n~ addr: x\n", &doc)
+	if err == nil || !strings.Contains(err.Error(), "netip.Addr") {
+		t.Fatalf("got %v, want the refusal itself", err)
+	}
+}
+
+// A Collection whose element type is not a record is an error, not a panic;
+// and a struct whose fields are all tagged io:"-" has nothing to write.
+func TestCollectionOfANonRecordAndAnEmptiedStruct(t *testing.T) {
+	var doc struct {
+		S io.Collection[string] `io:"s"`
+	}
+	if err := io.Unmarshal("--- s\n~ a\n", &doc); err == nil || !strings.Contains(err.Error(), "must be a struct") {
+		t.Errorf("Collection[string]: %v", err)
+	}
+	type skipped struct {
+		A int `io:"-"`
+	}
+	if out, err := io.Marshal(skipped{A: 1}); err == nil {
+		t.Errorf("a struct with every field skipped wrote %q", out)
+	}
+	if _, err := io.Marshal(struct{}{}); err != nil {
+		t.Errorf("struct{} is still a record: %v", err)
+	}
 }

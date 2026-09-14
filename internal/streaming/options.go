@@ -8,6 +8,7 @@
 package streaming
 
 import (
+	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/schema"
 )
 
@@ -22,6 +23,11 @@ type StreamOptions struct {
 	// against. It outranks both the in-stream header and DefaultSchema
 	// (ADR 0004 D5) and is never re-parsed.
 	Schema *schema.Schema
+	// Parent is a compiled header in scope beneath Definitions and the
+	// stream's own header, which both override it. Its default schema applies
+	// when neither declares one, and outranks DefaultSchema, the last fallback.
+	// It is read, never written, so one value may serve any number of streams.
+	Parent *document.Frozen
 }
 
 // Reader consumes a stream incrementally. Feed returns the items each chunk

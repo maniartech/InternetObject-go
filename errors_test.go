@@ -239,3 +239,77 @@ func TestNamedSchemaCompilesEvenIfUnreferenced(t *testing.T) {
 }
 
 var nlHdr2 = string(rune(10))
+
+// Every Error the package returns carries the fields its type documents: a
+// Category, and RecordIndex -1 outside a collection. Four entry points used to
+// build Errors by hand and left Category empty and RecordIndex 0, and a
+// Collection fault reported `$.people[0][0]` at 0:0 (2026-09-14).
+func TestEveryErrorKeepsTheDocumentedContract(t *testing.T) {
+	firstOf := func(err error) io.Error {
+		t.Helper()
+		var list io.ErrorList
+		if errors.As(err, &list) && len(list) > 0 {
+			return list[0]
+		}
+		var e io.Error
+		if !errors.As(err, &e) {
+			t.Fatalf("not an io.Error: %#v", err)
+		}
+		return e
+	}
+	outside := map[string]error{}
+	_, outside["ParseSchema"] = io.ParseSchema("a: nosuchtype")
+	doc, err := io.Parse("~ $p: {name: string}\n--- $p\n~ a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, outside["Document.SchemaOf"] = doc.SchemaOf("missing")
+	_, outside["ParseWith(nil)"] = io.ParseWith("a", nil)
+	for _, streamErr := range io.Stream(strings.NewReader("~ $p: {name: string}\n--- $nope\n~ a\n"), nil) {
+		if streamErr != nil {
+			outside["Stream"] = streamErr
+		}
+	}
+	if len(outside) != 4 {
+		t.Fatalf("an entry point produced no error: %v", outside)
+	}
+	for name, err := range outside {
+		if err == nil {
+			t.Errorf("%s: no error", name)
+			continue
+		}
+		e := firstOf(err)
+		if e.Category == "" || e.RecordIndex != -1 {
+			t.Errorf("%s: %+v, want a Category and RecordIndex -1", name, e)
+		}
+	}
+
+	var d struct {
+		People io.Collection[person] `io:"people"`
+	}
+	if err := io.Unmarshal("--- people\n~ name: Ann, age: 1.5\n~ name: Bob, age: 2\n", &d); err != nil {
+		t.Fatal(err)
+	}
+	errs := d.People.Errors()
+	if len(errs) != 1 {
+		t.Fatalf("collection faults: %v", errs)
+	}
+	e := errs[0]
+	if e.Path != "$.people[0].age" || e.RecordIndex != 0 || e.Line != 2 || e.Category == "" {
+		t.Errorf("collection fault = %+v, want path $.people[0].age at the record's line 2", e)
+	}
+}
+
+// An Error without a source position — a record built in Go — prints none.
+func TestErrorWithoutAPositionPrintsNone(t *testing.T) {
+	for want, e := range map[string]io.Error{
+		"mismatched-min at $[1].age":       {Code: io.MismatchedMin, Path: "$[1].age"},
+		"mismatched-min":                   {Code: io.MismatchedMin},
+		"mismatched-min at $[1].age (4:8)": {Code: io.MismatchedMin, Path: "$[1].age", Line: 4, Col: 8},
+		"mismatched-min at 4:8":            {Code: io.MismatchedMin, Line: 4, Col: 8},
+	} {
+		if got := e.Error(); got != want {
+			t.Errorf("%+v.Error() = %q, want %q", e, got, want)
+		}
+	}
+}

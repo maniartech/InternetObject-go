@@ -6,8 +6,9 @@
 // document AND an error: the error lists every fault (stable kebab-case
 // codes with positions), while the document still holds every record that
 // survived. Values decode to a precise model: numbers are float64, bigints
-// *big.Int, decimals keep their scale (1.50m is not 1.5m), temporals keep
-// their kind (date, time, datetime), binary is []byte.
+// *big.Int, decimals keep their scale (1.50m is not 1.5m), temporals are
+// time.Time (a date at midnight UTC, a time on the TimeAnchor date), binary is
+// []byte.
 //
 // This implementation passes the complete shared conformance corpus
 // (io-test-cases): tokenizer, parser, schema, validation, serializer,

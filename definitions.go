@@ -6,6 +6,7 @@ import (
 
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/errs"
+	"github.com/maniartech/InternetObject-go/internal/schema"
 )
 
 // Definitions is a header compiled once: the named schemas, the `@variables`
@@ -28,6 +29,34 @@ import (
 // and where it defines neither, these stay in force.
 type Definitions struct {
 	frozen *document.Frozen
+	// schemas and def are the *Schema values handed out, made once, so every
+	// lookup returns the same one — and with it the header that schema renders
+	// the first time MarshalWith uses it. A new wrapper per lookup rendered the
+	// header again on every MarshalWith(v, defs.Schema(n)).
+	schemas map[string]*Schema
+	def     *Schema
+}
+
+// newDefinitions wraps a frozen header, making one *Schema per compiled
+// schema: an alias (`$schema: $emp`) and its target hand out the same value.
+func newDefinitions(f *document.Frozen) *Definitions {
+	d := &Definitions{frozen: f, schemas: make(map[string]*Schema, len(f.Schemas))}
+	byCompiled := make(map[*schema.Schema]*Schema, len(f.Schemas))
+	wrap := func(s *schema.Schema) *Schema {
+		w, ok := byCompiled[s]
+		if !ok {
+			w = newSchema(s)
+			byCompiled[s] = w
+		}
+		return w
+	}
+	for name, s := range f.Schemas {
+		d.schemas[name] = wrap(s)
+	}
+	if f.Default != nil {
+		d.def = wrap(f.Default)
+	}
+	return d
 }
 
 // ParseDefinitions compiles header text — the part of a document before its
@@ -46,29 +75,26 @@ func ParseDefinitions(src string) (*Definitions, error) {
 	if cerr != nil {
 		return nil, toErrorList([]errs.Error{*cerr})
 	}
-	return &Definitions{frozen: f}, nil
+	return newDefinitions(f), nil
 }
 
 // Schema returns a named schema, or nil when the header does not define one.
 // The name may be written with or without its `$`.
 func (d *Definitions) Schema(name string) *Schema {
-	if d == nil || d.frozen == nil {
+	if d == nil {
 		return nil
 	}
-	if s, ok := d.frozen.Schemas[trimSigil(name, '$')]; ok {
-		return &Schema{s: s}
-	}
-	return nil
+	return d.schemas[trimSigil(name, '$')]
 }
 
 // Default is the schema a document's unnamed section binds to — the header's
 // `$schema`, or its bare schema expression. It is nil when the header declares
 // neither.
 func (d *Definitions) Default() *Schema {
-	if d == nil || d.frozen == nil || d.frozen.Default == nil {
+	if d == nil {
 		return nil
 	}
-	return &Schema{s: d.frozen.Default}
+	return d.def
 }
 
 // Var returns a variable's value. The name may be written with or without
@@ -103,10 +129,14 @@ func (d *Definitions) Len() int {
 // String renders the definitions as canonical Internet Object header text —
 // the part BEFORE the `---`, with no separator — so it can be sent to a peer
 // that reads it back with ParseDefinitions, or handed to
-// StreamOptions.Definitions.
+// StreamOptions.Definitions. Empty definitions render as "".
 func (d *Definitions) String() string {
-	if d == nil || d.frozen == nil || d.frozen.Header == nil {
-		return "---"
+	if d == nil || d.frozen == nil || d.frozen.Header == nil ||
+		(len(d.frozen.Names) == 0 && d.frozen.Header.Inline == nil) {
+		// Empty and nil used to render "---", a separator this doc promises
+		// not to write (2026-09-14). A bare schema expression is not a named
+		// definition, but it is not nothing either.
+		return ""
 	}
 	return document.NewUnvalidatedHeader(d.frozen.Header).String()
 }
@@ -129,21 +159,21 @@ func (d *Definitions) Parse(src string) (*Document, error) {
 // Stream reads records from r with these definitions in scope — the shared,
 // out-of-band deployment mode, where the wire carries only data sections.
 //
-// In-stream definitions still override these, and an in-stream `$schema`
-// replaces this default; where the stream declares neither, these stay in
-// force (io-specs/streaming/schema-and-state.md).
+// Definitions in opts.Definitions override them, and the stream's own header
+// overrides both; where neither declares a default schema, these supply it
+// before opts.DefaultSchema is consulted. Otherwise these stay in force
+// (io-specs/streaming/schema-and-state.md). The compiled definitions are
+// shared, never parsed again, however many streams read with them.
 func (d *Definitions) Stream(r goio.Reader, opts *StreamOptions) iter.Seq2[StreamItem, error] {
-	o := StreamOptions{}
-	if opts != nil {
-		o = *opts
+	var parent *document.Frozen
+	if d != nil {
+		parent = d.frozen
 	}
-	// The reader takes preloaded definitions as header TEXT. Rendering this
-	// header back is exact — it is the text it was compiled from — and keeps
-	// one statement of the precedence rule rather than a second one here.
-	if o.Definitions == "" && d != nil && d.frozen != nil && d.frozen.Header != nil {
-		o.Definitions = d.String()
-	}
-	return Stream(r, &o)
+	// This used to render the definitions back to header text for the reader
+	// to parse again on every stream, and it skipped them entirely whenever
+	// opts.Definitions was set — silently validating nothing against them
+	// (2026-09-14).
+	return stream(r, opts, parent)
 }
 
 // Definitions returns a read-only view of this document's own header.
@@ -155,7 +185,7 @@ func (doc *Document) Definitions() *Definitions {
 	if cerr != nil {
 		return &Definitions{}
 	}
-	return &Definitions{frozen: f}
+	return newDefinitions(f)
 }
 
 // Var resolves one of the document header's `@variables`.

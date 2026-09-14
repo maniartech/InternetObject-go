@@ -2,6 +2,7 @@ package internetobject_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -236,5 +237,36 @@ func TestStreamMarshalerWithoutASchema(t *testing.T) {
 func TestNewStreamMarshalerRejectsANilWriter(t *testing.T) {
 	if _, err := io.NewStreamMarshaler(nil, nil); err == nil {
 		t.Error("a nil writer was accepted")
+	}
+}
+
+var errWriterGone = errors.New("writer gone")
+
+// failingWriter refuses every write.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errWriterGone }
+
+// A failure of the underlying writer is reported with that error as its cause,
+// so a caller can tell a dropped connection from a refused record. It used to
+// be flattened to text, and errors.Is found nothing (2026-09-14).
+func TestStreamMarshalerKeepsTheWritersError(t *testing.T) {
+	m, err := io.NewStreamMarshaler(failingWriter{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.Marshal(SEmp{Name: "Ann", Age: 30})
+	if err == nil {
+		err = m.Close() // the write may be buffered until the flush
+	}
+	if !errors.Is(err, errWriterGone) {
+		t.Fatalf("errors.Is(%v, errWriterGone) = false", err)
+	}
+	var me *io.MarshalError
+	if !errors.As(err, &me) || me.Err != errWriterGone {
+		t.Fatalf("errors.As: %#v", err)
+	}
+	if again := m.Close(); !errors.Is(again, errWriterGone) {
+		t.Fatalf("a second Close lost the cause: %v", again)
 	}
 }

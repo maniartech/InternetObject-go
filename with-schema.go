@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
+	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
 )
 
@@ -25,7 +26,7 @@ import (
 // records that survived.
 func ParseWith(src string, s *Schema) (*Document, error) {
 	if s == nil {
-		return nil, ErrorList{{Code: "invalid-schema", Line: 1, Col: 1}}
+		return nil, ErrorList{toError(errs.Error{Code: errs.InvalidSchema})} // no source position: a Go argument
 	}
 	doc := document.ParseWith(src, s.s)
 	return &Document{doc: doc}, toErrorList(doc.Errors)
@@ -51,12 +52,9 @@ func MarshalWith(v any, s *Schema) (string, error) {
 	if s == nil {
 		return "", &MarshalError{Path: "$", Msg: "nil schema"}
 	}
-	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
-		if rv.IsNil() {
-			return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
-		}
-		rv = rv.Elem()
+	rv, ok := topValue(v)
+	if !ok {
+		return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
 	}
 
 	sec := &parser.Section{Name: "data"}
@@ -125,7 +123,7 @@ func (d *Document) Schema() *Schema {
 func (d *Document) SchemaOf(name string) (*Schema, error) {
 	s, cerr := d.doc.Defs.SchemaOf(name)
 	if cerr != nil {
-		return nil, ErrorList{{Code: cerr.Code, Line: int(cerr.Line), Col: int(cerr.Col)}}
+		return nil, ErrorList{toError(*cerr)}
 	}
 	return newSchema(s), nil
 }

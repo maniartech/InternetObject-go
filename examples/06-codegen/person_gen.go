@@ -17,24 +17,20 @@ import (
 // the source of truth for both: regenerate rather than edit either.
 const PersonSchema = `name: {string, minLen: 2, maxLen: 50}, age: {int, min: 0, max: 130}, email: string, active: bool, score: number, tags: [string]`
 
-var (
-	personSchemaOnce sync.Once
-	personSchemaVal  *io.Schema
-	personSchemaErr  error
-)
+var personSchemaOnce = sync.OnceValues(func() (*io.Schema, error) {
+	return io.ParseSchema(PersonSchema)
+})
 
 // PersonSchemaOf compiles the embedded schema once and reuses it. A compiled
 // schema is read-only and safe to share across goroutines.
-func PersonSchemaOf() (*io.Schema, error) {
-	personSchemaOnce.Do(func() {
-		personSchemaVal, personSchemaErr = io.ParseSchema(PersonSchema)
-	})
-	return personSchemaVal, personSchemaErr
-}
+func PersonSchemaOf() (*io.Schema, error) { return personSchemaOnce() }
 
 // Person is a guarded Internet Object record. Its fields are unexported: a
 // value of this type that exists is one the schema accepted, because the
-// constructor and every setter validate before committing.
+// constructor and every setter validate before committing, and slices and
+// pointers are copied on the way in and out, so no caller holds memory the
+// record uses. (What an `any` member holds is not copied, nor is a Decimal's
+// coefficient, which is immutable by contract.)
 type Person struct {
 	name   string
 	age    int
@@ -86,7 +82,7 @@ func NewPerson(name string, age int, email string, active bool, score float64, t
 		email:  email,
 		active: active,
 		score:  score,
-		tags:   tags,
+		tags:   personCloneSlice(tags),
 	}
 	if err := out.Validate(); err != nil {
 		return nil, err
@@ -175,14 +171,14 @@ func (p *Person) SetScore(v float64) error {
 }
 
 // Tags returns the tags member.
-func (p *Person) Tags() []string { return p.tags }
+func (p *Person) Tags() []string { return personCloneSlice(p.tags) }
 
 // SetTags sets the tags member, or returns the schema's own error and
 // leaves the value untouched. The whole record is revalidated: a guarded type's
 // invariant is that it is valid, not merely that each field was valid alone.
 func (p *Person) SetTags(v []string) error {
 	prev := p.tags
-	p.tags = v
+	p.tags = personCloneSlice(v)
 	if err := p.Validate(); err != nil {
 		p.tags = prev
 		return err
@@ -221,4 +217,11 @@ func (p *Person) Unmarshal(text string) error {
 	}
 	p.adopt(src)
 	return nil
+}
+
+func personCloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(s)), s...)
 }

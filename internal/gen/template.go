@@ -31,24 +31,20 @@ import (
 // the source of truth for both: regenerate rather than edit either.
 const {{.Type}}Schema = ` + "`" + `{{.SchemaText}}` + "`" + `
 
-var (
-	{{.PrivType}}SchemaOnce sync.Once
-	{{.PrivType}}SchemaVal  *io.Schema
-	{{.PrivType}}SchemaErr  error
-)
+var {{.PrivType}}SchemaOnce = sync.OnceValues(func() (*io.Schema, error) {
+	return io.ParseSchema({{.Type}}Schema)
+})
 
 // {{.Type}}SchemaOf compiles the embedded schema once and reuses it. A compiled
 // schema is read-only and safe to share across goroutines.
-func {{.Type}}SchemaOf() (*io.Schema, error) {
-	{{.PrivType}}SchemaOnce.Do(func() {
-		{{.PrivType}}SchemaVal, {{.PrivType}}SchemaErr = io.ParseSchema({{.Type}}Schema)
-	})
-	return {{.PrivType}}SchemaVal, {{.PrivType}}SchemaErr
-}
+func {{.Type}}SchemaOf() (*io.Schema, error) { return {{.PrivType}}SchemaOnce() }
 
 // {{.Type}} is a guarded Internet Object record. Its fields are unexported: a
 // value of this type that exists is one the schema accepted, because the
-// constructor and every setter validate before committing.
+// constructor and every setter validate before committing, and slices and
+// pointers are copied on the way in and out, so no caller holds memory the
+// record uses. (What an ` + "`any`" + ` member holds is not copied, nor is a Decimal's
+// coefficient, which is immutable by contract.)
 type {{.Type}} struct {
 {{range .Fields}}	{{.Priv}} {{.GoType}}
 {{end}}}
@@ -75,7 +71,7 @@ func ({{.Recv}} *{{.Type}}) adopt(src {{.PrivType}}Plain) {
 // New{{.Type}} builds a {{.Type}} and returns an error if the schema rejects it.
 func New{{.Type}}({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f.Priv}} {{$f.GoType}}{{end}}) (*{{.Type}}, error) {
 	{{.CtorLocal}} := &{{.Type}}{
-{{range .Fields}}		{{.Priv}}: {{.Priv}},
+{{range .Fields}}		{{.Priv}}: {{printf .Copy .Priv}},
 {{end}}	}
 	if err := {{.CtorLocal}}.Validate(); err != nil {
 		return nil, err
@@ -84,14 +80,14 @@ func New{{.Type}}({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f.Priv}} {{$f.
 }
 {{range .Fields}}
 // {{.Go}} returns the {{.Member}} member.
-func ({{$.Recv}} *{{$.Type}}) {{.Go}}() {{.GoType}} { return {{$.Recv}}.{{.Priv}} }
+func ({{$.Recv}} *{{$.Type}}) {{.Go}}() {{.GoType}} { return {{printf .Copy (printf "%s.%s" $.Recv .Priv)}} }
 
 // Set{{.Go}} sets the {{.Member}} member, or returns the schema's own error and
 // leaves the value untouched. The whole record is revalidated: a guarded type's
 // invariant is that it is valid, not merely that each field was valid alone.
 func ({{$.Recv}} *{{$.Type}}) Set{{.Go}}(v {{.GoType}}) error {
 	prev := {{$.Recv}}.{{.Priv}}
-	{{$.Recv}}.{{.Priv}} = v
+	{{$.Recv}}.{{.Priv}} = {{printf .Copy "v"}}
 	if err := {{$.Recv}}.Validate(); err != nil {
 		{{$.Recv}}.{{.Priv}} = prev
 		return err
@@ -131,7 +127,40 @@ func ({{.Recv}} *{{.Type}}) Unmarshal(text string) error {
 	{{.Recv}}.adopt(src)
 	return nil
 }
-`))
+{{if .NeedCloneSlice}}
+func {{.PrivType}}CloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(s)), s...)
+}
+{{end}}{{if .NeedClonePtr}}
+func {{.PrivType}}ClonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	return &c
+}
+{{end}}{{if .NeedCloneBigInt}}
+func {{.PrivType}}CloneBigInt(x *big.Int) *big.Int {
+	if x == nil {
+		return nil
+	}
+	return new(big.Int).Set(x)
+}
+{{end}}{{if .NeedCloneBigInts}}
+func {{.PrivType}}CloneBigInts(xs []*big.Int) []*big.Int {
+	if xs == nil {
+		return nil
+	}
+	out := make([]*big.Int, len(xs))
+	for i, x := range xs {
+		out[i] = {{.PrivType}}CloneBigInt(x)
+	}
+	return out
+}
+{{end}}`))
 
 // The generated tests assert AGREEMENT WITH THE ENGINE, not invented
 // expectations. They cannot know a value this schema accepts — constraints are

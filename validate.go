@@ -33,12 +33,9 @@ func ValidateWith(v any, s *Schema) error {
 }
 
 func validateAgainst(v any, override *schema.Schema) error {
-	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
-		if rv.IsNil() {
-			return &MarshalError{Path: "$", Msg: "cannot validate a nil value"}
-		}
-		rv = rv.Elem()
+	rv, ok := topValue(v)
+	if !ok {
+		return &MarshalError{Path: "$", Msg: "cannot validate a nil value"}
 	}
 	switch {
 	case rv.Kind() == reflect.Struct && !isModelStruct(rv.Type()):

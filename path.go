@@ -1,6 +1,7 @@
 package internetobject
 
 import (
+	"encoding"
 	"math/big"
 	"reflect"
 	"strconv"
@@ -36,6 +37,9 @@ var (
 	bytesType      = reflect.TypeOf([]byte(nil))
 	objectType     = reflect.TypeOf(Object{})
 	anyType        = reflect.TypeOf((*any)(nil)).Elem()
+
+	textMarshalerType    = reflect.TypeFor[encoding.TextMarshaler]()
+	collectionBinderType = reflect.TypeFor[collectionBinder]()
 )
 
 // rootPath is the document root: the parent of every top-level record.

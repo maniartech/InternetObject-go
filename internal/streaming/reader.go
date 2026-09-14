@@ -8,6 +8,7 @@
 package streaming
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/maniartech/InternetObject-go/internal/core"
@@ -225,7 +226,14 @@ func (r *Reader) resolveHeader(text string) {
 			}
 		}
 		if h.Inline != nil {
+			// A later layer's bare schema expression IS its default, and the
+			// later layer wins: an earlier `$schema` would otherwise outrank it,
+			// because a named `$schema` is consulted before the expression.
 			merged.Inline = h.Inline
+			delete(merged.Schemas, "schema")
+			merged.Defs = slices.DeleteFunc(merged.Defs, func(d parser.HeaderDef) bool {
+				return d.Kind == parser.DefSchema && d.Key == "schema"
+			})
 		}
 	}
 	if r.opts.Definitions != "" {
@@ -242,7 +250,7 @@ func (r *Reader) resolveHeader(text string) {
 		}
 		apply(h)
 	}
-	r.defs = document.NewDefinitions(merged)
+	r.defs = document.NewDefinitionsWith(merged, r.opts.Parent)
 	r.headerDone = true
 	r.current, r.currentSel = r.defaultSchema(), ""
 }
@@ -257,8 +265,9 @@ func parseHeaderText(text string) (*parser.Header, bool) {
 	return doc.Header, true
 }
 
-// defaultSchema resolves the bare-`---` context: the in-stream `$schema`,
-// else the reader option's fallback, else none.
+// defaultSchema resolves the bare-`---` context: the in-stream (or preloaded)
+// `$schema`, else the parent header's default, else the reader option's
+// fallback, else none.
 func (r *Reader) defaultSchema() *schema.Schema {
 	if r.opts.Schema != nil {
 		return r.opts.Schema // an attached schema outranks everything
@@ -271,6 +280,9 @@ func (r *Reader) defaultSchema() *schema.Schema {
 	// stream and a Parse can no longer disagree about what `---` binds to.
 	if s, _ := document.DefaultSchemaOf(r.defs); s != nil {
 		return s
+	}
+	if r.opts.Parent != nil && r.opts.Parent.Default != nil {
+		return r.opts.Parent.Default
 	}
 	if r.opts.DefaultSchema != "" {
 		s, _ := r.defs.SchemaOf(strings.TrimPrefix(r.opts.DefaultSchema, "$"))

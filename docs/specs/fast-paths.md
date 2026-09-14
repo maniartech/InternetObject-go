@@ -163,6 +163,41 @@ plain path's 4,024 plus one box per constrained member (~2,000 here), and from 4
 tests extended with one constrained case per constraint family, each passing AND each shown to fail
 when that family's check is disabled.
 
+**Detailed design — written 2026-09-14, before the code.**
+
+*The one question.* `schema.Accepts(val any, md *MemberDef) bool` runs `validateMember(val, true,
+md, NoDefs{})` — the validator's entire per-member sequence (choices, type, pattern, lengths, bounds,
+`multipleOf`, the sized-integer ranges) — and reports whether it raised a fault. It reuses the
+validator's own panic/recover; nothing is copied. `NoDefs` is sound because a header that defines
+variables already never reaches a fast path; a constraint naming one (`min: @x`) therefore fails
+the check, and the path declines.
+
+*What is boxed, and why it is the tree's representation.* The value passed is the one the TOKEN
+decodes to, not the Go field: a string member's `Stream.StringValue`, a number's `Stream.Number`
+(`float64`, which is what the parser boxes for every number token), a bool's `Stream.Bool`. The
+field's Go type is irrelevant to the check — exactly as on the tree path, which validates before it
+binds. The differential tests are what hold this claim.
+
+*Which definitions it admits.* `IsSimpleSchema` keeps declining everything whose value the fast
+path cannot produce or that needs more than one member to judge: `default` (the fast path has no
+value to bind), `anyOf`, nested and referenced schemas, open schemas. It stops declining
+`Constraints` and `choices`. Array-level constraints (`len`, `minLen`, `maxLen` on the array
+itself) stay declined in this step — checking them needs the boxed `[]any` the path exists to avoid;
+element constraints (`[{int, min: 0}]`) are checked per element through `md.Of`.
+
+*Cost.* A check runs only for a member whose definition carries a key; an unconstrained member pays
+one nil test. Boxing a string or float64 whose box does not escape `Accepts` should stay on the
+stack — measured, not assumed, by the constrained budgets.
+
+*Encode.* The fast encoder asks the same question of each constrained field's value (boxed as the
+tree encoder would box it — `encodeValue`'s representation) against the plan's compiled member
+definition, before writing it; a refusal makes `marshalFast` decline, and the tree path reports.
+`fastEligible` stops rejecting `plan.validate` for flat types. `StreamMarshaler` is NOT changed in
+this step: it validates each record on the tree path by design, and moving it waits for 5.3.
+
+*Benchmark schema.* Before this code lands, the constrained benchmark gains a `choices` member and
+a `pattern` member (review of 5.6), so their cost is inside a budget.
+
 ### 5.3 The `…With` functions take the fast paths
 
 `UnmarshalWith` framing with a supplied schema (including headerless input, which `FrameData`

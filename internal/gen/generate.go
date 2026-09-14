@@ -18,6 +18,9 @@ type field struct {
 	Go     string // the exported Go identifier
 	priv   string // the unexported field name
 	GoType string
+	// Copy is a printf format that copies a value of GoType so the copy shares
+	// no memory a caller could write through: "%s" for a plain value.
+	Copy string
 }
 
 // Priv is the unexported field name, exported for the template.
@@ -32,6 +35,36 @@ type unit struct {
 	SchemaText string // the verbatim schema source
 	Fields     []field
 	Imports    []string
+	// The copy helpers the fields need, emitted only when used.
+	NeedCloneSlice, NeedClonePtr, NeedCloneBigInt, NeedCloneBigInts bool
+}
+
+// copyFormat returns how a generated type copies a value of goType on its way
+// in (constructor, setter) and out (getter).
+//
+// A guarded type promises that a value which exists is valid. Handing out, or
+// keeping, the caller's own slice or pointer broke that: `p.Tags()[0] = ""`
+// changed a record no setter had approved (SPEC 0004 A11). A value reachable
+// through an `any` member is the one exception — the engine's dynamic model has
+// no deep copy — and the generated doc comment says so.
+func copyFormat(goType string, u *unit) string {
+	switch {
+	case goType == "[]*big.Int":
+		u.NeedCloneBigInts, u.NeedCloneBigInt = true, true
+		return u.PrivType + "CloneBigInts(%s)"
+	case strings.HasPrefix(goType, "[]"):
+		// A helper of the file's own, not slices.Clone: a member named
+		// `slices` would shadow the package inside the constructor.
+		u.NeedCloneSlice = true
+		return u.PrivType + "CloneSlice(%s)"
+	case goType == "*big.Int":
+		u.NeedCloneBigInt = true
+		return u.PrivType + "CloneBigInt(%s)"
+	case strings.HasPrefix(goType, "*"):
+		u.NeedClonePtr = true
+		return u.PrivType + "ClonePtr(%s)"
+	}
+	return "%s"
 }
 
 // Generate compiles the schema, refuses anything it cannot bind exactly, and
@@ -74,10 +107,20 @@ func Generate(pkg, typeName, schemaText string) (code, tests []byte, err error) 
 		}
 		u.Fields = append(u.Fields, field{
 			Member: name, Go: id, priv: unexported(id), GoType: gt,
+			Copy: copyFormat(gt, &u),
 		})
 	}
 	if len(u.Fields) == 0 {
 		return nil, nil, fmt.Errorf("schema declares no members")
+	}
+	// The constructor names a parameter after every member and calls the copy
+	// helpers, so a member spelled like a helper would shadow it there.
+	for _, f := range u.Fields {
+		for _, helper := range []string{"CloneSlice", "ClonePtr", "CloneBigInt", "CloneBigInts"} {
+			if f.priv == u.PrivType+helper {
+				return nil, nil, fmt.Errorf("member %q collides with a generated helper", f.Member)
+			}
+		}
 	}
 
 	// Every generated local must be distinct from every FIELD name, because a

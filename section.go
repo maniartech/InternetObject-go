@@ -41,6 +41,9 @@ type Section struct {
 
 // Name reports the section's name, or DefaultSectionName for the unnamed one.
 func (s *Section) Name() string {
+	if s == nil {
+		return ""
+	}
 	if s.sec.Name == "" {
 		return DefaultSectionName
 	}
@@ -49,11 +52,16 @@ func (s *Section) Name() string {
 
 // SchemaName reports the `--- name: $Schema` selector, empty when the section
 // bound to the document's default schema instead.
-func (s *Section) SchemaName() string { return s.sec.SchemaName }
+func (s *Section) SchemaName() string {
+	if s == nil {
+		return ""
+	}
+	return s.sec.SchemaName
+}
 
 // Schema returns the compiled schema this section was validated against, or nil.
 func (s *Section) Schema() *Schema {
-	if s.sch == nil {
+	if s == nil || s.sch == nil {
 		return nil
 	}
 	return newSchema(s.sch)
@@ -61,10 +69,15 @@ func (s *Section) Schema() *Schema {
 
 // IsCollection reports whether the section was written as a collection (`~`
 // rows) rather than a single bare record.
-func (s *Section) IsCollection() bool { return s.sec.Collection }
+func (s *Section) IsCollection() bool { return s != nil && s.sec.Collection }
 
 // Len is the number of records in the section.
-func (s *Section) Len() int { return len(s.sec.Records) }
+func (s *Section) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.sec.Records)
+}
 
 // Records returns the section's records as live values — ALWAYS a slice, with
 // one element for a bare record. Faulted rows keep their place and carry their
@@ -72,6 +85,9 @@ func (s *Section) Len() int { return len(s.sec.Records) }
 //
 // As with Document.Value, these are a VIEW of the document's own records.
 func (s *Section) Records() []any {
+	if s == nil {
+		return nil
+	}
 	out := make([]any, 0, len(s.sec.Records))
 	for _, rec := range s.sec.Records {
 		out = append(out, parser.ProjectValue(rec))
@@ -82,6 +98,9 @@ func (s *Section) Records() []any {
 // Value returns the section's data the way the document projects it: a []any
 // for a collection, the record itself for a bare section, nil when empty.
 func (s *Section) Value() any {
+	if s == nil {
+		return nil
+	}
 	if s.sec.Collection {
 		return s.Records()
 	}
@@ -100,7 +119,9 @@ func (d *Document) Sections() []*Section {
 	return out
 }
 
-// Section returns the named section, or nil when the document has none.
+// Section returns the named section, or nil when the document has none. Every
+// method of a nil *Section returns its zero result, so a lookup can be chained
+// (`doc.Section("x").Len()`) and tested afterwards.
 // DefaultSectionName matches the unnamed section.
 func (d *Document) Section(name string) *Section {
 	for _, sec := range d.doc.Sections {
@@ -166,6 +187,9 @@ func SectionAs[T any](d *Document, name string) ([]T, error) {
 // A section with no faults returns nil, so `len(sec.Errors()) == 0` is the test
 // for "this section loaded cleanly".
 func (s *Section) Errors() []Error {
+	if s == nil {
+		return nil
+	}
 	raw := s.docp.doc.SecErrors[s.sec]
 	if len(raw) == 0 {
 		return nil
@@ -178,4 +202,4 @@ func (s *Section) Errors() []Error {
 }
 
 // HasErrors reports whether any record in this section failed.
-func (s *Section) HasErrors() bool { return len(s.docp.doc.SecErrors[s.sec]) > 0 }
+func (s *Section) HasErrors() bool { return s != nil && len(s.docp.doc.SecErrors[s.sec]) > 0 }

@@ -1,8 +1,11 @@
 package internetobject
 
 import (
+	"errors"
 	"iter"
 	"reflect"
+
+	"github.com/maniartech/InternetObject-go/internal/errs"
 )
 
 // Collection is a section's rows bound to T, keeping the ones that bound
@@ -143,6 +146,23 @@ type collectionBinder interface {
 // bindFrom fills the collection from a section, keeping the rows that bind and
 // recording the faults of the rest.
 func (c *Collection[T]) bindFrom(sec *Section, at pathAt) error {
+	// A T this package cannot bind at all is a programming error, not a bad
+	// row. Reported per row it was absorbed like one, and a Collection of a
+	// type holding a netip.Addr loaded "successfully" with every row faulted
+	// and no reason given (review of SPEC 0004 A3).
+	et := reflect.TypeFor[T]()
+	for et.Kind() == reflect.Pointer {
+		et = et.Elem()
+	}
+	if et.Kind() != reflect.Struct || isModelStruct(et) {
+		// A row is a record, so its type is a struct; anything else panicked
+		// deep in reflection (review of SPEC 0004 A2–A12).
+		return &UnmarshalError{Path: at.String(),
+			Msg: "a Collection's element type must be a struct, not " + et.String()}
+	}
+	if _, err := planFor(et); err != nil {
+		return &UnmarshalError{Path: at.String(), Msg: err.Error()}
+	}
 	c.items, c.at, c.errors = nil, nil, nil
 	c.n = sec.Len()
 	c.schema = sec.Schema()
@@ -151,23 +171,23 @@ func (c *Collection[T]) bindFrom(sec *Section, at pathAt) error {
 		// A row that already failed validation carries its marker; report that
 		// rather than trying to bind a value which is not there.
 		if item, isErr := rec.(ErrorItem); isErr {
-			c.errors = append(c.errors, Error{
+			c.errors = append(c.errors, toError(errs.Error{
 				Code: item.Code, Category: item.Category, Path: item.Path,
-				RecordIndex: i, Line: int(item.Line), Col: int(item.Col),
-			})
+				RecordIndex: i, Line: item.Line, Col: item.Col,
+			}))
 			continue
 		}
 		obj, ok := rec.(*Object)
 		if !ok {
-			c.errors = append(c.errors, Error{
+			c.errors = append(c.errors, toError(errs.Error{
 				Code: InvalidObject, Category: CategoryValidation,
 				Path: at.record(i).String(), RecordIndex: i,
-			})
+			}))
 			continue
 		}
 		var v T
 		if err := bindInto(reflect.ValueOf(&v).Elem(), obj, at.record(i)); err != nil {
-			c.errors = append(c.errors, bindFault(err, at.record(i).String(), i))
+			c.errors = append(c.errors, bindFault(err, obj, at.record(i).String(), i))
 			continue
 		}
 		c.items = append(c.items, v)
@@ -176,9 +196,9 @@ func (c *Collection[T]) bindFrom(sec *Section, at pathAt) error {
 	return nil
 }
 
-// bindFault turns a binding error into the Error a collection reports, keeping
-// the designated code where there is one.
-func bindFault(err error, path string, index int) Error {
+// bindFault turns a binding error on record rec into the Error a collection
+// reports, keeping the designated code where there is one.
+func bindFault(err error, rec *Object, path string, index int) Error {
 	if list, ok := err.(ErrorList); ok && len(list) > 0 {
 		e := list[0]
 		e.RecordIndex = index
@@ -192,10 +212,14 @@ func bindFault(err error, path string, index int) Error {
 		return e
 	}
 	// An UnmarshalError is a Go-side type mismatch, not a format fault; it has
-	// no designated code, so it reports as the general one with its message
-	// preserved by the path.
-	return Error{
-		Code: InvalidObject, Category: CategoryValidation,
-		Path: path, RecordIndex: index,
+	// no designated code, so it reports as the general one — at the member that
+	// did not fit, and at its record's position rather than 0:0.
+	var ue *UnmarshalError
+	if errors.As(err, &ue) && ue.Path != "" {
+		path = ue.Path
 	}
+	return toError(errs.Error{
+		Code: InvalidObject, Category: CategoryValidation,
+		Path: path, RecordIndex: index, Line: rec.Line, Col: rec.Col,
+	})
 }

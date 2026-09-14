@@ -78,11 +78,43 @@ an idempotent `Close` that leaves the underlying writer open.
 
 ## ▶ RESUME HERE
 
-- **State:** DRAFT. §A being fixed as one correctness batch, after SPEC 0003 §5.1 and before §5.2.
-  §B awaits the owner.
-- **Done:** A1 — `Definitions` compiles every named schema when built and never writes afterwards,
-  so a shared Document is race-free with no lock. A lock was built first and rejected on
-  measurement: locking a receiver field makes it escape, and it added heap allocations to every
-  MarshalWith. Test: `TestSharedValuesAreSafeForConcurrentUse`, failing before, and failing again
-  when a lookup is made to write (sabotage).
-- **Next:** A2-A12, each with a failing-first test; then back to SPEC 0003 §5.2.
+- **State:** DRAFT. §A fixed — A1 committed (`601d7fd`), A2–A12 in review. §B awaits the owner.
+- **How each §A item landed** (every one with a black-box test shown to FAIL on the old code):
+  - A1 `Definitions` resolves every named schema when built and never writes those maps again; the
+    inline schema is published through atomic pointers. A mutex was built first and rejected on
+    measurement (receiver escape → heap allocations on every MarshalWith).
+  - A2 `topValue` — one statement of "unwrap a top-level value, nil at any level refused".
+  - A3 refused: structs with no field to write (every field unexported or `io:"-"`; `Collection[T]`
+    excepted) and types defining `encoding.TextMarshaler` on the value or the pointer (`time.Time`,
+    `Decimal`, `big.Int` excepted) — one rule, `definesText`, asked of declared types at plan time and
+    of values met at run time. A `Collection[T]` of such a T fails the load; it is not a row fault.
+    **This is a deliberate break:** types that round-tripped exactly through their underlying kind
+    — `slog.Level`, named string/int enums with `MarshalText`, `[16]byte` UUID types, generics over
+    them — are now refused, for Marshal and Unmarshal alike. Refusing is chosen over keeping the old
+    form because §B2, if it honours `TextMarshaler`, would otherwise change those documents'
+    spelling silently.
+  - A4 `MarshalError.Err` + `Unwrap`; `StreamMarshaler` keeps the writer's error.
+  - A5 every public `Error` goes through `toError`; a Collection's section base path was built
+    from a literal whose zero index meant "element 0". Found while writing A12's examples: an Error
+    with no source position printed `(0:0)`; it now prints none, and `ParseWith(nil)` and a fatal
+    `Stream` fault no longer claim 1:1. **Not done:** a Collection binding fault still drops its Go
+    cause ("cannot store number in int") — keeping it needs a new field on `Error`, which is §B8.
+  - A6 `core.KindName` names the format's kinds in binding errors. (A `time.Time` is always
+    `datetime`: the value model does not keep a temporal's declared kind — ADR 0008.)
+  - A7 the zero `Builder` works; every method of a nil `*Section` returns its zero result.
+  - A8 `Definitions` hands out one `*Schema` per compiled schema, so an alias and its target are
+    the same value; this is not promised in godoc, so §B7 stays free. (`Document.Schema`/`SchemaOf` still mint
+    per call; a document is per-parse, so its header cache rarely matters — revisit with §B7.)
+  - A9 `Definitions.Stream` passes its compiled header to the reader as a read-only parent instead
+    of re-parsing rendered text, and no longer drops it when `opts.Definitions` is set.
+  - A10 docs corrected; empty `Definitions.String()` is `""` as documented.
+  - A11 generated types copy slices, pointers and `*big.Int` in and out; `sync.OnceValues`.
+  - A12 `example_test.go`: ten runnable examples.
+- **Review of A2–A12 (2026-09-14): changes required, all fixed** — a Collection absorbed A3's
+  refusal; A11's generated code did not compile for members named `slices` or like a helper; the
+  plan-time and run-time text-form rules disagreed; an in-stream bare schema expression lost to a
+  preloaded `$schema` in `Stream` (now: the later layer's default wins, as in `Parse`; pinned by
+  `TestStreamDefaultSchemaPrecedence`).
+- **Confirmed** by the reviewer the same day (approved with nits, applied: a `Collection` of a
+  non-struct type is an error, not a panic; a struct whose every field is `io:"-"` is refused too).
+- **Next:** SPEC 0003 §5.2.

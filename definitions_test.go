@@ -191,7 +191,7 @@ func TestNilDefinitionsAreInert(t *testing.T) {
 	if _, ok := d.Var("x"); ok {
 		t.Error("a nil Definitions has no variables")
 	}
-	if got := d.String(); got != "---" {
+	if got := d.String(); got != "" {
 		t.Errorf("nil String() = %q", got)
 	}
 	if _, err := d.Parse("---\n~ 1"); err != nil {
@@ -219,5 +219,151 @@ func TestLocalAliasOfASharedDefinition(t *testing.T) {
 		if !strings.Contains(doc.String(), "Alice") {
 			t.Errorf("%q wrote %q", src, doc.String())
 		}
+	}
+}
+
+// Definitions.Stream keeps its definitions in force when the caller also
+// preloads header text: they are layered, the caller's text above them. The
+// definitions used to be skipped whenever opts.Definitions was set, so these
+// records were read with no schema at all (2026-09-14).
+func TestDefinitionsStreamLayersUnderCallerDefinitions(t *testing.T) {
+	defs, err := io.ParseDefinitions("~ $emp: {name: string, age: int}\n~ $schema: $emp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := &io.StreamOptions{Definitions: "~ $alert: {level: string}"}
+	var got []string
+	for item, err := range defs.Stream(strings.NewReader("---\n~ Alice, 30\n~ Bob, old\n--- $alert\n~ warn\n"), opts) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Err != nil {
+			got = append(got, "err:"+string(item.Err.Code))
+			continue
+		}
+		obj := item.Value.(*io.Object)
+		if v, ok := obj.Get("name"); ok {
+			got = append(got, v.(string))
+		} else if v, ok := obj.Get("level"); ok {
+			got = append(got, v.(string))
+		} else {
+			got = append(got, "unbound")
+		}
+	}
+	if want := "Alice err:expected-integer warn"; strings.Join(got, " ") != want {
+		t.Errorf("items = %v, want %s", got, want)
+	}
+}
+
+// A lookup returns the same *Schema every time, so the header it renders for
+// MarshalWith is rendered once, not once per lookup (2026-09-14).
+func TestDefinitionsHandOutOneSchemaPerName(t *testing.T) {
+	defs, err := io.ParseDefinitions("~ $emp: {name: string, age: int}\n~ $schema: $emp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defs.Schema("emp") == nil || defs.Schema("emp") != defs.Schema("$emp") {
+		t.Error("two lookups of $emp returned different values")
+	}
+	if defs.Default() == nil || defs.Default() != defs.Schema("emp") {
+		t.Error("Default and the $emp it aliases returned different values")
+	}
+	rec := struct {
+		Name string `io:"name"`
+		Age  int    `io:"age"`
+	}{"Ann", 30}
+	if _, err := io.MarshalWith(rec, defs.Schema("emp")); err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(50, func() {
+		if _, err := io.MarshalWith(rec, defs.Schema("emp")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	direct := defs.Schema("emp")
+	want := testing.AllocsPerRun(50, func() {
+		if _, err := io.MarshalWith(rec, direct); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > want {
+		t.Errorf("MarshalWith through a lookup spends %.0f allocations, %.0f with the schema held", allocs, want)
+	}
+}
+
+// String writes no separator: empty definitions are "", and a header holding
+// only a bare schema expression still round-trips.
+func TestDefinitionsStringWritesNoSeparator(t *testing.T) {
+	for _, src := range []string{"", "---", "name: string, age: int", "~ $p: {name: string}"} {
+		d, err := io.ParseDefinitions(src)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		text := d.String()
+		if strings.Contains(text, "---") {
+			t.Errorf("%q rendered %q, with a separator", src, text)
+		}
+		back, err := io.ParseDefinitions(text)
+		if err != nil {
+			t.Fatalf("%q -> %q does not re-parse: %v", src, text, err)
+		}
+		if back.Len() != d.Len() || (back.Default() == nil) != (d.Default() == nil) {
+			t.Errorf("%q -> %q lost definitions", src, text)
+		}
+	}
+}
+
+// The default a stream binds to, from the most specific source down: the
+// stream's own header, then preloaded definitions (text, then compiled), then
+// StreamOptions.DefaultSchema. A bare schema expression counts as a default at
+// its own layer, so a later expression overrides an earlier `$schema`.
+func TestStreamDefaultSchemaPrecedence(t *testing.T) {
+	defs, err := io.ParseDefinitions("~ $emp: {name: string, age: int}\n~ $schema: $emp\n~ $alt: {level: string}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstKey := func(seq func(func(io.StreamItem, error) bool)) string {
+		for item, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item.Err != nil {
+				return "err:" + string(item.Err.Code)
+			}
+			obj := item.Value.(*io.Object)
+			if obj.Len() == 0 {
+				return "empty"
+			}
+			return obj.Members[0].Key
+		}
+		return "none"
+	}
+	cases := []struct {
+		name, wire string
+		opts       *io.StreamOptions
+		want       string
+	}{
+		{"compiled $schema", "---\n~ Ann, 30\n", nil, "name"},
+		{"in-stream expression beats compiled $schema", "code: string\n---\n~ x\n", nil, "code"},
+		{"compiled $schema beats DefaultSchema", "---\n~ Ann, 30\n", &io.StreamOptions{DefaultSchema: "$alt"}, "name"},
+		{"preloaded text $schema beats compiled", "---\n~ warn\n",
+			&io.StreamOptions{Definitions: "~ $schema: {level: string}"}, "level"},
+		{"in-stream expression beats preloaded text $schema", "code: string\n---\n~ x\n",
+			&io.StreamOptions{Definitions: "~ $schema: {level: string}"}, "code"},
+	}
+	for _, c := range cases {
+		if got := firstKey(defs.Stream(strings.NewReader(c.wire), c.opts)); got != c.want {
+			t.Errorf("%s: first member %q, want %q", c.name, got, c.want)
+		}
+	}
+	// Plain Stream, no compiled layer: an in-stream expression beats a
+	// preloaded `$schema`, and DefaultSchema applies only when nothing else does.
+	if got := firstKey(io.Stream(strings.NewReader("code: string\n---\n~ x\n"),
+		&io.StreamOptions{Definitions: "~ $schema: {level: string}"})); got != "code" {
+		t.Errorf("plain Stream: first member %q, want code", got)
+	}
+	if got := firstKey(io.Stream(strings.NewReader("---\n~ warn\n"),
+		&io.StreamOptions{Definitions: "~ $alt: {level: string}", DefaultSchema: "$alt"})); got != "level" {
+		t.Errorf("DefaultSchema fallback: first member %q, want level", got)
 	}
 }

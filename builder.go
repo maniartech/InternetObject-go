@@ -26,6 +26,8 @@ import (
 // that caused it rather than at the end with a path to decode. A builder can
 // therefore never produce a document its own parser would reject.
 //
+// The zero Builder is ready to use, as a strings.Builder is.
+//
 // A Builder is single-owner and NOT safe for concurrent use — it is the one
 // mutable thing in this package, and it exists to be filled in and finished.
 // Everything it produces (a *Document, a *Schema) is immutable and shareable.
@@ -47,12 +49,20 @@ type SectionBuilder struct {
 
 // NewBuilder returns an empty document to fill in.
 func NewBuilder() *Builder {
-	h := &parser.Header{Schemas: map[string]any{}, Vars: map[string]any{}}
-	return &Builder{
-		header: h,
-		defs:   document.NewDefinitions(h),
-		byName: map[string]*SectionBuilder{},
+	b := &Builder{}
+	b.lazyInit()
+	return b
+}
+
+// lazyInit readies a zero Builder on its first use. `var b io.Builder` used to
+// panic on its first Section, writing to a nil map.
+func (b *Builder) lazyInit() {
+	if b.header != nil {
+		return
 	}
+	b.header = &parser.Header{Schemas: map[string]any{}, Vars: map[string]any{}}
+	b.defs = document.NewDefinitions(b.header)
+	b.byName = map[string]*SectionBuilder{}
 }
 
 // NewBuilderFrom starts from a parsed document, CLONING it, so the original
@@ -108,6 +118,7 @@ func NewBuilderFrom(doc *Document) *Builder {
 // meaningful against the records validated with it, so changing one underneath
 // them would leave a document whose rows no longer match its own header.
 func (b *Builder) Define(name string, s *Schema) *Builder {
+	b.lazyInit()
 	if b.err != nil {
 		return b
 	}
@@ -129,6 +140,7 @@ func (b *Builder) Define(name string, s *Schema) *Builder {
 // Var adds an `@variable` to the header. Like Define, it is refused once
 // records exist.
 func (b *Builder) Var(name string, v any) *Builder {
+	b.lazyInit()
 	if b.err != nil {
 		return b
 	}
@@ -150,6 +162,7 @@ func (b *Builder) Var(name string, v any) *Builder {
 // Opening the same name twice returns the section already opened, so records
 // can be added to it in more than one place.
 func (b *Builder) Section(name, schemaName string) *SectionBuilder {
+	b.lazyInit()
 	if sb, ok := b.byName[name]; ok {
 		return sb
 	}
@@ -203,6 +216,7 @@ func (s *SectionBuilder) Len() int { return len(s.sec.Records) }
 // Document finishes the build. The result is an ordinary *Document: immutable,
 // shareable, and renderable with String.
 func (b *Builder) Document() (*Document, error) {
+	b.lazyInit()
 	if b.err != nil {
 		return nil, b.err
 	}
@@ -246,12 +260,12 @@ func (b *Builder) fail(msg string) {
 func recordOf(v any) (*core.Object, error) {
 	if obj, ok := v.(*core.Object); ok {
 		if obj == nil {
-			return nil, &MarshalError{Path: "$", Msg: "Add: the record is nil"}
+			return nil, &MarshalError{Path: "$", Msg: "the record is nil"}
 		}
 		return encodeObject(obj, rootPath)
 	}
 	if v == nil {
-		return nil, &MarshalError{Path: "$", Msg: "Add: the record is nil"}
+		return nil, &MarshalError{Path: "$", Msg: "the record is nil"}
 	}
 	ev, err := encodeValue(reflect.ValueOf(v), "", rootPath)
 	if err != nil {
@@ -259,7 +273,7 @@ func recordOf(v any) (*core.Object, error) {
 	}
 	obj, ok := ev.(*core.Object)
 	if !ok {
-		return nil, &MarshalError{Path: "$", Msg: "Add: a record must be a struct, a map or an *Object"}
+		return nil, &MarshalError{Path: "$", Msg: "a record must be a struct, a map or an *Object"}
 	}
 	return obj, nil
 }

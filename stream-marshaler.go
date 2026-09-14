@@ -149,7 +149,7 @@ func (m *StreamMarshaler) marshalAs(v any, name string) error {
 			sep = "--- $" + name + "\n"
 		}
 		if _, err := m.w.WriteString(sep); err != nil {
-			return m.fail(err.Error())
+			return m.failWrite(err)
 		}
 	}
 
@@ -158,7 +158,7 @@ func (m *StreamMarshaler) marshalAs(v any, name string) error {
 	m.buf = document.AppendRecord(m.buf, rec, sch)
 	m.buf = append(m.buf, '\n')
 	if _, err := m.w.Write(m.buf); err != nil {
-		return m.fail(err.Error())
+		return m.failWrite(err)
 	}
 	return nil
 }
@@ -173,11 +173,11 @@ func (m *StreamMarshaler) writeHeader() error {
 	m.wroteHdr = true
 	if m.defs != "" {
 		if _, err := m.w.WriteString(m.defs); err != nil {
-			return m.fail(err.Error())
+			return m.failWrite(err)
 		}
 		if m.defs[len(m.defs)-1] != '\n' {
 			if _, err := m.w.WriteString("\n"); err != nil {
-				return m.fail(err.Error())
+				return m.failWrite(err)
 			}
 		}
 	}
@@ -193,7 +193,7 @@ func (m *StreamMarshaler) Flush() error {
 		return m.err
 	}
 	if err := m.w.Flush(); err != nil {
-		return m.fail(err.Error())
+		return m.failWrite(err)
 	}
 	return nil
 }
@@ -217,7 +217,7 @@ func (m *StreamMarshaler) Close() error {
 	if m.active == "\x00" {
 		// Nothing was written, so the terminator has not been emitted yet.
 		if _, err := m.w.WriteString("---\n"); err != nil {
-			return m.fail(err.Error())
+			return m.failWrite(err)
 		}
 	}
 	return m.Flush()
@@ -226,6 +226,17 @@ func (m *StreamMarshaler) Close() error {
 func (m *StreamMarshaler) fail(msg string) error {
 	if m.err == nil {
 		m.err = &MarshalError{Path: "$", Msg: msg}
+	}
+	return m.err
+}
+
+// failWrite is fail for an error from the underlying writer, which it keeps as
+// the cause: a caller must be able to tell a closed connection
+// (errors.Is(err, net.ErrClosed)) from a record the schema refused. It used to
+// keep only the error's text.
+func (m *StreamMarshaler) failWrite(err error) error {
+	if m.err == nil {
+		m.err = &MarshalError{Path: "$", Msg: "write", Err: err}
 	}
 	return m.err
 }

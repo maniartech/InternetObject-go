@@ -30,16 +30,13 @@ import (
 // to hold: `[]map[string]any` is always a collection and `[]any` is always an
 // array, so an empty slice writes the same shape as a full one.
 func Marshal(v any) (string, error) {
-	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
-		if rv.IsNil() {
-			return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
-		}
-		rv = rv.Elem()
+	rv, ok := topValue(v)
+	if !ok {
+		return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
 	}
 
 	// Simple types skip the intermediate tree entirely; the spelling rules are
-	// the same shared helpers either way (see marshal_fast.go).
+	// the same shared helpers either way (see marshal-fast.go).
 	if text, took, err := marshalFast(rv); took {
 		return text, err
 	}
@@ -144,6 +141,23 @@ func Marshal(v any) (string, error) {
 	return doc.String(), nil
 }
 
+// topValue unwraps the value a top-level call was handed, through pointers
+// and interfaces, and reports false for a nil at any level — an untyped nil
+// included, which reflect represents as no value at all. Marshal(nil),
+// Validate(nil) and ValidateWith(nil, s) used to panic inside reflect on it.
+func topValue(v any) (reflect.Value, bool) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return rv, false
+		}
+		rv = rv.Elem()
+	}
+	return rv, rv.IsValid()
+}
+
+// encodeStruct converts a struct to a record through its plan, members in
+// field order.
 func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*core.Object, error) {
 	out := &core.Object{Members: make([]core.Member, 0, len(plan.fields))}
 	for _, f := range plan.fields {
@@ -160,8 +174,6 @@ func encodeStruct(rv reflect.Value, plan *structPlan, at pathAt) (*core.Object, 
 	return out, nil
 }
 
-// encodeValue converts one Go value to the wire value model. Integer values
-// beyond 2^53 are refused rather than silently rounded.
 // encodeObject normalizes an Object a CALLER built: its member values are
 // whatever Go types were stored, and the writer only speaks the format's own.
 // Keys, order and positional-ness are preserved exactly.
@@ -185,6 +197,8 @@ func encodeObject(o *core.Object, at pathAt) (*core.Object, error) {
 	return out, nil
 }
 
+// encodeValue converts one Go value to the wire value model. Integer values
+// beyond 2^53 are refused rather than silently rounded.
 func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
@@ -210,6 +224,11 @@ func encodeValue(rv reflect.Value, kind string, at pathAt) (any, error) {
 		return rv.Interface().(time.Time).UTC(), nil
 	case t == bytesType:
 		return append([]byte(nil), rv.Bytes()...), nil
+	case t.PkgPath() != "" && definesText(t):
+		// The same rule the plan applies to a declared type, for a value met
+		// inside an `any`, a map or a slice. Only a defined type can have
+		// methods, so a builtin string or number never pays for the lookup.
+		return nil, textualError(t)
 	}
 	switch rv.Kind() {
 	case reflect.String:

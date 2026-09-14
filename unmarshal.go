@@ -329,7 +329,7 @@ func integralOf(v any) (int64, bool) {
 }
 
 func typeMismatch(at pathAt, v any, t reflect.Type) error {
-	return &UnmarshalError{Path: at.String(), Msg: fmt.Sprintf("cannot store %T in %s", v, t)}
+	return &UnmarshalError{Path: at.String(), Msg: "cannot store " + core.KindName(v) + " in " + t.String()}
 }
 
 // absorbedByCollections reports whether every fault the document carries

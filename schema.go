@@ -41,7 +41,7 @@ func newSchema(s *schema.Schema) *Schema { return &Schema{s: s} }
 func ParseSchema(def string) (*Schema, error) {
 	s, cerr := document.ParseSchema(def)
 	if cerr != nil {
-		return nil, ErrorList{{Code: cerr.Code, Line: int(cerr.Line), Col: int(cerr.Col)}}
+		return nil, ErrorList{toError(*cerr)}
 	}
 	return newSchema(s), nil
 }
