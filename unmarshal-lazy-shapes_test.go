@@ -67,6 +67,135 @@ func sameBothWays[T any](t *testing.T, src string) {
 	}
 }
 
+// sameBothWaysWith is sameBothWays for UnmarshalWith against schema: the
+// document with its header, and the same data with the header removed — the
+// form a caller holding the schema out of band sends.
+func sameBothWaysWith[T any](t *testing.T, schema *io.Schema, header, data string) {
+	t.Helper()
+	for _, src := range []string{header + data, data} {
+		var lazy, tree T
+		lazyErr := codesOf(io.UnmarshalWith(src, &lazy, schema))
+		var treeErr string
+		io.WithTreeDecode(func() { treeErr = codesOf(io.UnmarshalWith(src, &tree, schema)) })
+		if lazyErr != treeErr {
+			t.Errorf("UnmarshalWith %q\n  error differs: lazy %q, tree %q", src, lazyErr, treeErr)
+			continue
+		}
+		if !reflect.DeepEqual(lazy, tree) {
+			t.Errorf("UnmarshalWith %q\n  values differ:\n  lazy %+v\n  tree %+v", src, lazy, tree)
+		}
+	}
+}
+
+// headerSchema compiles the schema a `…\n---\n` header declares.
+func headerSchema(t *testing.T, header string) *io.Schema {
+	t.Helper()
+	s, err := io.ParseSchema(strings.TrimSuffix(header, "\n---\n"))
+	if err != nil {
+		t.Fatalf("%q: %v", header, err)
+	}
+	return s
+}
+
+// The same shapes through UnmarshalWith (SPEC 0003 §5.3), which now takes the
+// lazy path with the supplied schema in place of the header's.
+func TestLazyShapesMatchTreePathWithASuppliedSchema(t *testing.T) {
+	const opt = "name: string, nick?: string, age: int\n---\n"
+	optSchema := headerSchema(t, opt)
+	for _, d := range []string{
+		"~ Alice, Al, 30", "~ Alice, , 30", "~ Alice", "~ , Al, 30", "~ name: Alice, age: 30",
+		"~ age: 0, name: A, 0", "~ Alice, Al, 30, extra", "~ @x, Al, 30", "~ Alice, Al, 30\n~ Bob",
+		"Alice, Al, 30", "",
+	} {
+		sameBothWaysWith[[]optRow](t, optSchema, opt, d)
+		if !strings.Contains(d, "\n") {
+			sameBothWaysWith[optRow](t, optSchema, opt, d)
+		}
+	}
+	for _, c := range constrainedShapes {
+		schema, err := io.ParseSchema(strings.TrimSuffix(c.header, "\n---\n"))
+		if err != nil {
+			continue // a header naming an undefined variable does not compile alone
+		}
+		sameBothWaysWith[[]optRow](t, schema, c.header, c.doc)
+		sameBothWaysWith[optRow](t, schema, c.header, c.doc)
+	}
+
+	// The supplied schema wins over a header that is LOOSER than it: the header
+	// alone would accept age 30, the supplied schema does not.
+	strict, err := io.ParseSchema("name: string, nick?: string, age: {int, max: 10}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameBothWaysWith[[]optRow](t, strict, opt, "~ Alice, Al, 30")
+	sameBothWaysWith[optRow](t, strict, opt, "~ Alice, Al, 30")
+	var r optRow
+	if err := io.UnmarshalWith(opt+"~ Alice, Al, 30", &r, strict); err == nil {
+		t.Error("the supplied schema's max was not applied over the header's schema")
+	}
+
+	// The supplied schema wins, but a broken header still fails the document:
+	// the general path reads it either way.
+	for _, src := range []string{
+		"~ $draft: {title: nosuchtype}\n---\n~ Alice, Al, 30",
+		"~ @n: 1b\n---\n~ Alice, Al, 30",
+		"age: int\n---\n~ Alice, Al, 30", // a different header schema, overridden
+		// A header literal that does not parse fails the document on the tree
+		// path, whatever schema is supplied; the lazy path once bound these
+		// (review of SPEC 0003 §5.3).
+		"~ meta: d\"2024-99-99\"\n---\n~ Alice, Al, 30",
+		"~ meta: 12.5n\n---\n~ Alice, Al, 30",
+		"~ meta: 0xZZ\n---\n~ Alice, Al, 30",
+		"~ meta: dt\"nope\"\n---\n~ Alice, Al, 30",
+		"~ meta: [d\"2024-99-99\"]\n---\n~ Alice, Al, 30",
+		"~ meta: {a: t\"99:99\"}\n---\n~ Alice, Al, 30",
+		"~ meta: d\"2024-01-15\"\n---\n~ Alice, Al, 30", // a good literal, for contrast
+	} {
+		var lazy, tree []optRow
+		lazyErr := codesOf(io.UnmarshalWith(src, &lazy, optSchema))
+		var treeErr string
+		io.WithTreeDecode(func() { treeErr = codesOf(io.UnmarshalWith(src, &tree, optSchema)) })
+		if lazyErr != treeErr || !reflect.DeepEqual(lazy, tree) {
+			t.Errorf("UnmarshalWith %q: lazy %q %+v, tree %q %+v", src, lazyErr, lazy, treeErr, tree)
+		}
+	}
+}
+
+// FuzzUnmarshalWithMatchesTreePath drives an arbitrary schema and document
+// through UnmarshalWith both ways, with the document's header kept and
+// removed, into a slice and a single record.
+func FuzzUnmarshalWithMatchesTreePath(f *testing.F) {
+	f.Add("name: string, nick?: string, age: int", "name: string, nick?: string, age: int\n---\n~ Alice, Al, 30")
+	f.Add("name: {string, minLen: 3}, nick?: string, age: {int, max: 10}", "~ meta: d\"2024-01-15\"\n---\n~ Al, x, 30\n~ Bob, , 3")
+	f.Add("name: string, nick?: string, age: int", "~ meta: 12.5n\n---\n~ Alice, Al, 30")
+	f.Add("name: string, nick?: string, age: int", "Alice, Al, 30")
+	f.Fuzz(func(t *testing.T, def, src string) {
+		schema, err := io.ParseSchema(def)
+		if err != nil {
+			return
+		}
+		data := src
+		if i := strings.Index(src, "\n---\n"); i >= 0 {
+			data = src[i+len("\n---\n"):]
+		}
+		for _, doc := range []string{src, data} {
+			var lazyRows, treeRows []optRow
+			lazyErr := codesOf(io.UnmarshalWith(doc, &lazyRows, schema))
+			var treeErr string
+			io.WithTreeDecode(func() { treeErr = codesOf(io.UnmarshalWith(doc, &treeRows, schema)) })
+			if lazyErr != treeErr || !reflect.DeepEqual(lazyRows, treeRows) {
+				t.Fatalf("UnmarshalWith(%q) against %q:\n lazy %q %+v\n tree %q %+v", doc, def, lazyErr, lazyRows, treeErr, treeRows)
+			}
+			var lazyOne, treeOne optRow
+			lazyErr = codesOf(io.UnmarshalWith(doc, &lazyOne, schema))
+			io.WithTreeDecode(func() { treeErr = codesOf(io.UnmarshalWith(doc, &treeOne, schema)) })
+			if lazyErr != treeErr || lazyOne != treeOne {
+				t.Fatalf("UnmarshalWith(%q) into a record against %q:\n lazy %q %+v\n tree %q %+v", doc, def, lazyErr, lazyOne, treeErr, treeOne)
+			}
+		}
+	})
+}
+
 func TestLazyShapesMatchTreePath(t *testing.T) {
 	const opt = "name: string, nick?: string, age: int\n---\n"
 	optDocs := []string{

@@ -111,24 +111,24 @@ func perfBudgets(t *testing.T) []budget {
 		{"UnmarshalWith one record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneIO, &p, constrainedSchema))
-		}, 60, 8_848}, // generated code's Unmarshal: the header is re-parsed per call.
-		// 47 -> 60 when the benchmark schema gained `pattern` and `choices` (§5.2).
+		}, 15, 5_928}, // generated code's Unmarshal. 60 -> 15 (§5.3): it takes the lazy path.
+		// (47 -> 60 before that, when the benchmark schema gained `pattern` and `choices`.)
 		{"UnmarshalWith one headerless record", func() {
 			var p benchPerson
 			must(io.UnmarshalWith(constrainedOneRow, &p, constrainedSchema))
-		}, 27, 2_216},
+		}, 14, 1_352}, // 27 -> 14 (§5.3): header-less input is framed
 		{"UnmarshalWith 1,000 records", func() {
 			var out []benchPerson
 			must(io.UnmarshalWith(constrainedIOText, &out, constrainedSchema))
-		}, 18_966, 1_607_761},
+		}, 9_022, 1_233_388}, // 18,966 -> 9,022 (§5.3)
 		{"MarshalWith one record", func() {
 			_, err := io.MarshalWith(onePerson, constrainedSchema)
 			must(err)
-		}, 17, 1_376},
+		}, 7, 632}, // 17 -> 7 (§5.3): the direct encoder, against the given schema
 		{"MarshalWith 1,000 records", func() {
 			_, err := io.MarshalWith(benchData, constrainedSchema)
 			must(err)
-		}, 12_017, 887_780},
+		}, 5_004, 252_248}, // 12,017 -> 5,004 (§5.3)
 		// A header's bare schema expression is compiled once per document, not
 		// once per section that binds to it (review of SPEC 0004 A1: 69 -> 96
 		// allocations when it was recompiled per section).
@@ -214,6 +214,25 @@ func TestFastEncoderTakesConstrainedTypes(t *testing.T) {
 	io.WithTreeEncode(func() { tree, _ = measure(10, marshal) })
 	if fast*2 > tree {
 		t.Errorf("Marshal spends %.0f allocations, the tree path %.0f: the fast encoder is not taking the type", fast, tree)
+	}
+}
+
+// MarshalWith takes the direct encoder (SPEC 0003 §5.3), visible in
+// allocations as for Marshal.
+func TestFastEncoderTakesMarshalWith(t *testing.T) {
+	if v := forcedRoute(); v != "" {
+		t.Skipf("%s forces a general route", v)
+	}
+	marshal := func() {
+		if _, err := io.MarshalWith(onePerson, constrainedSchema); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fast, _ := measure(10, marshal)
+	var tree float64
+	io.WithTreeEncode(func() { tree, _ = measure(10, marshal) })
+	if fast*2 > tree {
+		t.Errorf("MarshalWith spends %.0f allocations, the tree path %.0f: the fast encoder is not taking it", fast, tree)
 	}
 }
 

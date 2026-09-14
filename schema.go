@@ -1,6 +1,8 @@
 package internetobject
 
 import (
+	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/maniartech/InternetObject-go/internal/document"
@@ -23,6 +25,44 @@ type Schema struct {
 	// the bug there was an UNSYNCHRONISED write to shared state, not a lazy one.
 	headerOnce sync.Once
 	headerText string
+
+	// fast is what MarshalWith's direct encoder needs for each struct type
+	// written against this schema (reflect.Type → *withPlan), worked out once.
+	// It lives here rather than in a global cache so it is freed with the
+	// schema: a cache keyed by schema would pin every schema ever used.
+	fast sync.Map
+}
+
+// withPlan is the direct encoder's plan for one struct type against one schema.
+type withPlan struct {
+	ok     bool         // the type can be written directly against the schema
+	header string       // the schema's header and separator
+	checks []fieldCheck // what to ask the validator per field
+}
+
+// fastFor returns the direct encoder's plan for writing t against s. It holds
+// when t's fields are s's members in s's order — MarshalWith emits them
+// positionally in the schema's order — and every field passes fastCheck
+// against s's definitions. An open schema (`*`) is no obstacle: a struct has
+// no members beyond its fields, so the tree writes it the same way.
+func (s *Schema) fastFor(t reflect.Type, plan *structPlan) *withPlan {
+	if w, ok := s.fast.Load(t); ok {
+		return w.(*withPlan)
+	}
+	w := &withPlan{}
+	sameOrder := slices.EqualFunc(s.s.Names, plan.fields, func(name string, f fieldPlan) bool {
+		return name == f.name
+	})
+	if plan.shapeOK && sameOrder {
+		if w.checks, w.ok = fastChecks(t, plan, s.s); w.ok {
+			w.header = "---\n"
+			if h := s.header(); h != "" {
+				w.header = h + "\n---\n"
+			}
+		}
+	}
+	actual, _ := s.fast.LoadOrStore(t, w)
+	return actual.(*withPlan)
 }
 
 // header renders the schema's document header at most once per Schema.

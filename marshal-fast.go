@@ -36,18 +36,15 @@ import (
 // question the tree would (fastCheck); a value the validator refuses makes
 // it decline, and the tree path reports. Anything else falls back.
 
-// fastEligible reports whether a plan's every field can be written directly,
-// and for a type that validates records what to ask about each (plan.checks).
-// Computed once per type, in the plan.
-func fastEligible(t reflect.Type, plan *structPlan) bool {
-	var checks []fieldCheck
-	if plan.validate {
-		checks = make([]fieldCheck, len(plan.fields))
+// fastShape reports whether every field of a plan is a scalar or a slice of
+// scalars — the shapes the fast encoder can write at all, whatever schema it
+// writes them against. Computed once per type, in the plan.
+func fastShape(t reflect.Type, plan *structPlan) bool {
+	if len(plan.fields) == 0 {
+		return false // an empty record has spellings of its own (`{}`); the tree owns them
 	}
 	for i := range plan.fields {
-		f := &plan.fields[i]
-		declared := t.FieldByIndex(f.index).Type
-		ft := declared
+		ft := t.FieldByIndex(plan.fields[i].index).Type
 		for ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
@@ -56,16 +53,25 @@ func fastEligible(t reflect.Type, plan *structPlan) bool {
 				return false
 			}
 		}
-		if plan.validate {
-			c, ok := fastCheck(f, declared, plan.compiled.Defs[f.name])
-			if !ok {
-				return false
-			}
-			checks[i] = c
-		}
 	}
-	plan.checks = checks // only for a plan the fast encoder takes
 	return true
+}
+
+// fastChecks works out what the fast encoder must ask about each field of t to
+// refuse exactly what validating a record against s would refuse, or reports
+// that some field needs more than MemberDef.Accepts can answer. Marshal asks
+// it about the type's own compiled schema, MarshalWith about the one supplied.
+func fastChecks(t reflect.Type, plan *structPlan, s *schema.Schema) ([]fieldCheck, bool) {
+	checks := make([]fieldCheck, len(plan.fields))
+	for i := range plan.fields {
+		f := &plan.fields[i]
+		c, ok := fastCheck(f, t.FieldByIndex(f.index).Type, s.Defs[f.name])
+		if !ok {
+			return nil, false
+		}
+		checks[i] = c
+	}
+	return checks, true
 }
 
 // fieldCheck is what the fast encoder asks schema.Accepts about one field of a
@@ -374,9 +380,10 @@ var noFastPath atomic.Bool
 
 func init() { noFastPath.Store(os.Getenv("IO_NO_FAST_PATH") != "") }
 
-// marshalFast renders v without the intermediate tree, or reports notFast so
-// the caller uses the general path.
-func marshalFast(rv reflect.Value) (string, bool, error) {
+// marshalFast renders v without the intermediate tree, or reports that it did
+// not so the caller uses the general path. with is the schema MarshalWith was
+// given, or nil for the type's own.
+func marshalFast(rv reflect.Value, with *Schema) (string, bool, error) {
 	if noFastPath.Load() {
 		return "", false, nil
 	}
@@ -399,7 +406,14 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if !plan.fastOK {
+	header, checks := plan.header, plan.checks
+	if with != nil {
+		w := with.fastFor(et, plan)
+		if !w.ok {
+			return "", false, nil
+		}
+		header, checks = w.header, w.checks
+	} else if !plan.fastOK {
 		return "", false, nil
 	}
 
@@ -407,11 +421,16 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 	if collection {
 		n = rv.Len()
 	}
-	dst := make([]byte, 0, len(plan.header)+8+48*n)
-	dst = append(dst, plan.header...)
+	dst := make([]byte, 0, len(header)+8+48*n)
+	dst = append(dst, header...)
+	if collection && n == 0 {
+		// An empty section writes no line after its separator, as the tree
+		// writer drops it; the two differed here until 2026-09-14.
+		return string(dst[:len(dst)-1]), true, nil
+	}
 
 	if !collection {
-		if dst, err = appendFastRecord(dst, rv, plan, plan.checks, rootPath); err != nil {
+		if dst, err = appendFastRecord(dst, rv, plan, checks, rootPath); err != nil {
 			if err == errFastDecline {
 				return "", false, nil
 			}
@@ -432,7 +451,7 @@ func marshalFast(rv reflect.Value) (string, bool, error) {
 			dst = append(dst, '\n')
 		}
 		dst = append(dst, '~', ' ')
-		if dst, err = appendFastRecord(dst, ev, plan, plan.checks, path); err != nil {
+		if dst, err = appendFastRecord(dst, ev, plan, checks, path); err != nil {
 			if err == errFastDecline {
 				return "", false, nil
 			}

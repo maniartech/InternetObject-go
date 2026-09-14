@@ -32,12 +32,13 @@ type RawDoc struct {
 }
 
 // FrameData frames the DATA records of a token stream — everything after the
-// first section separator — and reports whether it could.
+// first section separator, or the whole stream when there is none — and
+// reports whether it could.
 //
 // It declines (ok == false) for anything outside the shape it is sure of: an
-// error token, a second section, a document with no separator, or a record it
-// cannot split. Declining is always safe: the caller falls back to the value
-// tree, which is the code that has always run.
+// error token, a second section, or a record it cannot split. Declining is
+// always safe: the caller falls back to the value tree, which is the code that
+// has always run.
 func FrameData(s *tokenizer.Stream) (*RawDoc, bool) {
 	toks := s.Tokens
 
@@ -48,13 +49,12 @@ func FrameData(s *tokenizer.Stream) (*RawDoc, bool) {
 			break
 		}
 	}
-	if sep < 0 {
-		return nil, false // headerless: the tree path owns that shape
-	}
+	// With no separator the whole document is data, exactly as the parser
+	// reads it (parser.run).
 	i := sep + 1
 
 	// A section name or `$schema` selector may follow the separator.
-	for i < len(toks) && toks[i].Kind == tokenizer.KindString &&
+	for sep >= 0 && i < len(toks) && toks[i].Kind == tokenizer.KindString &&
 		(toks[i].Sub == tokenizer.SubSectionName || toks[i].Sub == tokenizer.SubSectionSchema) {
 		i++
 	}

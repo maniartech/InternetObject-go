@@ -27,7 +27,7 @@ func Unmarshal(src string, v any) error {
 	// built at all (ADR 0007). Anything else — and anything the lazy path is
 	// not certain about — takes the general path below, from the same tokens.
 	s := tokenizer.Tokenize(src)
-	if unmarshalLazy(s, v) {
+	if unmarshalLazy(s, v, nil) {
 		return nil
 	}
 	return bindDoc(document.ParseTokens(s), v)

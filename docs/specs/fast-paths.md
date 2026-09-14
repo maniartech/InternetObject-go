@@ -244,6 +244,80 @@ currently declines), and `MarshalWith` on the direct encoder. Lifts generated co
 `Unmarshal` stops re-parsing the header on every call. Depends on 5.2, since generated schemas carry
 constraints.
 
+**Detailed design — written 2026-09-14, before the code.**
+
+*Decode — `UnmarshalWith(src, v, s)`.* One entry for both decoders, as `Unmarshal` already has:
+tokenize once, try the lazy path, else `document.ParseTokensWith(tokens, s)` (the tree path's
+`load` with the override, from the same tokens). The lazy path takes the supplied schema in place of
+the header's, under the same conditions `Unmarshal` uses for the header's own — `IsSimpleSchema`,
+member names equal to the plan's, in order — plus what the override changes:
+
+- *The header is still the tree path's to judge.* `load` reads a header even when a schema is
+  supplied, and fails the document on a malformed literal or a named schema that does not resolve.
+  The lazy path therefore still asks `document.HeaderSchema(tokens)` and declines when it reports
+  the header not clean; it only ignores the schema that answer carries.
+- *Header-less input.* `UnmarshalWith` is how data that carries no header is read, so framing must
+  cover it: with no `---`, the whole token stream is one section body, exactly as the parser treats
+  it (`parser.run`: "otherwise the whole document is data"). `parser.FrameData` gains that case;
+  `HeaderSchema` reports a header-less stream as clean with no schema. `FuzzFramingAgreesWithParser`
+  already compares framing with the parser for arbitrary input and gains header-less seeds; the
+  decline test's header-less row moves to the agreement table.
+- *Variables.* A header that defines variables is declined, as now; so is any `@`-string, as now.
+
+*Encode — `MarshalWith(v, s)`.* The fast encoder writes `s`'s cached header (`Schema.header`) and
+takes the type when its plan's field names equal `s.Names` in order and every field passes the
+§5.2 `fastCheck` test against `s.Defs` instead of the type's own compiled schema. Which checks
+apply depends on the pair (type, schema), so they cannot live on the type's plan: they are computed
+once per pair and cached ON THE `*Schema` (a `sync.Map` keyed by `reflect.Type`), so a schema's
+cache dies with it — a global cache keyed by schema would pin every schema ever used. `fastChecks` computes them against any schema, so one statement serves both.
+
+*Generated code.* Its `Unmarshal` passes its own `Marshal`'s output — header included — to
+`UnmarshalWith`; its `Marshal` calls `MarshalWith`. Both now take the fast paths with no change to
+the generator. The inlined writer (5.5) remains the next step for generated code.
+
+*Gates.* The lazy and encoder differential tests gain `…With` variants: the same documents and
+values through `UnmarshalWith`/`MarshalWith` both ways, header-less included, each proven live by
+sabotage; budgets for `UnmarshalWith`/`MarshalWith` must fall; the generated-code corpus gate
+(`IO_GEN_CORPUS=1`) runs.
+
+*Expected (estimated):* `UnmarshalWith` one record with header 60 → ~15 allocations, like
+`Unmarshal`; header-less 27 → ~12; `MarshalWith` one record 17 → ~3.
+
+**Landed 2026-09-14 — measured** (allocations exact):
+
+| Budget | Before | After |
+| --- | ---: | ---: |
+| `UnmarshalWith` one record, header included | 60 | **15** |
+| `UnmarshalWith` one header-less record | 27 | **14** |
+| `UnmarshalWith` 1,000 records | 18,966 | **9,022** |
+| `MarshalWith` one record | 17 | **7** |
+| `MarshalWith` 1,000 records | 12,017 | **5,004** |
+
+Generated code (`examples/06-codegen`, `person.io`, no `pattern`): `Marshal` 2,053 ns · 17 allocs →
+**653 ns · 5**, `Unmarshal` 8,521 ns · 47 → **3,227 ns · 12**; `encoding/json` 385 ns · 2 and
+1,904 ns · 11. `MarshalWith` came in above the estimate (7, not ~3): the constrained members' boxes
+(§5.2) and the output string remain.
+
+*Found in review, fixed before commit:*
+- **a validation bypass on decode**, older than this step but widened by it: the lazy path's header
+  check restated only part of `load`'s header rules and missed malformed literals, so
+  `UnmarshalWith` of a document headed `~ meta: d"2024-99-99"` bound its records where the tree
+  reports `invalid-date` — and a schema-less metadata header is exactly what `UnmarshalWith` meets.
+  One function, `headerFault`, now states the rule for both;
+- the decode test could not tell a header's schema from the supplied one (every header was the
+  same schema or unusable); a row with a header LOOSER than the supplied schema now pins it;
+- degenerate plans wrote different bytes on the two encode paths: a struct with no fields (its
+  `{}` spelling is the tree's) and a field named `*` (the open-schema wildcard, now refused at
+  plan build);
+- `FuzzUnmarshalWithMatchesTreePath` and `FuzzMarshalWithMatchesTreePath` fuzz the schema AND the
+  data, header kept and removed.
+
+*Found while landing it:* the fast encoder wrote an EMPTY collection as `header\n---\n` where the
+tree writes `header\n---` — a byte difference plain `Marshal` had shipped with, unseen because no
+differential case used an empty slice. Fixed for both, with a row in each differential test. An
+open schema (`*`) needed no restriction on the direct encoder: a struct has no members beyond its
+fields, and the differential row shows identical output.
+
 ### 5.4 The dynamic parse builds one tree, not two
 
 Frame the data, then let validation materialize the validated tree once, from spans; allocate
@@ -295,5 +369,5 @@ order, and it is the only way the budgets can hold 5.2's gains once they exist.
   validation bypasses fixed (commit `5507afc`); the encoder's per-call `os.Getenv` removed
   (Marshal 22 → 20 allocs).
 - **Done:** 5.6 (constrained benchmarks and budgets), 5.1 (discarded work) — see their sections.
-- **Done:** SPEC 0004 §A (the correctness batch), and 5.2 — see its "Landed" note.
-- **Next:** 5.3, the `…With` functions on the fast paths (generated code's path).
+- **Done:** SPEC 0004 §A (the correctness batch), 5.2 and 5.3 — see their "Landed" notes.
+- **Next:** 5.4 — its own spec first (the dynamic parse builds one tree, not two). Then 5.5.

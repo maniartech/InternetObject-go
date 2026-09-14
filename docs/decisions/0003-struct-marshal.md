@@ -45,7 +45,8 @@ SCHEMA-LESS record binds positionally by field order and by key for named member
 ### D2. Tags: the `io` key, json's grammar
 
 - `io:"-"` — skipped.
-- `io:"name"` — member name (default: the exact field name; no case munging).
+- `io:"name"` — member name (default: the exact field name; no case munging). The name `*` is
+  reserved for an open schema and refused (2026-09-14, SPEC 0003 §5.3).
 - `io:",omitempty"` — the member compiles as OPTIONAL (`name?`) and is omitted from output
   when the value is the type's zero value.
 - A **pointer field** is the nullable marker: it compiles with `*` (null allowed), `nil`

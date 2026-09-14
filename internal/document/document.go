@@ -46,12 +46,48 @@ func Parse(src string) *Doc { return load(parser.Parse(src), nil, nil) }
 // ParseTokens is Parse over an already tokenized document.
 func ParseTokens(s *tokenizer.Stream) *Doc { return load(parser.ParseTokens(s), nil, nil) }
 
+// ParseTokensWith is ParseWith over an already tokenized document.
+func ParseTokensWith(s *tokenizer.Stream, override *schema.Schema) *Doc {
+	return load(parser.ParseTokens(s), override, nil)
+}
+
 // ParseWith parses and validates one document against an ALREADY COMPILED
 // schema, which overrides whatever the document's own header would bind (ADR
 // 0004 D5: attached > header > tag-derived). The header is still read, so
 // `@variables` and `$refs` it defines stay resolvable inside records.
 func ParseWith(src string, override *schema.Schema) *Doc {
 	return load(parser.Parse(src), override, nil)
+}
+
+// headerFault is THE statement of what, in a header, fails its whole document,
+// or nil. The load reports it; the lazy decoder's header check declines on it
+// (compileHeader). They used to state it separately, and the lazy copy lacked
+// the literal rule, so a header like `~ meta: d"2024-99-99"` decoded cleanly
+// through the fast path while the tree reported invalid-date (review of
+// SPEC 0003 §5.3).
+func headerFault(h *parser.Header, defs *Definitions) *errs.Error {
+	if h == nil {
+		return nil
+	}
+	// A malformed literal in a header definition is fatal — the reference
+	// throws invalid-number/invalid-bigint/… while reading the header, so a
+	// deferred error there never survives into a "clean" document (found by
+	// the byte fuzzer: `~A:0B---` parsed clean holding an ErrorValue).
+	var herrs []errs.Error
+	for _, def := range h.Defs {
+		SurfaceDeferred(def.Value, &herrs)
+	}
+	if len(herrs) > 0 {
+		return &herrs[0]
+	}
+	// Every NAMED schema must resolve, whether or not anything references it
+	// (NewDefinitions compiled them all). io-go used to compile them lazily, so
+	// a header could carry a `$draft: {title: nosuchtype}` that nothing
+	// referenced and the document parsed CLEAN — the reference rejects it with
+	// unknown-type (probed 2026-09-06). Lazy compilation was also what made the
+	// writer silently drop such a definition: it compiled in order to write,
+	// found it broken, and skipped it.
+	return defs.Fault()
 }
 
 // load is THE load of a parsed document: an optional compiled schema that
@@ -67,31 +103,9 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 		return doc
 	}
 
-	// A malformed literal in a header definition is fatal — the reference
-	// throws invalid-number/invalid-bigint/… while reading the header, so a
-	// deferred error there never survives into a "clean" document (found by
-	// the byte fuzzer: `~A:0B---` parsed clean holding an ErrorValue).
-	if pdoc.Header != nil {
-		var herrs []errs.Error
-		for _, def := range pdoc.Header.Defs {
-			SurfaceDeferred(def.Value, &herrs)
-		}
-		if len(herrs) > 0 {
-			doc.Errors = append(doc.Errors, herrs[0])
-			return doc
-		}
-
-		// Every NAMED schema must resolve, whether or not anything references
-		// it (NewDefinitions compiled them all). io-go used to compile them
-		// lazily, so a header could carry a `$draft: {title: nosuchtype}` that
-		// nothing referenced and the document parsed CLEAN — the reference
-		// rejects it with unknown-type (probed 2026-09-06). Lazy compilation was
-		// also what made the writer silently drop such a definition: it
-		// compiled in order to write, found it broken, and skipped it.
-		if f := defs.Fault(); f != nil {
-			doc.Errors = append(doc.Errors, *f)
-			return doc
-		}
+	if f := headerFault(pdoc.Header, defs); f != nil {
+		doc.Errors = append(doc.Errors, *f)
+		return doc
 	}
 
 	for _, sec := range pdoc.Sections {

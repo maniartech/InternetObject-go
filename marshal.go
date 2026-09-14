@@ -17,7 +17,8 @@ import (
 // positionally — the format's leanness for free. The `io` struct tag follows
 // encoding/json's grammar: `io:"name,omitempty"`, `io:"-"`. A pointer field
 // is the nullable marker. `io:",date"` / `io:",time"` select a time.Time
-// field's temporal kind.
+// field's temporal kind. The name `*` is reserved for an open schema and
+// refused.
 
 // Marshal renders v as canonical Internet Object text.
 //
@@ -37,7 +38,7 @@ func Marshal(v any) (string, error) {
 
 	// Simple types skip the intermediate tree entirely; the spelling rules are
 	// the same shared helpers either way (see marshal-fast.go).
-	if text, took, err := marshalFast(rv); took {
+	if text, took, err := marshalFast(rv, nil); took {
 		return text, err
 	}
 

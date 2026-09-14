@@ -1,6 +1,6 @@
 # Performance report — where io-go stands
 
-**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05, pass 9 2026-09-13, pass 10 2026-09-14 · **Machine:** AMD Ryzen 7
+**Date:** 2026-09-02, re-measured 2026-09-03, pass 8 added 2026-09-05, pass 9 2026-09-13, pass 10 and 11 2026-09-14 · **Machine:** AMD Ryzen 7
 5700G, Go 1.26.0, windows/amd64 · **Reproduce:** `go test -bench Compare -benchmem -run '^$'
 -count=6 .`, and `go test -bench . -benchmem ./examples/06-codegen/` for the generated path.
 
@@ -51,6 +51,33 @@ in the same run; allocations and bytes are exact.
 | `MarshalWith` one record | 2.35 µs · 17 allocs | 0.43 µs · 2 | ~5.5× slower |
 
 The SPEC 0003 §5 steps exist to move these; their budgets start here.
+
+**Pass 11 (2026-09-14) — SPEC 0003 §5.1-5.3: the fast paths take constraints and the runtime-schema
+functions.** Same-run minimum of three, a quiet machine; allocations exact. The constrained schema
+is pass 10's plus a `pattern` on email and `choices` on the tag elements, so both lines below carry
+more checks than pass 10's.
+
+| Operation | io-go | `encoding/json` | |
+| --- | ---: | ---: | --- |
+| Unmarshal 1,000 → struct, plain | 1.02 ms · 4,020 allocs | 1.96 ms · 6,019 | **1.9× faster** |
+| Marshal 1,000 ← struct, plain | 0.35 ms · **4** allocs | 0.32 ms · 2 | ~1.1× slower (was 20 allocs) |
+| Unmarshal 1,000 → struct, constrained | 2.20 ms · 9,022 allocs | 1.96 ms · 6,019 | ~1.1× slower (was 19,014 allocs) |
+| Marshal 1,000 ← struct, constrained | 0.96 ms · 5,004 allocs | 0.32 ms · 2 | ~3× slower (was 12,136 allocs) |
+| Unmarshal one record, plain | 2.91 µs · **10** allocs | 1.79 µs · 11 | ~1.6× slower |
+| Unmarshal one record, constrained | 6.52 µs · 15 allocs | 1.79 µs · 11 | ~3.6× slower (was 108 allocs) |
+| `UnmarshalWith` one record, header included | 6.91 µs · 15 allocs | 1.79 µs · 11 | ~3.9× slower (was 60 allocs) |
+| `UnmarshalWith` one header-less record | 2.56 µs · 14 allocs | 1.79 µs · 11 | ~1.4× slower (was 27 allocs) |
+| `MarshalWith` one record | 1.30 µs · 7 allocs | 0.43 µs · 2 | ~3× slower (was 17 allocs) |
+| Parse 1,000 → dynamic | 2.67 ms · 17,950 allocs | 1.85 ms · 23,013 | ~1.4× slower (§5.4) |
+
+Allocations now sit at or near `encoding/json`'s wherever io-go validates nothing JSON does not;
+the constrained rows spend one allocation per checked value (the box escapes into the validator —
+the recorded §5.2 follow-up) plus the checks themselves, which JSON never runs: the `pattern` regexp
+on every email is the largest single cost. Generated code (`person.io`, no `pattern`): `Marshal`
+653 ns · 5 allocs against `encoding/json`'s 385 ns · 2 (was 2,053 ns · 17); the tagged constrained
+`Marshal` of the same record runs ~1.1× slower than `encoding/json` (interleaved runs, 390 vs 360 ns).
+*(Corrected in review the same day: a first draft read that row's 368 B/op as nanoseconds and
+called it faster.)*
 
 The scanner is not the problem — it runs at **144 MB/s with 3 allocations per document**,
 competitive with any JSON parser. Everything above it is where the time goes.

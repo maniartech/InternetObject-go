@@ -139,10 +139,22 @@ func headerLine(s *tokenizer.Stream) int32 {
 			return t.Line
 		}
 	}
-	return 1 << 30
+	// No separator: no header, so every line is data and every fault counts.
+	// This returned "everything is header" while framing declined header-less
+	// input anyway; once framing accepted it, that would have excused any fault.
+	return 0
 }
 
 var frameCases = []string{
+	// Header-less: the whole document is data.
+	"~ 1",
+	"~ Alice, 42\n~ Bob, 7",
+	"Alice, 42",
+	"a: 1, b: 2",
+	"~ a: 1, 2\n~ ,",
+	"name: string, age: int",
+	"~ {a: 1}, [2, 3]",
+	"~ 1\n# a comment\n~ 2",
 	"---\n~ 1",
 	"---\n~ Alice, 42",
 	"---\n~ Alice, 42, alice@example.com, T, 99.5",
@@ -181,7 +193,6 @@ func TestFramingAgreesWithParser(t *testing.T) {
 // The framer must decline, not guess, on shapes it does not handle.
 func TestFramingDeclines(t *testing.T) {
 	for _, src := range []string{
-		"~ 1",                    // headerless
 		"---\n~ 1\n--- two\n~ 2", // multiple sections
 		"---\n~ {a: 1",           // unclosed
 		`---` + "\n" + `~ "abc`,  // error token

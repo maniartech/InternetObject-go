@@ -69,6 +69,10 @@ func TestFastPathMatchesTreePath(t *testing.T) {
 			t.Errorf("sample %d single record differs:\n fast %q\n tree %q", i, fast, tree)
 		}
 	}
+	// An empty collection: a separator and no record line.
+	if fast, tree := marshalBothWays(t, []fastCase{}); fast != tree {
+		t.Errorf("empty collection differs:\n fast %q\n tree %q", fast, tree)
+	}
 	// …and as a collection, which exercises the record separator and the
 	// trailing-hole rule across records.
 	fast, tree := marshalBothWays(t, fastSamples())
@@ -234,6 +238,142 @@ func TestFastPathRefusesWhatAnUnconstrainedFieldCanFail(t *testing.T) {
 	if _, err := io.Marshal(looseFast{Name: "@", Nick: &nick, Label: &lone}); err != nil {
 		t.Errorf("a lone @ is text, not a reference: %v", err)
 	}
+}
+
+// sameMarshalWithBothWays is sameMarshalBothWays for MarshalWith against s.
+func sameMarshalWithBothWays(t *testing.T, v any, s *io.Schema) {
+	t.Helper()
+	result := func() string {
+		text, err := io.MarshalWith(v, s)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		return text
+	}
+	fast := result()
+	var tree string
+	io.WithTreeEncode(func() { tree = result() })
+	if fast != tree {
+		t.Errorf("MarshalWith %+v\n against %s\n fast %q\n tree %q", v, s, fast, tree)
+	}
+}
+
+// MarshalWith takes the direct encoder against the schema it is given
+// (SPEC 0003 §5.3). The schema, not the type's tags, decides validation, so
+// the same values are written against schemas that agree with the type,
+// constrain it differently, order it differently, open it, or change a
+// member's type — and every one must match the tree path exactly.
+func TestFastPathMatchesTreePathWithASuppliedSchema(t *testing.T) {
+	valid, invalid := constrainedFastSamples()
+	own, err := io.SchemaFor[constrainedFast]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type plain struct {
+		Name  string   `io:"name"`
+		Age   int      `io:"age"`
+		Tags  []string `io:"tags"`
+		Nick  *string  `io:"nick"`
+		Note  string   `io:"note,omitempty"`
+		Score float64  `io:"score"`
+	}
+	nick := "Al"
+	plains := []plain{
+		{Name: "Alice", Age: 30, Tags: []string{"a"}, Nick: &nick, Score: 1.5},
+		{Name: "a", Age: -1},
+		{Name: "@x", Age: 30},
+		{Name: "Bob", Age: 30, Tags: []string{"@y"}, Note: "n"},
+		{Name: "Bob", Age: 135, Nick: &nick},
+	}
+	schemas := map[string]string{
+		"agrees":       "name: string, age: int, tags: [string], nick*: string, note?: string, score: number",
+		"constrains":   "name: {string, minLen: 2}, age: {int, min: 0, max: 130}, tags: [{string, choices: [a, b]}], nick*: {string, minLen: 2}, note?: string, score: {number, choices: [1.5]}",
+		"not nullable": "name: string, age: int, tags: [string], nick: string, note?: string, score: number",
+		"required":     "name: string, age: int, tags: [string], nick*: string, note: string, score: number",
+		"reordered":    "age: int, name: string, tags: [string], nick*: string, note?: string, score: number",
+		"retyped":      "name: string, age: number, tags: [string], nick*: string, note?: string, score: int",
+		"open":         "name: string, age: int, tags: [string], nick*: string, note?: string, score: number, *",
+		"array bound":  "name: string, age: int, tags: {array, of: string, minLen: 2}, nick*: string, note?: string, score: number",
+		"fewer":        "name: string, age: int",
+	}
+	for name, text := range schemas {
+		sch, err := io.ParseSchema(text)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, v := range plains {
+			sameMarshalWithBothWays(t, v, sch)
+		}
+		sameMarshalWithBothWays(t, plains, sch)
+		sameMarshalWithBothWays(t, []plain{}, sch)
+	}
+	for _, v := range append(valid, invalid...) {
+		sameMarshalWithBothWays(t, v, own)
+	}
+	sameMarshalWithBothWays(t, valid, own)
+
+	// Degenerate records: no fields at all has spellings of its own (`{}`).
+	emptySchema, err := io.ParseSchema("{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameMarshalWithBothWays(t, struct{}{}, emptySchema)
+	sameMarshalBothWays(t, struct{}{})
+
+	// The fast encoder must actually take the agreeing schema, or every
+	// comparison above is the tree against itself.
+	agrees, _ := io.ParseSchema(schemas["agrees"])
+	if _, err := io.MarshalWith(plains[0], agrees); err != nil {
+		t.Fatalf("the agreeing sample is refused: %v", err)
+	}
+}
+
+// A field may not be spelled `*`: that is the open-schema wildcard, and such a
+// field used to derive an open schema and write different bytes on each
+// encode path (review of SPEC 0003 §5.3).
+func TestWildcardFieldNameIsRefused(t *testing.T) {
+	type wildcard struct {
+		V string `io:"*"`
+	}
+	if out, err := io.Marshal(wildcard{V: "v"}); err == nil {
+		t.Errorf("a field named * was written: %q", out)
+	}
+	var w wildcard
+	if err := io.Unmarshal("~ v", &w); err == nil {
+		t.Errorf("a field named * was bound: %+v", w)
+	}
+}
+
+// FuzzMarshalWithMatchesTreePath writes arbitrary values against an arbitrary
+// schema both ways: a record, a collection, and an empty collection.
+func FuzzMarshalWithMatchesTreePath(f *testing.F) {
+	f.Add("name: string, age: int, tags: [string], nick*: string, note?: string, score: number", "Alice", 30, "a", "Al", "", 1.5)
+	f.Add("name: {string, minLen: 2}, age: {int, max: 10}, tags: [{string, choices: [a]}], nick: string, note: string, score: int", "@x", 30, "b", "", "n", 2.0)
+	f.Add("age: int, name: string, tags: [string], nick*: string, note?: string, score: number, *", "Bob", -1, "", "Al", "n", 0.5)
+	f.Fuzz(func(t *testing.T, def, name string, age int, tag, nick, note string, score float64) {
+		schema, err := io.ParseSchema(def)
+		if err != nil {
+			return
+		}
+		type row struct {
+			Name  string   `io:"name"`
+			Age   int      `io:"age"`
+			Tags  []string `io:"tags"`
+			Nick  *string  `io:"nick"`
+			Note  string   `io:"note,omitempty"`
+			Score float64  `io:"score"`
+		}
+		v := row{Name: name, Age: age, Note: note, Score: score}
+		if tag != "" {
+			v.Tags = []string{tag}
+		}
+		if nick != "" {
+			v.Nick = &nick
+		}
+		sameMarshalWithBothWays(t, v, schema)
+		sameMarshalWithBothWays(t, []row{v, {Name: nick, Age: age}}, schema)
+		sameMarshalWithBothWays(t, []row{}, schema)
+	})
 }
 
 type typeChangingTag struct {

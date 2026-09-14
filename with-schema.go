@@ -6,6 +6,7 @@ import (
 	"github.com/maniartech/InternetObject-go/internal/document"
 	"github.com/maniartech/InternetObject-go/internal/errs"
 	"github.com/maniartech/InternetObject-go/internal/parser"
+	"github.com/maniartech/InternetObject-go/internal/tokenizer"
 )
 
 // Runtime schemas (ADR 0004 D5). A schema is data: it may be derived from Go
@@ -42,7 +43,13 @@ func UnmarshalWith(src string, v any, s *Schema) error {
 	if s == nil {
 		return &UnmarshalError{Path: "$", Msg: "nil schema"}
 	}
-	return bindDoc(document.ParseWith(src, s.s), v)
+	// The same two routes as Unmarshal, from one scan (SPEC 0003 §5.3):
+	// generated code calls this, and used to re-parse its header every time.
+	tokens := tokenizer.Tokenize(src)
+	if unmarshalLazy(tokens, v, s.s) {
+		return nil
+	}
+	return bindDoc(document.ParseTokensWith(tokens, s.s), v)
 }
 
 // MarshalWith renders v as an Internet Object document using s as the schema:
@@ -55,6 +62,11 @@ func MarshalWith(v any, s *Schema) (string, error) {
 	rv, ok := topValue(v)
 	if !ok {
 		return "", &MarshalError{Path: "$", Msg: "cannot marshal a nil value"}
+	}
+	// The direct encoder, against s (SPEC 0003 §5.3); it declines, and the
+	// path below validates and reports, for anything it cannot be sure of.
+	if text, took, err := marshalFast(rv, s); took {
+		return text, err
 	}
 
 	sec := &parser.Section{Name: "data"}

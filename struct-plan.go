@@ -17,6 +17,7 @@ type structPlan struct {
 	shape    *core.Object   // the derived schema shape, as parsed text would be
 	compiled *schema.Schema // the shape, compiled once
 	validate bool           // any field (own or nested) carries a `schema` tag
+	shapeOK  bool           // every member has a shape the fast encoder can write
 	fastOK   bool           // every member can be WRITTEN without the tree
 	lazyOK   bool           // every member can be READ from a token span
 	checks   []fieldCheck   // what the fast encoder asks per field; nil unless validate
@@ -64,6 +65,13 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		name, opts, skip := parseTag(f)
 		if skip {
 			continue
+		}
+		if name == "*" {
+			// `*` is the open-schema wildcard, not a member name: a field
+			// spelled so derived a schema that was open instead, and wrote a
+			// different document on each encode path (review of SPEC 0003 §5.3).
+			return nil, &MarshalError{Path: t.String() + "." + f.Name,
+				Msg: `the member name "*" is reserved for an open schema`}
 		}
 		fp := fieldPlan{
 			name:  name,
@@ -143,7 +151,11 @@ func buildPlan(t reflect.Type, visiting map[reflect.Type]bool) (*structPlan, err
 		return nil, &MarshalError{Path: t.String(), Msg: "derived schema does not compile: " + string(cerr.Code)}
 	}
 	p.compiled = compiled
-	p.fastOK = fastEligible(t, p)
+	p.shapeOK = fastShape(t, p)
+	p.fastOK = p.shapeOK
+	if p.fastOK && p.validate {
+		p.checks, p.fastOK = fastChecks(t, p, compiled)
+	}
 	p.lazyOK = lazyEligible(p)
 	return p, nil
 }

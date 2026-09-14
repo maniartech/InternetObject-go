@@ -74,7 +74,11 @@ func lazyEligible(plan *structPlan) bool {
 // unmarshalLazy binds the tokenized document s into v without building a value
 // tree, and reports whether it did. False leaves v untouched: the caller decodes
 // s on the general path, which also reports any fault — this path never does.
-func unmarshalLazy(s *tokenizer.Stream, v any) bool {
+//
+// override, when set, is the schema the records bind to in place of the
+// header's own (UnmarshalWith). The header is still required to be clean: the
+// general path reads it either way and fails the document on its faults.
+func unmarshalLazy(s *tokenizer.Stream, v any, override *schema.Schema) bool {
 	if noLazy.Load() {
 		return false
 	}
@@ -106,7 +110,13 @@ func unmarshalLazy(s *tokenizer.Stream, v any) bool {
 	// Everything that can decline on the schema alone is decided BEFORE a
 	// record is framed, so a declined document costs its header and no more.
 	sch, ok := document.HeaderSchema(s)
-	if !ok || sch == nil || !document.IsSimpleSchema(sch) || len(sch.Names) != len(plan.fields) {
+	if !ok {
+		return false
+	}
+	if override != nil {
+		sch = override
+	}
+	if sch == nil || !document.IsSimpleSchema(sch) || len(sch.Names) != len(plan.fields) {
 		return false
 	}
 	for i, n := range sch.Names {

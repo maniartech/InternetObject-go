@@ -13,10 +13,12 @@ import (
 
 // HeaderSchema returns the schema a framed decode of s binds its data to
 // (ADR 0007 phase 2): the compiled schema of s's header, from the header cache.
-// It reports false for a document framing does not own — no separator, a
-// `--- $Name` selector, or a header that does not resolve cleanly, whose fault
-// the tree path must report with its designated code. A nil schema with true
+// It reports false for a document framing does not own — a `--- $Name`
+// selector, or a header that does not resolve cleanly, whose fault the tree
+// path must report with its designated code. A nil schema with true
 // is a header that declares none.
+//
+// A stream with no separator has no header: that is clean, with no schema.
 //
 // It frames NOTHING. A caller decides from the schema whether it can use a
 // framed decode at all, and only then calls parser.FrameData. Framing first
@@ -34,7 +36,7 @@ func HeaderSchema(s *tokenizer.Stream) (*schema.Schema, bool) {
 		}
 	}
 	if sepAt < 0 {
-		return nil, false
+		return nil, true // header-less: nothing to decline, nothing to bind to
 	}
 
 	// An explicit `--- $Name` selector is not framed yet: the default-schema
@@ -114,12 +116,10 @@ func compileHeader(headerSrc string) headerEntry {
 		return headerEntry{} // the normal path reports the header's fault
 	}
 	defs := NewDefinitions(hdoc.Header)
-	if defs.Fault() != nil {
-		// A named schema that does not resolve fails the whole document on the
-		// tree path, referenced or not — so the lazy path must decline it, not
-		// bind the records against the default schema. It used to accept
-		// `$draft: {title: nosuchtype}` beside a good `$schema` (review of
-		// SPEC 0003 §5.1, 2026-09-14): a fast path may only decline.
+	if headerFault(hdoc.Header, defs) != nil {
+		// What fails the whole document on the tree path — referenced or not —
+		// must make the lazy path decline, not bind the records. A fast path
+		// may only decline.
 		return headerEntry{}
 	}
 	sch, cerr := sectionSchema(&parser.Section{Name: "data"}, defs)
