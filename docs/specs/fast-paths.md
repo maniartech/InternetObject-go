@@ -1,7 +1,7 @@
 # SPEC 0003 — Fast paths for the schemas people actually write
 
-- **Status:** DRAFT for owner review, 2026-09-14. **Nothing in §5 is implemented.** §3's
-  correctness work is, because it could not wait: it is the foundation the rest stands on.
+- **Status:** APPROVED by the owner, 2026-09-14 — all four §6 decisions, as recommended. §3's
+  correctness work landed first, because it could not wait: it is the foundation the rest stands on.
 - **Decides:** how io-go closes its remaining performance gaps against `encoding/json`, in what
   order, and under which gates. Sits under [ADR 0007](../decisions/0007-lazy-decode.md) (lazy
   decoding, amended 2026-09-14), ADR 0006 (performance architecture) and
@@ -160,16 +160,26 @@ Add constrained-schema variants to `bench_compare_test.go` and to `perf-budget_t
 before 5.1. The published comparison will look worse before it looks better; that is the honest
 order, and it is the only way the budgets can hold 5.2's gains once they exist.
 
-## 6. Decisions for the owner
+## 6. Decisions — approved by the owner, 2026-09-14
 
-1. **Review the ADR 0007 D2 amendment** (the fast path declines instead of reporting). It is
-   implemented, because it fixed shipped validation bypasses; it is still a design decision.
-2. **Approve 5.2's approach:** the validator's own check on boxed values (recommended), not typed
-   per-constraint fast checks (faster, but a second copy of every rule).
-3. **Approve the order:** 5.6 → 5.1 → 5.2 → 5.3 → 5.4 (own spec) → 5.5.
-4. **Accept that the published numbers get worse first** (5.6).
+1. **The ADR 0007 D2 amendment stands:** the fast path declines instead of reporting.
+2. **5.2's approach:** the validator's own check on boxed values, not typed per-constraint fast
+   checks (faster, but a second copy of every rule).
+3. **The order:** 5.6 → 5.1 → 5.2 → 5.3 → 5.4 (own spec) → 5.5.
+4. **The published numbers get worse first** (5.6).
+5. **Added by the owner: an independent review gate on every landing** (§7), for performance,
+   code quality, and a public API that reads as idiomatic Go — "must never look like Java".
 
-## 7. Test obligations — every landing
+## 7. Obligations — every landing
+
+- **An independent reviewer signs off before the commit**, on three axes, and its findings are
+  fixed or answered in the same change:
+  - *performance* — the budgets moved as claimed, no hidden allocation or copy on a hot path;
+  - *quality* — tests prove the behavior, differential tests proven live, one statement per rule;
+  - *Go-nativity* — the API a Go programmer meets reads like the standard library: small
+    interfaces, no getters/builders/factories/"Manager" types for their own sake, errors as
+    values, useful zero values, `io.Writer`/`[]byte`/`context` where Go expects them, names
+    without stutter, godoc-form docs. Internal packages follow the same idiom.
 
 - Budgets move in the expected direction, and are lowered to lock each win in.
 - Every differential test touched is proved live by sabotage in the same change.
@@ -178,8 +188,9 @@ order, and it is the only way the budgets can hold 5.2's gains once they exist.
 
 ## ▶ RESUME HERE
 
-- **State:** DRAFT, awaiting owner review of §6. Nothing in §5 started.
+- **State:** APPROVED 2026-09-14 (§6). Implementation under way in the §5 order, each step
+  reviewed per §7 before its commit.
 - **Done before this spec, 2026-09-14:** §3 — the lazy decoder's differential test made live, three
   validation bypasses fixed (commit `5507afc`); the encoder's per-call `os.Getenv` removed
   (Marshal 22 → 20 allocs).
-- **Next, once approved:** 5.6 (honest constrained benchmarks and budgets), then 5.1.
+- **Next:** 5.6 (honest constrained benchmarks and budgets), then 5.1.
