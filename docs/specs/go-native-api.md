@@ -36,11 +36,14 @@ Recommendation first; the audit's reasoning in one line each.
    own API takes `io.Reader`/`io.Writer`, which is why its files already import `goio "io"`. Go
    reviewers treat shadowing a stdlib package as a hard no. **Recommend** documenting a
    non-colliding name everywhere (e.g. `iobj`), changing no code.
-2. **Custom marshaling.** Honour `encoding.TextMarshaler`/`TextUnmarshaler` (every major Go codec
-   does), and add `Marshaler`/`Unmarshaler` interfaces with format-suffixed methods
-   (`MarshalIO`/`UnmarshalIO`, as `MarshalJSON`/`MarshalYAML`/`MarshalTOML` — the suffix exists
-   because one type implements several codecs). ADR 0003 D7 deferred this; ADR 0004 D0 bans the
-   `…IO` suffix. **Recommend** both, amending D0 for method names only.
+2. **Custom marshaling — APPROVED by the owner, 2026-09-17.** Honour
+   `encoding.TextMarshaler`/`TextUnmarshaler` (every major Go codec does), and add
+   `Marshaler`/`Unmarshaler` interfaces with format-suffixed methods (`MarshalIO`/`UnmarshalIO`, as
+   `MarshalJSON`/`MarshalYAML`/`MarshalTOML` — the suffix exists because one type implements several
+   codecs). ADR 0003 D7 deferred this; ADR 0004 D0 bans the `…IO` suffix. Both are approved, amending
+   D0 for method names only. The owner's words: "This library must work with custom types
+   serialization also, so marshal overriding methods are good." A3's refusal (below) is therefore a
+   holding position that this step removes. Detailed design: **SPEC 0006**.
 3. **The streaming writer's name.** `StreamMarshaler` reads as an interface in Go (an `-er` name
    for a concrete struct), and `MarshalAs(v, name)` uses `As` against the package's own rule that
    `…As[T]` produces a T. The idiom is `NewEncoder(w, opts) *Encoder` / `Encode(v) error`, which
@@ -78,7 +81,8 @@ an idempotent `Close` that leaves the underlying writer open.
 
 ## ▶ RESUME HERE
 
-- **State:** DRAFT. §A fixed — A1 committed (`601d7fd`), A2–A12 in review. §B awaits the owner.
+- **State:** §A fixed and committed (A1 `601d7fd`, A2–A12 `aa2426a`). **§B2 APPROVED 2026-09-17**
+  and moved to SPEC 0006 for detailed design; §B1 and §B3–B9 still await the owner.
 - **How each §A item landed** (every one with a black-box test shown to FAIL on the old code):
   - A1 `Definitions` resolves every named schema when built and never writes those maps again; the
     inline schema is published through atomic pointers. A mutex was built first and rejected on
@@ -117,4 +121,5 @@ an idempotent `Close` that leaves the underlying writer open.
   `TestStreamDefaultSchemaPrecedence`).
 - **Confirmed** by the reviewer the same day (approved with nits, applied: a `Collection` of a
   non-struct type is an error, not a panic; a struct whose every field is `io:"-"` is refused too).
-- **Next:** SPEC 0003 §5.2.
+- **Next:** SPEC 0006 (custom marshaling, §B2's detailed design). The remaining §B items are
+  independent of it and can be decided at any time.

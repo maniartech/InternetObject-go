@@ -449,6 +449,7 @@ The port has a written design record. If you are reading the code, read these fi
 
 | | |
 | --- | --- |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | **start here** — the index of every spec and ADR, and where the port stands |
 | [`docs/specs/core-value-model.md`](docs/specs/core-value-model.md) | the public surface, and why it is shaped this way |
 | [`docs/specs/decimal.md`](docs/specs/decimal.md) | the decimal contract |
 | [`docs/decisions/`](docs/decisions/) | 11 ADRs — architecture, API, errors, performance, code generation |
