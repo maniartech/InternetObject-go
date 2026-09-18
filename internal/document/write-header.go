@@ -63,8 +63,6 @@ func (d *Doc) writeHeader() string {
 
 // ── schemas ────────────────────────────────────────────────────────────────
 
-// writeSchemaBody renders a compiled schema's member declarations (no braces).
-
 // NewUnvalidatedHeader wraps a parsed header for WRITING it alone — the
 // stringify-a-header operation, used when a header compiled once is sent to a
 // peer that will read it back with the same definitions.

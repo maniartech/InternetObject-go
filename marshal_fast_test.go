@@ -350,6 +350,10 @@ func FuzzMarshalWithMatchesTreePath(f *testing.F) {
 	f.Add("name: string, age: int, tags: [string], nick*: string, note?: string, score: number", "Alice", 30, "a", "Al", "", 1.5)
 	f.Add("name: {string, minLen: 2}, age: {int, max: 10}, tags: [{string, choices: [a]}], nick: string, note: string, score: int", "@x", 30, "b", "", "n", 2.0)
 	f.Add("age: int, name: string, tags: [string], nick*: string, note?: string, score: number, *", "Bob", -1, "", "Al", "n", 0.5)
+	// A TYPED wildcard. Since the wildcard left Names (ADR 0012) this shape is
+	// the same length as the struct plan, so fastFor now MATCHES it and the
+	// direct encoder takes a schema it always declined before.
+	f.Add("name: string, age: int, tags: [string], nick*: string, note?: string, score: number, *: any", "Zed", 7, "t", "", "", 3.5)
 	f.Fuzz(func(t *testing.T, def, name string, age int, tag, nick, note string, score float64) {
 		schema, err := io.ParseSchema(def)
 		if err != nil {

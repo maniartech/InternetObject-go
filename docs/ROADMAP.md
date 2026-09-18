@@ -51,7 +51,8 @@ Two rules that predate these and still hold:
 [0008](decisions/0008-temporal-is-time-time.md) a temporal is a `time.Time` ·
 [0009](decisions/0009-shared-compiled-state.md) compiled state is read-only ·
 [0010](decisions/0010-code-generation.md) code generation ·
-[0011](decisions/0011-core-model-and-layout.md) the core value model and layout
+[0011](decisions/0011-core-model-and-layout.md) the core value model and layout ·
+[0012](decisions/0012-wildcard-is-openness.md) the wildcard is openness, not a member
 
 Also: [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) (including findings escalated upstream) and
 [reports/benchmarks.md](reports/benchmarks.md) (every measured pass, dated).

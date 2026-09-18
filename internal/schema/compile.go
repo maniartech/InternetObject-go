@@ -67,14 +67,23 @@ func compileSchema(shape any, path string) *Schema {
 			name, opt, nul = stripMarkers(name)
 		}
 		if name == "*" && !m.Quoted {
-			// Typed additional properties: `*: T` sets open AND adds a `*`
-			// member; like the bare form it must come last.
+			// Typed additional properties: `*: T` is OPENNESS, not a member.
+			// It is published on Open alone and never enters Names/Defs, so a
+			// member may be literally named `*` (written `"*"`) without
+			// colliding with it — OPEN-DECISIONS D1, option A. Like the bare
+			// form it must come last.
 			if !last || s.Open != nil {
 				fail(errs.InvalidSchema)
 			}
-			md := compileMemberDef("*", m.Value, path, opt, nul)
-			s.Open = md
-			addMember(s, md)
+			// The wildcard no longer goes through addMember, so state the
+			// collision with a quoted `"*"` member here. The parser also rejects
+			// the duplicate key, but two readers rely on the two spellings never
+			// coexisting (ADR 0012) and neither should depend on that happening
+			// a layer away.
+			if _, dup := s.Defs["*"]; dup {
+				fail(errs.DuplicateMember)
+			}
+			s.Open = compileMemberDef("*", m.Value, path, opt, nul)
 			continue
 		}
 		md := compileMemberDef(name, m.Value, path, opt, nul)

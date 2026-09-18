@@ -12,12 +12,10 @@ import (
 // Writing a TYPEDEF: rendering a compiled schema back into the memberdef
 // text it was compiled from. The inverse of internal/schema's compile.
 
+// writeSchemaBody renders a compiled schema's member declarations (no braces).
 func (d *Doc) writeSchemaBody(s *schema.Schema) string {
 	var parts []string
 	for _, name := range s.Names {
-		if name == "*" {
-			continue // handled through Open below
-		}
 		parts = append(parts, d.memberDeclaration(name, s.Defs[name]))
 	}
 	switch o := s.Open.(type) {
@@ -126,9 +124,6 @@ func (d *Doc) memberAnnotation(md *schema.MemberDef) string {
 func (d *Doc) nestedSchemaAnnotation(s *schema.Schema) string {
 	var fields []string
 	for _, name := range s.Names {
-		if name == "*" {
-			continue
-		}
 		fields = append(fields, d.memberDeclaration(name, s.Defs[name]))
 	}
 	switch o := s.Open.(type) {

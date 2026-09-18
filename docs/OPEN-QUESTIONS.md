@@ -176,3 +176,14 @@ Neither was introduced by the fast paths; both are reproduced on the general pat
 2. **A nullable element type loses its nullability in the header.** `[]*string` tagged
    `[{string, "null": true}]` writes the header `[string]`, so a record `[N, x]` does not read back.
    A long-form writer bug of the kind fixed on 2026-09-13; not yet fixed.
+
+## 8. A Go struct field cannot be named `*`, though the format now allows it
+
+`struct-plan.go` refuses an `io:"*"` field tag as "reserved for an open schema". OPEN-DECISIONS D1
+frees the name (ADR 0012): a document with a `"*"` member round-trips, and schema-less
+`Marshal(map[string]any{"*": 42})` already writes one. Only the struct tag cannot express it, which
+makes the Go surface asymmetric with the format and with the map path.
+
+Lifting the guard needs the fast encoder's key writer and the `fastFor` name-equality check looked
+at, plus `TestWildcardFieldNameIsRefused` inverted. Deferred deliberately rather than bundled into
+the D1 landing, which was already large. Raised in review, 2026-09-18.

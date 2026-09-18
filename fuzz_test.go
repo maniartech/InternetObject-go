@@ -32,6 +32,12 @@ var fuzzSeedDocs = []string{
 	"~ ,,,",
 	"\uFEFF~ 1",
 	"~ {\"a,b\": 1, \"\": 2, \"0\": 3}",
+	// OPEN-DECISIONS D1 / ADR 0012: a quoted `"*"` is an ordinary member, and a
+	// `*` data key is an ordinary name; only the BARE form is the wildcard. No
+	// seed carried either spelling, so no fuzzer explored the shape this rule
+	// governs.
+	"~ $schema: {a: int, \"*\": int, *}\n---\n~ 1, 2, z: 3",
+	"~ $schema: {name: string, *: int}\n---\n~ John, \"*\": 7",
 }
 
 // FuzzParse asserts, for every input: Parse and String never panic, and for a

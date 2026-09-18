@@ -43,8 +43,10 @@ type withPlan struct {
 // fastFor returns the direct encoder's plan for writing t against s. It holds
 // when t's fields are s's members in s's order — MarshalWith emits them
 // positionally in the schema's order — and every field passes fastCheck
-// against s's definitions. An open schema (`*`) is no obstacle: a struct has
-// no members beyond its fields, so the tree writes it the same way.
+// against s's definitions. An open schema is no obstacle: a struct has no
+// members beyond its fields, so the tree writes it the same way. That now
+// includes the TYPED `*: T` form, which since ADR 0012 is not in Names and so
+// no longer fails the length check below — a region this path used to decline.
 func (s *Schema) fastFor(t reflect.Type, plan *structPlan) *withPlan {
 	if w, ok := s.fast.Load(t); ok {
 		return w.(*withPlan)
@@ -88,12 +90,10 @@ func ParseSchema(def string) (*Schema, error) {
 
 // MemberNames returns the schema's member names in declaration order.
 func (s *Schema) MemberNames() []string {
-	names := make([]string, 0, len(s.s.Names))
-	for _, n := range s.s.Names {
-		if n != "*" {
-			names = append(names, n)
-		}
-	}
+	// The wildcard is openness, not a member, and is not in Names (ADR 0012).
+	// A schema with no members returns an EMPTY slice, never nil.
+	names := make([]string, len(s.s.Names))
+	copy(names, s.s.Names)
 	return names
 }
 

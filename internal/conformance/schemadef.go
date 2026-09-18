@@ -47,9 +47,17 @@ func neutralSchema(s *schema.Schema) *core.Object {
 	default: // OpenAny
 		open = true
 	}
-	members := make([]any, len(s.Names))
-	for i, n := range s.Names {
-		members[i] = neutralMemberDef(s.Defs[n])
+	members := make([]any, 0, len(s.Names)+1)
+	for _, n := range s.Names {
+		members = append(members, neutralMemberDef(s.Defs[n]))
+	}
+	// The corpus's neutral shape asserts a TYPED wildcard twice: under `open`,
+	// and as the final entry of `members`. The wildcard is openness and is not
+	// a member (OPEN-DECISIONS D1), so it is synthesized here rather than read
+	// from Names — the reference runner appends it the same way, for the same
+	// reason. A bare `*` sets `open: true` and adds no member.
+	if o, ok := s.Open.(*schema.MemberDef); ok && s.Defs["*"] == nil {
+		members = append(members, neutralMemberDef(o))
 	}
 	return &core.Object{Members: []core.Member{
 		{Key: "open", Value: open},

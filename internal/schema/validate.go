@@ -116,7 +116,7 @@ func validateObject(rec *core.Object, s *Schema, defs Defs, path string, wantOut
 	// consumed the whole record already and must not read it twice.
 	fillMissing := func(lookup bool) {
 		for idx, name := range s.Names {
-			if (name == "*" && isWildcardDef(s)) || slots[idx].processed {
+			if slots[idx].processed {
 				continue
 			}
 			md := s.Defs[name]
@@ -139,13 +139,10 @@ func validateObject(rec *core.Object, s *Schema, defs Defs, path string, wantOut
 	// is a legal extra there) unless they declare exactly one REAL member —
 	// the `*` wildcard entry is openness, not a member, and never absorbs.
 	declared := len(s.Names)
-	if isWildcardDef(s) {
-		declared--
-	}
 	if len(rec.Members) > 0 && declared > 0 && (s.Open == nil || declared == 1) &&
 		!absorptionLoops(rec.Members[0].Key, s, defs) {
 		fm := rec.Members[0]
-		if !fm.Positional && s.Defs[fm.Key] == nil && fm.Key != "*" {
+		if !fm.Positional && s.Defs[fm.Key] == nil {
 			name0 := s.Names[0]
 			try(0, name0, &rec.Members[0], func() any { return validateMember(rec, true, s.Defs[name0], defs) })
 			slots[0].processed = true
@@ -162,9 +159,6 @@ func validateObject(rec *core.Object, s *Schema, defs Defs, path string, wantOut
 	positional := true
 	for ; i < len(s.Names); i++ {
 		name := s.Names[i]
-		if name == "*" && isWildcardDef(s) {
-			break // the wildcard is openness, not a member
-		}
 		md := s.Defs[name]
 		if i < len(rec.Members) {
 			m := rec.Members[i]
@@ -239,16 +233,6 @@ func validateObject(rec *core.Object, s *Schema, defs Defs, path string, wantOut
 			vfail(errs.DuplicateMember)
 		}
 		md := s.Defs[name]
-		if name == "*" && isWildcardDef(s) {
-			declared = false
-			// The `*` entry is OPENNESS, not a member named `*`. A data key
-			// that happens to be `*` is an ordinary extra: it must keep its
-			// arrival position, not be hoisted into schema order ahead of
-			// positional members — which produced a record the writer could
-			// only spell as unparseable `"*": 0, 0` (found by the byte fuzzer;
-			// the reference keeps arrival order).
-			md, declared = nil, false
-		}
 		if md == nil {
 			if s.Open == nil {
 				vfail(errs.UnknownMember)
@@ -298,9 +282,6 @@ func absorptionLoops(key string, s *Schema, defs Defs) bool {
 		seen[cur] = true
 
 		declared := len(cur.Names)
-		if isWildcardDef(cur) {
-			declared--
-		}
 		// Absorption stops here — the key is declared, there is nothing to
 		// absorb into, or this schema does not absorb at all.
 		if declared == 0 || cur.Defs[key] != nil || !(cur.Open == nil || declared == 1) {
@@ -331,7 +312,10 @@ func absorptionLoops(key string, s *Schema, defs Defs) bool {
 func locate(e errs.Error, path, name string, rec *core.Object, m *core.Member) errs.Error {
 	if e.Path == "" {
 		e.Path = path
-		if name != "" && name != "*" {
+		// Every `*` that reaches here is a real member — declared, or an extra
+		// under an open schema. The wildcard is not in Names (ADR 0012), so it
+		// never names a value and never gets a path.
+		if name != "" {
 			e.Path = path + "." + name
 		}
 	}
@@ -346,13 +330,6 @@ func locate(e errs.Error, path, name string, rec *core.Object, m *core.Member) e
 		}
 	}
 	return e
-}
-
-// isWildcardDef reports whether the "*" entry in Names is the typed-open
-// wildcard (its def IS s.Open) rather than a literal quoted "*" member.
-func isWildcardDef(s *Schema) bool {
-	o, ok := s.Open.(*MemberDef)
-	return ok && o == s.Defs["*"]
 }
 
 // assemble builds the validated object: declared members in schema order,

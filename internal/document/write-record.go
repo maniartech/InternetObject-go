@@ -75,9 +75,6 @@ func (d *Doc) appendRecord(dst []byte, obj *core.Object, sch *schema.Schema) []b
 
 	if sch != nil {
 		for _, name := range sch.Names {
-			if name == "*" {
-				continue
-			}
 			md := sch.Defs[name]
 			if i := obj.Find(name); i >= 0 {
 				dst = w.sep(dst)
@@ -88,10 +85,10 @@ func (d *Doc) appendRecord(dst []byte, obj *core.Object, sch *schema.Schema) []b
 		}
 		for _, m := range obj.Members {
 			// "Already written above" is exactly "declared by the schema" —
-			// every name in sch.Names is emitted in that loop, and the bare
-			// wildcard is skipped there. Reading the compiled schema's own map
-			// avoids building a per-record `handled` map (ADR 0006 P2).
-			if !m.Positional && m.Key != "*" && sch.Defs[m.Key] != nil {
+			// every name in sch.Names is emitted in that loop. The wildcard is
+			// not among them (it lives on Open alone, D1). Reading the compiled
+			// schema's own map avoids a per-record `handled` map (ADR 0006 P2).
+			if !m.Positional && sch.Defs[m.Key] != nil {
 				continue
 			}
 			var md *schema.MemberDef
