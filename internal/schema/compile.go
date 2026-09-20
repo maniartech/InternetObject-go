@@ -70,7 +70,7 @@ func compileSchema(shape any, path string) *Schema {
 			// Typed additional properties: `*: T` is OPENNESS, not a member.
 			// It is published on Open alone and never enters Names/Defs, so a
 			// member may be literally named `*` (written `"*"`) without
-			// colliding with it — OPEN-DECISIONS D1, option A. Like the bare
+			// colliding with it — the format's decision D1, option A. Like the bare
 			// form it must come last.
 			if !last || s.Open != nil {
 				fail(errs.InvalidSchema)

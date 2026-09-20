@@ -4,9 +4,9 @@
 - **Context:** the format spells two different things with `*` in a schema. A **bare** `*` (or a
   typed `*: T`) is the wildcard: "and any other members". A **quoted** `"*"` is an ordinary member
   that happens to be named `*`, which is a key JSON data uses freely (`{"rules": {"*": "allow"}}`).
-- **This is not a Go decision.** It is `io-test-cases/OPEN-DECISIONS.md` **D1**, decided by the
-  owner and implemented in the reference on 2026-08-19. This ADR records how io-go implements it,
-  and why the port got it wrong first.
+- **This is not a Go decision.** It is decision **D1** of the format's own decision log, settled by
+  the owner and implemented in the reference implementation on 2026-08-19. This ADR records how
+  io-go implements it, and why the port got it wrong first.
 
 ## D1 — the wildcard lives on `Open` alone
 
@@ -18,9 +18,10 @@ so that neither reader depends on the other layer — so the two can never coexi
 That is what makes "is this `*` the wildcard?" a question no code has to ask.
 
 **The port originally stored the typed wildcard twice** — on `Open` *and* under `Defs["*"]` — which
-is what the reference did before D1. OPEN-DECISIONS opens by saying these questions had to be
-settled *"before any port to Go or Rust — a second implementation would otherwise copy today's
-accident as if it were the design."* That is exactly what happened here.
+is what the reference did before D1. The decision log is explicit that questions like this one had
+to be settled BEFORE any port was written, precisely so that a second implementation would not
+reproduce an accident of the first as though it were the design. That is exactly what happened
+here.
 
 **What the duplicate cost, measured 2026-09-17:**
 

@@ -53,7 +53,7 @@ func neutralSchema(s *schema.Schema) *core.Object {
 	}
 	// The corpus's neutral shape asserts a TYPED wildcard twice: under `open`,
 	// and as the final entry of `members`. The wildcard is openness and is not
-	// a member (OPEN-DECISIONS D1), so it is synthesized here rather than read
+	// a member (the format's decision D1), so it is synthesized here rather than read
 	// from Names — the reference runner appends it the same way, for the same
 	// reason. A bare `*` sets `open: true` and adds no member.
 	if o, ok := s.Open.(*schema.MemberDef); ok && s.Defs["*"] == nil {

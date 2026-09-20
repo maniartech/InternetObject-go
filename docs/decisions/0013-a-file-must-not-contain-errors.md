@@ -5,10 +5,10 @@
   format's promise that one bad record does not cost you the other nine hundred. That promise has a
   second half nobody had written down: the damaged document must not be able to become a damaged
   **file**.
-- **The rule comes from io-js2**, which settled it first
-  (`tests/facade/serialization-refuses-errors.test.ts`) after shipping the same bug: *"a collected
-  error became a corrupt file with nothing to signal it."* io-go adopts the rule, not its spelling —
-  and adds a refusal io-js2 does not have, for faults that leave no failed record at all.
+- **The rule comes from the reference implementation**, which settled it first, having shipped the
+  same bug: a collected error could become a corrupt file with nothing to signal it. io-go adopts
+  the rule, not its spelling — and adds a refusal the reference does not have, for faults that
+  leave no failed record at all.
 
 ## D1 — Writing refuses a document that carries any fault
 
@@ -28,7 +28,7 @@ writing a faulted document**, in either direction: the whole suite passed before
 refusal was added.
 
 **The question is the FAULT LIST, not the shape of the records.** The first implementation scanned
-for `core.ErrorNode` records, which is how io-js2 frames it — and review found that misses most of
+for `core.ErrorNode` records, which is how the reference frames it — and review found that misses most of
 the ways a document can be unwritable, because only a *validation* failure produces an error node:
 
 | input | before | |
@@ -130,13 +130,14 @@ corpus row asserting a recovered node must spell the new fields or compare codes
   implements `encoding.TextMarshaler` by delegating to `Text(nil)`. The README and
   `examples/01-parse` were updated — the example now demonstrates the refusal and then asks for the
   survivors explicitly, which is the behaviour worth teaching.
-- `forbidden-error-node` closes one of the four codes io-js2 had and io-go did not. It appears in no
-  io-specs page; `io-test-cases/PORT-START-HERE.md` records the open question — *format rule or
-  library rule?* — so this ADR states io-go's answer rather than claiming the specification's.
-- io-js2's message names `skipErrors` as the way past. io-go's `Error` carries a code and a position
+- `forbidden-error-node` closes one of the four codes the reference had and io-go did not. No
+  specification page defines it, and the format's own notes record it as an open question — is it a
+  format rule or a library rule? — so this ADR states io-go's answer rather than claiming the
+  specification's.
+- The reference's message names its skip option as the way past. io-go's `Error` carries a code and a position
   only (codes are the contract, messages are informational), so the escape is documented on
   `ForbiddenErrorNode` and `TextOptions.SkipErrors` instead of in the error text.
 - `TextOptions` pairs with `Text` as `JSONOptions` pairs with `JSON`, and is where the rest of the
   write surface belongs when it lands — `emitKeys`, `indent`, `includeTypes`, `sectionsFilter` are
-  all still missing against io-js2, tracked for SPEC 0008. Nil-able, zero value is the default,
+  all still missing against the reference, tracked for SPEC 0008. Nil-able, zero value is the default,
   following `slog.HandlerOptions`.

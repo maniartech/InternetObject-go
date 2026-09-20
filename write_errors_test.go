@@ -16,9 +16,8 @@ import (
 // Before this rule, doc.String() dropped every failed record and said nothing.
 // A caller who parsed tolerantly, then saved, wrote a silently truncated file.
 //
-// io-js2 settled the rule first (tests/facade/serialization-refuses-errors.test.ts),
-// having shipped the same bug: "a collected error became a corrupt file with
-// nothing to signal it."
+// The reference implementation settled the rule first, having shipped the same
+// bug: a collected error could become a corrupt file with nothing to signal it.
 
 const faultedDoc = "name: string, age: int\n---\n~ Alice, 30\n~ Bob, oops\n~ Carol, 40"
 

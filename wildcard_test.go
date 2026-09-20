@@ -11,7 +11,7 @@ import (
 // members". A QUOTED `"*"` is an ordinary member that happens to be named `*`.
 //
 // The wildcard is openness, not a member, so it lives on the compiled schema's
-// open marker ALONE and never enters Names/Defs — OPEN-DECISIONS D1, option A.
+// open marker ALONE and never enters Names/Defs — the format's decision D1, option A.
 // That is what leaves the name `*` free for a real member. When the wildcard was
 // also stored under Defs["*"], the two were indistinguishable by name, and four
 // sites that meant "skip the wildcard" compared the name and dropped the member:
@@ -19,7 +19,7 @@ import (
 // MemberNames. The member parsed and validated, then vanished on the way out —
 // doc.String() wrote a header the reader rejected with unknown-member.
 //
-// io-js2 pins the same rule (tests/regression/wildcard-vs-star-name.test.ts).
+// The reference implementation pins the same rule, as its decision D1.
 
 func TestQuotedStarIsAnOrdinaryMember(t *testing.T) {
 	const src = "~ $schema: {name: string, \"*\": int}\n---\n~ John, \"*\": 7"

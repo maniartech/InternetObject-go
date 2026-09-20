@@ -179,7 +179,7 @@ Neither was introduced by the fast paths; both are reproduced on the general pat
 
 ## 8. A Go struct field cannot be named `*`, though the format now allows it
 
-`struct-plan.go` refuses an `io:"*"` field tag as "reserved for an open schema". OPEN-DECISIONS D1
+`struct-plan.go` refuses an `io:"*"` field tag as "reserved for an open schema". The format's decision D1
 frees the name (ADR 0012): a document with a `"*"` member round-trips, and schema-less
 `Marshal(map[string]any{"*": 42})` already writes one. Only the struct tag cannot express it, which
 makes the Go surface asymmetric with the format and with the map path.

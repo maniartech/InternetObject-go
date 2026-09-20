@@ -32,7 +32,7 @@ var fuzzSeedDocs = []string{
 	"~ ,,,",
 	"\uFEFF~ 1",
 	"~ {\"a,b\": 1, \"\": 2, \"0\": 3}",
-	// OPEN-DECISIONS D1 / ADR 0012: a quoted `"*"` is an ordinary member, and a
+	// The format's decision D1 / ADR 0012: a quoted `"*"` is an ordinary member, and a
 	// `*` data key is an ordinary name; only the BARE form is the wildcard. No
 	// seed carried either spelling, so no fuzzer explored the shape this rule
 	// governs.
