@@ -137,6 +137,10 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 					if sec.Collection {
 						e.RecordIndex, e.Path = i, "$["+strconv.Itoa(i)+"]"
 					}
+					// Only a COLLECTION record becomes an error node and so
+					// leaves the document; a bare record fails the whole load,
+					// and nothing after it was validated.
+					e.Recovered = sec.Collection
 					doc.AddSectionError(sec, e)
 					sec.Records[i] = errorNodeFor(e)
 					if !sec.Collection {
@@ -144,7 +148,7 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 					}
 					continue
 				}
-				surfaceSectionDeferred(doc, sec, rec)
+				surfaceSectionDeferred(doc, sec, rec, i)
 			}
 			continue
 		}
@@ -162,6 +166,9 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 			if len(verrs) > 0 {
 				for j := range verrs {
 					verrs[j].RecordIndex = recIndex
+					// Only a COLLECTION record becomes an error node and so
+					// leaves the document; a bare record fails the whole load.
+					verrs[j].Recovered = sec.Collection
 				}
 				doc.AddSectionError(sec, verrs...)
 				sec.Records[i] = errorNodeFor(verrs[0])
@@ -175,7 +182,7 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 			// (`any`) subtree survives validation unmasked; the reference
 			// throws its code (typed members mask with expected-* instead —
 			// ISSUE-23). Surface it like the schema-less route does.
-			surfaceSectionDeferred(doc, sec, validated)
+			surfaceSectionDeferred(doc, sec, validated, i)
 		}
 	}
 	return doc
@@ -184,9 +191,17 @@ func load(pdoc *parser.Document, override *schema.Schema, parent *Frozen) *Doc {
 // surfaceSectionDeferred reports a record's deferred literal faults as the
 // section's own, so every route into a section's error list runs through
 // AddSectionError.
-func surfaceSectionDeferred(doc *Doc, sec *parser.Section, rec any) {
+func surfaceSectionDeferred(doc *Doc, sec *parser.Section, rec any, idx int) {
 	var derrs []errs.Error
 	SurfaceDeferred(rec, &derrs)
+	for i := range derrs {
+		// The record is still THERE, holding a value nothing can spell, so this
+		// fault is not Recovered — see errs.Error.Recovered.
+		if derrs[i].Path == "" && sec.Collection {
+			derrs[i].Path = "$[" + strconv.Itoa(idx) + "]"
+		}
+		derrs[i].RecordIndex = idx
+	}
 	doc.AddSectionError(sec, derrs...)
 }
 

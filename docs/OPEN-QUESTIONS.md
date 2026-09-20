@@ -187,3 +187,82 @@ makes the Go surface asymmetric with the format and with the map path.
 Lifting the guard needs the fast encoder's key writer and the `fastFor` name-equality check looked
 at, plus `TestWildcardFieldNameIsRefused` inverted. Deferred deliberately rather than bundled into
 the D1 landing, which was already large. Raised in review, 2026-09-18.
+
+## 9. A malformed literal used as a schema DEFAULT writes text that cannot be read back
+
+Found by the reviewer's fuzzer, 2026-09-20. Pre-existing, and not covered by ADR 0013's refusal,
+because the document is **clean** — there is no fault to key on:
+
+```go
+io.Parse("A:[{any,0B2}]---")   // err == nil
+doc.Text(nil)                  // "A: [{any, default:}]\n---", err == nil
+io.Parse(that)                 // expected-value at 1:18
+```
+
+`0B2` is a malformed number. As a positional `default` slot it compiles into a `core.ErrorValue`
+held on the MemberDef, and the schema writer spells it as `default:` followed by nothing.
+
+**It is not only the positional default slot** — review found the mechanism is *any* MemberDef
+constraint value, so a fix scoped to "default" would miss the rest:
+
+```
+"A:[{any,0B2}]---"                      -> "A: [{any, default:}]
+---"
+"a: {any, default: 0B2}
+---
+~ 1"       -> "a: {any, default:}
+---
+~ 1"     (explicit keyword)
+"a: [{any, 0B2}]
+---
+~ [1]"            -> "a: [{any, default:}]
+---
+~ [1]"  (array-of-schema)
+"a: {any, choices: [0B2, 1]}
+---
+~ 1"  -> "a: {any, choices:[, 1]}
+---
+~ 1"  (not a default at all)
+```
+ That
+breaks the writer's one rule — *never emit text its own reader cannot read back as the same value*
+(`internal/document/write-document.go`) — and it does so silently.
+
+Two candidate answers, and the choice is a semantics call, not an implementation detail:
+
+1. **The compiler refuses it.** A malformed literal is not a value, so it cannot be a default;
+   raise the deferred code (`invalid-number` here) at compile time. Changes what `Parse` reports for
+   inputs that are currently accepted, so it needs a corpus run and probably an io-specs answer.
+2. **The writer refuses it**, joining ADR 0013's rule: a schema holding an unwritable default cannot
+   be written. Narrower, but leaves a document that parses clean and can never be saved.
+
+Related: `appendValue` (`internal/document/write-record.go`) has no `default` case, so any value it
+does not recognise appends **zero bytes** rather than failing. That is the mechanism by which this
+surfaces as corrupt text instead of an error, and it should gain an explicit refusal either way —
+see also the note in ADR 0013 D1.
+
+## 10. A constraint set twice — positionally and by keyword — is WRITTEN twice
+
+Found by the reviewer's fuzzer, 2026-09-20. Pre-existing, and a different mechanism from #9 (no
+`ErrorValue` is involved), so a fix for #9 will not touch it. The document is **clean**:
+
+```go
+io.Parse("0A:{A:{string,choices,[A0000]},B:{string,A,[A0000],choices:[]}}---")  // err == nil
+doc.Text(nil)   // …B: {string, default:"A", choices:[], choices:[]}}   err == nil
+io.Parse(that)  // duplicate-member at 1:96
+```
+
+A member def may state a constraint positionally (`{string, <default>, [<choices>]}`) and again by
+keyword (`choices: []`). The compiler accepts both and keeps both; the schema writer emits each one
+it holds, so the member is spelled with two `choices` keys — which its own reader rejects.
+
+Like #9, this breaks the writer's one rule: *never emit text its own reader cannot read back*. The
+question is the same shape — should the COMPILER reject the second statement of a constraint
+(probably `duplicate-member` at compile time, which is what re-reading the output already says), or
+should the WRITER collapse them? The compiler answer looks right, since two spellings of one
+constraint have no agreed meaning, but it changes what `Parse` accepts and needs a corpus run.
+
+**Not added as a fuzz seed yet, deliberately.** `FuzzParse` is the gate that should own this, and
+the input above fails it — adding the seed now would make the suite red for a bug nobody has agreed
+how to fix. Add it with the fix. (`FuzzParse` did not reach this shape in 240s; a seeded run found
+it in 11 seconds, so the corpus does not explore doubled constraints.)

@@ -174,7 +174,8 @@ doc.Section("alerts")
 doc.Schema()         // the bound schema, if any
 doc.SchemaOf("employee")
 doc.Var("region")    // a header @variable
-doc.String()         // canonical text; re-parses to the same value, idempotent
+doc.Text(nil)        // canonical text, or a refusal if a record failed
+doc.String()         // the same, for display — a refused document renders as a note
 ```
 
 An `Object` is an ordered record with a real API:
@@ -213,7 +214,7 @@ if err := emp.Add(map[string]any{"name": "X", "age": -5}); err != nil {
 }
 
 doc, err := b.Document()
-text := doc.String()
+text, err := doc.Text(nil)
 ```
 
 A record may be a **struct, a map with string keys, or an `*Object`**. It is validated when it

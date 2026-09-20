@@ -11,6 +11,7 @@
 package parser
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/maniartech/InternetObject-go/internal/core"
@@ -279,8 +280,25 @@ func (p *parser) parseCollectionRecord(sec *Section) (rec any) {
 	defer func() {
 		if r := recover(); r != nil {
 			f := r.(fail)
+			// Locate the fault at the record that caused it. Validation does
+			// this for its own faults (document.load); recovery did not, so a
+			// syntax fault inside a collection arrived with no path and no
+			// index, and anything reporting it could only name the document.
+			idx := len(sec.Records) // this record is appended after we return
+			if f.err.Path == "" {
+				f.err.Path = "$[" + strconv.Itoa(idx) + "]"
+			}
+			f.err.RecordIndex = idx
+			f.err.Recovered = true // this record becomes the ErrorNode below
 			p.doc.AddSectionError(sec, f.err)
-			rec = core.ErrorNode{Code: f.err.Code}
+			rec = core.ErrorNode{
+				Code:        f.err.Code,
+				Category:    f.err.Category,
+				Path:        f.err.Path,
+				RecordIndex: idx,
+				Line:        f.err.Line,
+				Col:         f.err.Col,
+			}
 			for !p.atEnd() {
 				if k := p.s.Tokens[p.i].Kind; k == tokenizer.KindCollectionStart || k == tokenizer.KindSectionSep {
 					break

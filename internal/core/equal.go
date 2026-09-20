@@ -70,6 +70,11 @@ func Equal(a, b any) bool {
 		y, ok := b.(time.Time)
 		return ok && x.UnixMilli() == y.UnixMilli()
 	case ErrorNode:
+		// Compared by VALUE, so every field counts — and since ADR 0013 D6 an
+		// error node carries its category, path, record index and position,
+		// where it used to carry a bare code. The first corpus row asserting a
+		// recovered error node will compare a populated node against a
+		// hand-written zero one; compare codes there, or spell the fields.
 		y, ok := b.(ErrorNode)
 		return ok && x == y
 	case []any:

@@ -105,6 +105,17 @@ const (
 	UnexpectedPositionalMember Code = "unexpected-positional-member"
 )
 
+// Codes raised when WRITING a document rather than when reading or checking
+// one.
+const (
+	// ForbiddenErrorNode is raised by [Document.Text] when the document holds
+	// a record that failed to parse or validate. A projection may describe
+	// errors — [Document.Value] and [Document.JSON] both embed the failed
+	// record — but a file must not contain them, so writing one is refused.
+	// [TextOptions.SkipErrors] writes the surviving records instead.
+	ForbiddenErrorNode Code = "forbidden-error-node"
+)
+
 // Codes raised by a STREAM, about the stream itself rather than a record.
 const (
 	StreamSourceError    Code = "stream-source-error"

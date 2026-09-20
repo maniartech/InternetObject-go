@@ -73,6 +73,13 @@ const (
 	UnexpectedPositionalMember Code = "unexpected-positional-member"
 )
 
+// Serialization codes. A projection may DESCRIBE errors — Value and JSON both
+// embed a failed record, which is what a playground needs — but a file must
+// not CONTAIN them, so writing a document that holds one is refused.
+const (
+	ForbiddenErrorNode Code = "forbidden-error-node"
+)
+
 // Code is the designated error code type, defined in the value model because a
 // failed record carries one (core.ErrorNode). Aliased here so this package -
 // where the codes are declared - reads without a core. prefix on every line.
@@ -89,8 +96,14 @@ type Error struct {
 	Path string
 	// RecordIndex is the 0-based position within a collection, -1 outside one.
 	RecordIndex int
-	Line        int32
-	Col         int32
+	// Recovered marks a fault whose record became an ErrorNode: the record is
+	// GONE from the writable document, so dropping it loses nothing that is
+	// still there. A fault without this left its record in place holding a
+	// value nothing can spell — a malformed literal, say — so there is nothing
+	// to skip and writing anyway emits text the reader cannot read back.
+	Recovered bool
+	Line      int32
+	Col       int32
 }
 
 // Error categories (io-specs/streaming/error-model.md).
@@ -123,6 +136,12 @@ var streamCodes = map[Code]bool{
 	"stream-source-error": true, "stream-aborted": true, "stream-buffer-exceeded": true,
 }
 
+// generalCodes are raised by the library rather than by reading or checking a
+// document: nothing in the source text caused them. Only writing has one.
+var generalCodes = map[Code]bool{
+	ForbiddenErrorNode: true,
+}
+
 // CategoryOf classifies a designated code.
 func CategoryOf(code Code) string {
 	switch {
@@ -130,6 +149,8 @@ func CategoryOf(code Code) string {
 		return CategorySyntax
 	case streamCodes[code]:
 		return CategoryStream
+	case generalCodes[code]:
+		return CategoryGeneral
 	}
 	return CategoryValidation
 }
